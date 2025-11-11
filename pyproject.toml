@@ -1,0 +1,45 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "atomic"
+version = "0.1.0"
+description = "ATOMIC is a Tool for Optimized Management of Investment Control - A financial engineering library for nuclear energy projects."
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = []
+
+
+[dependency-groups]
+all = [
+    {include-group = "dev"},
+    {include-group = "docs"},
+    {include-group = "tests"},
+]
+
+dev = [
+    "mypy>=1.8.0",
+    "ruff>=0.2.0",
+]
+
+docs = [
+    "myst-parser>=2.0.0",
+    "sphinx>=7.2.0",
+    "sphinx-autodoc-typehints>=2.0.0",
+    "sphinx-rtd-theme>=2.0.0",
+]
+
+tests = [
+    "pytest>=8.0.0",
+    "pytest-cov>=7.0.0",
+    "pytest-xdist>=3.8.0",    
+]
+
+[tool.uv]
+default-groups = "all"
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+indent-width = 4
