@@ -42,7 +42,8 @@ The Software will provide the following outputs as a result of analysis:
 
 
 ### Resolution
-The Software will calculate cashflows on a yearly resolution.
+- The Software will calculate cashflows on a yearly resolution.
+- The Software will allow the user to provide schedules to enable and disable each cashflow for arbitrary years of the project life.
 
 
 ## Cashflows
