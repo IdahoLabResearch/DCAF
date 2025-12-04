@@ -12,69 +12,6 @@ wheels = [
 ]
 
 [[package]]
-name = "atomic"
-version = "0.1.0"
-source = { editable = "." }
-
-[package.dev-dependencies]
-all = [
-    { name = "mypy" },
-    { name = "myst-parser" },
-    { name = "pytest" },
-    { name = "pytest-cov" },
-    { name = "pytest-xdist" },
-    { name = "ruff" },
-    { name = "sphinx" },
-    { name = "sphinx-autodoc-typehints" },
-    { name = "sphinx-rtd-theme" },
-]
-dev = [
-    { name = "mypy" },
-    { name = "ruff" },
-]
-docs = [
-    { name = "myst-parser" },
-    { name = "sphinx" },
-    { name = "sphinx-autodoc-typehints" },
-    { name = "sphinx-rtd-theme" },
-]
-tests = [
-    { name = "pytest" },
-    { name = "pytest-cov" },
-    { name = "pytest-xdist" },
-]
-
-[package.metadata]
-
-[package.metadata.requires-dev]
-all = [
-    { name = "mypy", specifier = ">=1.8.0" },
-    { name = "myst-parser", specifier = ">=2.0.0" },
-    { name = "pytest", specifier = ">=8.0.0" },
-    { name = "pytest-cov", specifier = ">=7.0.0" },
-    { name = "pytest-xdist", specifier = ">=3.8.0" },
-    { name = "ruff", specifier = ">=0.2.0" },
-    { name = "sphinx", specifier = ">=7.2.0" },
-    { name = "sphinx-autodoc-typehints", specifier = ">=2.0.0" },
-    { name = "sphinx-rtd-theme", specifier = ">=2.0.0" },
-]
-dev = [
-    { name = "mypy", specifier = ">=1.8.0" },
-    { name = "ruff", specifier = ">=0.2.0" },
-]
-docs = [
-    { name = "myst-parser", specifier = ">=2.0.0" },
-    { name = "sphinx", specifier = ">=7.2.0" },
-    { name = "sphinx-autodoc-typehints", specifier = ">=2.0.0" },
-    { name = "sphinx-rtd-theme", specifier = ">=2.0.0" },
-]
-tests = [
-    { name = "pytest", specifier = ">=8.0.0" },
-    { name = "pytest-cov", specifier = ">=7.0.0" },
-    { name = "pytest-xdist", specifier = ">=3.8.0" },
-]
-
-[[package]]
 name = "babel"
 version = "2.17.0"
 source = { registry = "https://pypi.org/simple" }
@@ -159,6 +96,69 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/24/3a/b72573802672b680703e0df071faadfab7dcd4d659aaaffc4626bc8bbde8/coverage-7.11.3-cp314-cp314t-win_amd64.whl", hash = "sha256:9245bd392572b9f799261c4c9e7216bafc9405537d0f4ce3ad93afe081a12dc9", size = 221398, upload-time = "2025-11-10T00:13:10.734Z" },
     { url = "https://files.pythonhosted.org/packages/f8/4e/649628f28d38bad81e4e8eb3f78759d20ac173e3c456ac629123815feb40/coverage-7.11.3-cp314-cp314t-win_arm64.whl", hash = "sha256:9a1d577c20b4334e5e814c3d5fe07fa4a8c3ae42a601945e8d7940bab811d0bd", size = 219435, upload-time = "2025-11-10T00:13:12.712Z" },
     { url = "https://files.pythonhosted.org/packages/19/8f/92bdd27b067204b99f396a1414d6342122f3e2663459baf787108a6b8b84/coverage-7.11.3-py3-none-any.whl", hash = "sha256:351511ae28e2509c8d8cae5311577ea7dd511ab8e746ffc8814a0896c3d33fbe", size = 208478, upload-time = "2025-11-10T00:13:14.908Z" },
+]
+
+[[package]]
+name = "dcaf"
+version = "0.1.0"
+source = { editable = "." }
+
+[package.dev-dependencies]
+all = [
+    { name = "mypy" },
+    { name = "myst-parser" },
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "pytest-xdist" },
+    { name = "ruff" },
+    { name = "sphinx" },
+    { name = "sphinx-autodoc-typehints" },
+    { name = "sphinx-rtd-theme" },
+]
+dev = [
+    { name = "mypy" },
+    { name = "ruff" },
+]
+docs = [
+    { name = "myst-parser" },
+    { name = "sphinx" },
+    { name = "sphinx-autodoc-typehints" },
+    { name = "sphinx-rtd-theme" },
+]
+tests = [
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "pytest-xdist" },
+]
+
+[package.metadata]
+
+[package.metadata.requires-dev]
+all = [
+    { name = "mypy", specifier = ">=1.8.0" },
+    { name = "myst-parser", specifier = ">=2.0.0" },
+    { name = "pytest", specifier = ">=8.0.0" },
+    { name = "pytest-cov", specifier = ">=7.0.0" },
+    { name = "pytest-xdist", specifier = ">=3.8.0" },
+    { name = "ruff", specifier = ">=0.2.0" },
+    { name = "sphinx", specifier = ">=7.2.0" },
+    { name = "sphinx-autodoc-typehints", specifier = ">=2.0.0" },
+    { name = "sphinx-rtd-theme", specifier = ">=2.0.0" },
+]
+dev = [
+    { name = "mypy", specifier = ">=1.8.0" },
+    { name = "ruff", specifier = ">=0.2.0" },
+]
+docs = [
+    { name = "myst-parser", specifier = ">=2.0.0" },
+    { name = "sphinx", specifier = ">=7.2.0" },
+    { name = "sphinx-autodoc-typehints", specifier = ">=2.0.0" },
+    { name = "sphinx-rtd-theme", specifier = ">=2.0.0" },
+]
+tests = [
+    { name = "pytest", specifier = ">=8.0.0" },
+    { name = "pytest-cov", specifier = ">=7.0.0" },
+    { name = "pytest-xdist", specifier = ">=3.8.0" },
 ]
 
 [[package]]

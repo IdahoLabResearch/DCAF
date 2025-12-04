@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "atomic"
+name = "dcaf"
 version = "0.1.0"
-description = "ATOMIC is a Tool for Optimized Management of Investment Control - A financial engineering library for nuclear energy projects."
+description = "Discounted Cashflow Analysis Framework is a financial engineering library for nuclear energy projects."
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = []
