@@ -1,15 +1,12 @@
-# ATOMIC
+# DCAF
 
-*ATOMIC is a Tool for Optimized Management of Investment Control* (ATOMIC). A
+ The Discounted Cashfow Analysis Framework is a
  professional financial engineering library for nuclear energy project cost and
  metric calculations, with a focus on Extended Power Uprate (EPU) projects.
 
-_relax, it's just a working name for the time being; I do like recursive aconyms
-though..._
-
 ## Overview
 
-ATOMIC provides high-fidelity cost modeling and financial analyis tools
+DCAF provides high-fidelity cost modeling and financial analyis tools
 specifcally designed for nuclear energy projects. The library enables detailed
 financial analysis including:
 
