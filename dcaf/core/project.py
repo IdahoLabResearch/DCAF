@@ -169,9 +169,6 @@ class DCFResults:
     irr: Optional[float]
 
     # Enhanced utility metrics
-    dscr: List[float]
     nol_carryforward: List[float]
     cumulative_cash_flow: List[float]
     payback_year: Optional[int]
-    min_dscr: float
-    dscr_violation_years: List[int]
