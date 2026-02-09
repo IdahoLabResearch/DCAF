@@ -264,6 +264,226 @@ class CashFlowGroup:
 class CashFlowStream:
     flows: list[CashFlow]
 
+    @classmethod
+    def from_recurring(
+        cls,
+        start: date,
+        periods: int,
+        amount: Money,
+        frequency: Literal["annual", "monthly", "quarterly"] = "annual",
+        escalation: Money = Decimal('0'),
+        label: str = "Recurring Payment",
+        is_cash: bool = True,
+        tags: frozenset[CashFlowTags] = frozenset()
+    ) -> "CashFlowStream":
+        """
+        Generate recurring cashflows with optional escalation.
+
+        Creates a stream of cashflows that occur at regular intervals with optional
+        compound escalation. Commonly used for revenues, operating expenses, rent
+        payments, dividends, and other recurring financial items.
+
+        Parameters
+        ----------
+        start : date
+            The date of the first cashflow.
+        periods : int
+            Number of periods (e.g., years if frequency='annual', months if
+            frequency='monthly').
+        amount : Money
+            Base amount for the first period. Can be positive (inflows) or negative
+            (outflows). Subsequent periods will be escalated if escalation > 0.
+        frequency : Literal["annual", "monthly", "quarterly"], optional
+            Frequency of the cashflows. Default is "annual".
+            - "annual": One cashflow per year
+            - "quarterly": Four cashflows per year (every 3 months)
+            - "monthly": Twelve cashflows per year
+        escalation : Money, optional
+            Per-period compound escalation rate as a decimal (e.g., Decimal('0.025')
+            for 2.5% growth per period). Default is 0 (no escalation).
+            Formula: amount_n = amount_0 * (1 + escalation)^n
+        label : str, optional
+            Label for the cashflows. Can include {n} placeholder for period number
+            (1-indexed). Default is "Recurring Payment".
+        is_cash : bool, optional
+            Whether the cashflows represent actual cash movements. Default is True.
+        tags : frozenset[CashFlowTags], optional
+            Tags to apply to all cashflows. Default is empty set.
+
+        Returns
+        -------
+        CashFlowStream
+            A new stream containing the recurring cashflows.
+
+        Examples
+        --------
+        >>> # Annual revenue with 2.5% escalation for 20 years
+        >>> revenue = CashFlowStream.from_recurring(
+        ...     start=date(2028, 1, 1),
+        ...     periods=20,
+        ...     amount=Decimal('51_246_000'),
+        ...     frequency='annual',
+        ...     escalation=Decimal('0.025'),
+        ...     label="Year {n} Revenue",
+        ...     tags=frozenset({CashFlowTags.REVENUE, CashFlowTags.TAXABLE})
+        ... )
+
+        >>> # Monthly rent payments for 3 years (no escalation)
+        >>> rent = CashFlowStream.from_recurring(
+        ...     start=date(2025, 1, 1),
+        ...     periods=36,
+        ...     amount=Decimal('-5000'),
+        ...     frequency='monthly',
+        ...     label="Monthly Rent",
+        ...     tags=frozenset({CashFlowTags.OPEX, CashFlowTags.TAX_DEDUCTIBLE})
+        ... )
+
+        >>> # Quarterly dividends with 3% annual growth (0.75% per quarter)
+        >>> dividends = CashFlowStream.from_recurring(
+        ...     start=date(2025, 3, 31),
+        ...     periods=12,
+        ...     amount=Decimal('25000'),
+        ...     frequency='quarterly',
+        ...     escalation=Decimal('0.0075'),
+        ...     label="Q{n} Dividend"
+        ... )
+
+        Notes
+        -----
+        - Escalation is compounded, not simple interest
+        - Date arithmetic handles month-end edge cases (e.g., Jan 31 + 1 month = Feb 28/29)
+        - For annual escalation with monthly frequency, use (1 + annual_rate)^(1/12) - 1
+        """
+        flows = []
+
+        for i in range(periods):
+            # Calculate escalated amount using compound growth
+            escalated_amount = amount * ((Decimal('1') + escalation) ** i)
+
+            # Calculate flow date based on frequency
+            if frequency == "annual":
+                flow_date = date(start.year + i, start.month, start.day)
+            elif frequency == "quarterly":
+                # Add 3 months per period
+                months_offset = i * 3
+                flow_date = cls._add_months(start, months_offset)
+            elif frequency == "monthly":
+                flow_date = cls._add_months(start, i)
+            else:
+                raise ValueError(
+                    f"Unsupported frequency: {frequency}. "
+                    f"Must be 'annual', 'monthly', or 'quarterly'."
+                )
+
+            # Create label with period number if {n} is in the label
+            flow_label = label.format(n=i+1) if "{n}" in label else label
+
+            flows.append(CashFlow(
+                amount=escalated_amount,
+                date=flow_date,
+                label=flow_label,
+                is_cash=is_cash,
+                tags=tags
+            ))
+
+        return cls(flows)
+
+    @staticmethod
+    def _add_months(start: date, months: int) -> date:
+        """
+        Add months to a date, handling month-end edge cases.
+
+        Handles cases like Jan 31 + 1 month = Feb 28/29 by clamping to the
+        last valid day of the target month.
+        """
+        # Calculate target year and month
+        month = start.month + months
+        year = start.year + (month - 1) // 12
+        month = ((month - 1) % 12) + 1
+
+        # Handle day overflow (e.g., Jan 31 -> Feb 28/29)
+        day = start.day
+        while day > 1:
+            try:
+                return date(year, month, day)
+            except ValueError:
+                # Day doesn't exist in this month, try previous day
+                day -= 1
+
+        # Fallback to day 1 (should never reach here)
+        return date(year, month, 1)
+
+    @classmethod
+    def from_flows(cls, *iterables) -> "CashFlowStream":
+        """
+        Create a CashFlowStream from multiple iterables of cashflows.
+
+        Accepts any combination of CashFlowStreams, lists of CashFlows, or other
+        iterables containing CashFlow objects, and combines them into a single
+        CashFlowStream. This is the primary way to combine multiple cashflow sources
+        during model construction.
+
+        Parameters
+        ----------
+        *iterables : CashFlowStream or Iterable[CashFlow]
+            Variable number of iterables, each containing cashflows. Can be:
+            - CashFlowStream objects
+            - Lists of CashFlow objects
+            - Any other iterable of CashFlow objects
+
+        Returns
+        -------
+        CashFlowStream
+            A new CashFlowStream containing all cashflows from all inputs.
+
+        Examples
+        --------
+        >>> # Combine multiple streams generated by classmethods
+        >>> revenue = CashFlowStream.from_recurring(...)
+        >>> opex = CashFlowStream.from_recurring(...)
+        >>> capex = CashFlowStream([...])  # Manual list
+        >>> combined = CashFlowStream.from_flows(revenue, opex, capex)
+
+        >>> # Mix streams and lists
+        >>> construction_stream = CashFlowStream.from_recurring(...)
+        >>> itc_flow = CashFlow(...)  # Single ITC payment
+        >>> depreciation_flows = [...]  # List of depreciation cashflows
+        >>> model = CashFlowStream.from_flows(
+        ...     construction_stream,
+        ...     [itc_flow],
+        ...     depreciation_flows
+        ... )
+
+        >>> # Combine all cashflows for a project
+        >>> project = CashFlowStream.from_flows(
+        ...     CashFlowStream.from_recurring(start, 20, revenue, 'annual', escalation),
+        ...     CashFlowStream.from_recurring(start, 20, opex, 'annual', opex_esc),
+        ...     capex_stream,
+        ...     depreciation_stream,
+        ...     tax_stream
+        ... )
+
+        Notes
+        -----
+        - Order of cashflows in the result is determined by the order of iterables
+          and the order within each iterable
+        - No deduplication is performed - if the same CashFlow appears in multiple
+          inputs, it will appear multiple times in the result
+        - For ordered output, use .sort() on the result
+        - This is more convenient than manual list concatenation when working with
+          multiple CashFlowStream objects
+        """
+        all_flows: list[CashFlow] = []
+
+        for iterable in iterables:
+            if isinstance(iterable, CashFlowStream):
+                all_flows.extend(iterable.flows)
+            else:
+                # Assume it's an iterable of CashFlow objects
+                all_flows.extend(iterable)
+
+        return cls(all_flows)
+
     def apply(self, fn: Callable) -> "CashFlowStream":
         """
         Apply a function to each cashflow within the CashFlowStream.
