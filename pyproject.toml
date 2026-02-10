@@ -7,7 +7,7 @@ name = "dcaf"
 version = "0.1.0"
 description = "Discounted Cashflow Analysis Framework is a financial engineering library for nuclear energy projects."
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.13"
 dependencies = []
 
 
@@ -40,6 +40,6 @@ tests = [
 default-groups = "all"
 
 [tool.ruff]
-target-version = "py314"
+target-version = "py313"
 line-length = 100
 indent-width = 4
