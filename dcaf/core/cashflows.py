@@ -6,10 +6,14 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
-from typing import Any, Callable, Literal, Optional, TypeAlias
 from enum import Enum
+from typing import Any, Callable, Literal, Optional, TypeAlias
+
+from dateutil.relativedelta import relativedelta
 
 Money: TypeAlias = Decimal
+type Period = Literal["day", "month", "quarter", "year"]
+
 
 class CashFlowTags(Enum):
     """
@@ -18,6 +22,7 @@ class CashFlowTags(Enum):
     Used to filter and group cashflows by various characteristics such as income/expense
     classification, tax treatment, and accounting treatment.
     """
+
     # Income/Expense classification
     REVENUE = "revenue"
     EXPENSE = "expense"
@@ -28,8 +33,9 @@ class CashFlowTags(Enum):
 
     # Accounting treatment
     CAPEX = "capex"  # Capital expenditure
-    OPEX = "opex"    # Operating expense
+    OPEX = "opex"  # Operating expense
     DEPRECIATION = "depreciation"
+
 
 @dataclass(frozen=True)
 class CashFlow:
@@ -49,6 +55,7 @@ class CashFlow:
     tags : frozenset[CashFlowTags]
         Set of tags for categorization (e.g., REVENUE, TAXABLE, EXPENSE).
     """
+
     amount: Money
     date: date
     label: str = ""
@@ -88,6 +95,7 @@ class CashFlowGroup:
     Maps group keys to CashFlowStream objects, enabling aggregation and analysis
     across groups.
     """
+
     ## NOTE: Is CashFlowGroup a terminal object or an object that we would want
     ## to be able to transform back into CashFlowStream space? Perhaps we would need
     ## to add helper methods such as ``flatten()`` to smoosh back to CFS space?
@@ -126,9 +134,9 @@ class CashFlowGroup:
         ## NOTE: is this the right name for this kind of function? The purpose of this
         ## function is to apply a function to each group in the structure. Aggregate
         ## implies a gathering together of all values instead of maintaining a grouped
-        ## structure. 
+        ## structure.
         return {key: fn(stream) for key, stream in self.groups.items()}
-    
+
     def ungroup(self) -> "CashFlowStream":
         """
         Ungroup the cashflows and return them as a single CashFlowStream.
@@ -271,10 +279,10 @@ class CashFlowStream:
         periods: int,
         amount: Money,
         frequency: Literal["annual", "monthly", "quarterly"] = "annual",
-        escalation: Money = Decimal('0'),
+        escalation: Money = Decimal("0"),
         label: str = "Recurring Payment",
         is_cash: bool = True,
-        tags: frozenset[CashFlowTags] = frozenset()
+        tags: frozenset[CashFlowTags] = frozenset(),
     ) -> "CashFlowStream":
         """
         Generate recurring cashflows with optional escalation.
@@ -355,79 +363,52 @@ class CashFlowStream:
         - For annual escalation with monthly frequency, use (1 + annual_rate)^(1/12) - 1
         """
         flows = []
-
         for i in range(periods):
             # Calculate escalated amount using compound growth
-            escalated_amount = amount * ((Decimal('1') + escalation) ** i)
+            escalated_amount = amount * ((Decimal("1") + escalation) ** i)
+            match frequency:
+                case "annual":
+                    flow_date = date(start.year + i, start.month, start.day)
+                case "quarterly":
+                    months_offset = i * 3
+                    flow_date = start + relativedelta(months=months_offset)
+                case "monthly":
+                    flow_date = start + relativedelta(months=i)
+                case _:
+                    raise ValueError(
+                        f"Unsupported frequency: {frequency}. "
+                        f"Must be 'annual', 'monthly', or 'quarterly'."
+                    )
 
-            # Calculate flow date based on frequency
-            if frequency == "annual":
-                flow_date = date(start.year + i, start.month, start.day)
-            elif frequency == "quarterly":
-                # Add 3 months per period
-                months_offset = i * 3
-                flow_date = cls._add_months(start, months_offset)
-            elif frequency == "monthly":
-                flow_date = cls._add_months(start, i)
-            else:
-                raise ValueError(
-                    f"Unsupported frequency: {frequency}. "
-                    f"Must be 'annual', 'monthly', or 'quarterly'."
+            flow_label = label.format(n=i + 1) if "{n}" in label else label
+            flows.append(
+                CashFlow(
+                    amount=escalated_amount,
+                    date=flow_date,
+                    label=flow_label,
+                    is_cash=is_cash,
+                    tags=tags,
                 )
-
-            # Create label with period number if {n} is in the label
-            flow_label = label.format(n=i+1) if "{n}" in label else label
-
-            flows.append(CashFlow(
-                amount=escalated_amount,
-                date=flow_date,
-                label=flow_label,
-                is_cash=is_cash,
-                tags=tags
-            ))
+            )
 
         return cls(flows)
 
-    @staticmethod
-    def _add_months(start: date, months: int) -> date:
-        """
-        Add months to a date, handling month-end edge cases.
-
-        Handles cases like Jan 31 + 1 month = Feb 28/29 by clamping to the
-        last valid day of the target month.
-        """
-        # Calculate target year and month
-        month = start.month + months
-        year = start.year + (month - 1) // 12
-        month = ((month - 1) % 12) + 1
-
-        # Handle day overflow (e.g., Jan 31 -> Feb 28/29)
-        day = start.day
-        while day > 1:
-            try:
-                return date(year, month, day)
-            except ValueError:
-                # Day doesn't exist in this month, try previous day
-                day -= 1
-
-        # Fallback to day 1 (should never reach here)
-        return date(year, month, 1)
-
     @classmethod
-    def from_flows(cls, *iterables) -> "CashFlowStream":
+    def from_streams(cls, *iterables) -> "CashFlowStream":
         """
-        Create a CashFlowStream from multiple iterables of cashflows.
+        Create a CashFlowStream from multiple sources of cashflows.
 
-        Accepts any combination of CashFlowStreams, lists of CashFlows, or other
-        iterables containing CashFlow objects, and combines them into a single
-        CashFlowStream. This is the primary way to combine multiple cashflow sources
-        during model construction.
+        Accepts any combination of CashFlowStreams, individual CashFlows, lists of
+        CashFlows, or other iterables containing CashFlow objects, and combines them
+        into a single CashFlowStream. This is the primary way to combine multiple
+        cashflow sources during model construction.
 
         Parameters
         ----------
-        *iterables : CashFlowStream or Iterable[CashFlow]
-            Variable number of iterables, each containing cashflows. Can be:
+        *iterables : CashFlowStream or CashFlow or Iterable[CashFlow]
+            Variable number of cashflow sources. Can be:
             - CashFlowStream objects
+            - Individual CashFlow objects
             - Lists of CashFlow objects
             - Any other iterable of CashFlow objects
 
@@ -442,20 +423,22 @@ class CashFlowStream:
         >>> revenue = CashFlowStream.from_recurring(...)
         >>> opex = CashFlowStream.from_recurring(...)
         >>> capex = CashFlowStream([...])  # Manual list
-        >>> combined = CashFlowStream.from_flows(revenue, opex, capex)
+        >>> combined = CashFlowStream.from_streams(revenue, opex, capex)
 
-        >>> # Mix streams and lists
+        >>> # Mix streams, individual cashflows, and lists
         >>> construction_stream = CashFlowStream.from_recurring(...)
         >>> itc_flow = CashFlow(...)  # Single ITC payment
         >>> depreciation_flows = [...]  # List of depreciation cashflows
-        >>> model = CashFlowStream.from_flows(
+        >>> model = CashFlowStream.from_streams(
         ...     construction_stream,
-        ...     [itc_flow],
+        ...     itc_flow,  # Individual CashFlow now supported directly
         ...     depreciation_flows
         ... )
 
-        >>> # Combine all cashflows for a project
-        >>> project = CashFlowStream.from_flows(
+        >>> # Combine all cashflows for a project with individual flows
+        >>> initial_investment = CashFlow(Decimal('-1000000'), date(2024, 1, 1))
+        >>> project = CashFlowStream.from_streams(
+        ...     initial_investment,  # Individual cashflow
         ...     CashFlowStream.from_recurring(start, 20, revenue, 'annual', escalation),
         ...     CashFlowStream.from_recurring(start, 20, opex, 'annual', opex_esc),
         ...     capex_stream,
@@ -465,7 +448,7 @@ class CashFlowStream:
 
         Notes
         -----
-        - Order of cashflows in the result is determined by the order of iterables
+        - Order of cashflows in the result is determined by the order of arguments
           and the order within each iterable
         - No deduplication is performed - if the same CashFlow appears in multiple
           inputs, it will appear multiple times in the result
@@ -475,12 +458,14 @@ class CashFlowStream:
         """
         all_flows: list[CashFlow] = []
 
-        for iterable in iterables:
-            if isinstance(iterable, CashFlowStream):
-                all_flows.extend(iterable.flows)
+        for item in iterables:
+            if isinstance(item, CashFlowStream):
+                all_flows.extend(item.flows)
+            elif isinstance(item, CashFlow):
+                all_flows.append(item)
             else:
                 # Assume it's an iterable of CashFlow objects
-                all_flows.extend(iterable)
+                all_flows.extend(item)
 
         return cls(all_flows)
 
@@ -558,9 +543,9 @@ class CashFlowStream:
         >>> # Or using lambda for composition
         >>> result = stream.apply_streamwise(lambda s: s.filter(some_pred).apply(scale_fn))
         """
-        ## NOTE: Depending on the passed in callable, this could modify self in 
+        ## NOTE: Depending on the passed in callable, this could modify self in
         ## place instead of creating new CFS object. Perhaps make self a (deep)copy?
-        ## Keep an eye on this and how it gets used. 
+        ## Keep an eye on this and how it gets used.
         return fn(self)
 
     def filter(self, fn: Callable[[CashFlow], bool]) -> "CashFlowStream":
@@ -685,7 +670,7 @@ class CashFlowStream:
 
         return CashFlowGroup({key: CashFlowStream(flows) for key, flows in groups.items()})
 
-    def group_by_period(self, period: Literal["day", "month", "quarter", "year"]) -> CashFlowGroup:
+    def group_by_period(self, period: Period) -> CashFlowGroup:
         """
         Group cashflows by time period.
 
@@ -787,9 +772,9 @@ class CashFlowStream:
         """
         ## NOTE: There is some conversation to be had about the flexibility of
         ## lambda functions, while also being cumbersome to simply sort by innate
-        ## cashflow attributes like date. It would be easier to just do 
-        ## CFS.sort(by=date, ascending=False). We could do @overloads 
-        ## in the future to have an optional `by` and `key` parameter. 
+        ## cashflow attributes like date. It would be easier to just do
+        ## CFS.sort(by=date, ascending=False). We could do @overloads
+        ## in the future to have an optional `by` and `key` parameter.
         return CashFlowStream(sorted(self.flows, key=fn))
 
     def sum(self) -> Money:
@@ -824,7 +809,7 @@ class CashFlowStream:
         """
         ## NOTE: Need to think about this and handling nested CFS. Jacob says we
         ## never want nested CFS. If you want to do anything nested, use a CashFlowGroup.
-        return sum((flow.amount for flow in self.flows), start=Decimal('0'))
+        return sum((flow.amount for flow in self.flows), start=Decimal("0"))
 
     def count(self) -> int:
         """
@@ -983,7 +968,7 @@ class CashFlowStream:
           compounds the value forward to the valuation date.
         - Returns Decimal('0') for empty streams or streams with no cash flows.
         """
-        total = Decimal('0')
+        total = Decimal("0")
         rate_decimal = Decimal(str(rate))
 
         for flow in self.flows:
@@ -993,15 +978,15 @@ class CashFlowStream:
 
             # Calculate time difference in years (365.25-day convention)
             days_diff = (flow.date - valuation_date).days
-            ## NOTE: MPR tool uses a 365.25 value - hardcoded for now. 
-            years = Decimal(days_diff) / Decimal('365.25')
+            ## NOTE: MPR tool uses a 365.25 value - hardcoded for now.
+            years = Decimal(days_diff) / Decimal("365.25")
 
             # Discount or compound the cashflow to the valuation date
             # Formula: PV = CF / (1 + r)^t
             # If t > 0 (future): discounts back to present
             # If t < 0 (past): compounds forward to present (dividing by (1+r)^negative)
             # If t = 0 (same date): no adjustment needed
-            discount_factor = (Decimal('1') + rate_decimal) ** years
+            discount_factor = (Decimal("1") + rate_decimal) ** years
             present_value = flow.amount / discount_factor
 
             total += present_value
@@ -1009,15 +994,16 @@ class CashFlowStream:
         return total
 
     @staticmethod
-    def _get_period_start(dt: date, period: str) -> date:
-        if period == "day":
-            return dt
-        elif period == "month":
-            return date(dt.year, dt.month, 1)
-        elif period == "quarter":
-            quarter_month = ((dt.month - 1) // 3) * 3 + 1
-            return date(dt.year, quarter_month, 1)
-        elif period == "year":
-            return date(dt.year, 1, 1)
-        else:
-            raise ValueError(f"Unknown period type: {period}")
+    def _get_period_start(dt: date, period: Period) -> date:
+        match period:
+            case "day":
+                return dt
+            case "month":
+                return date(dt.year, dt.month, 1)
+            case "quarter":
+                quarter_month = ((dt.month - 1) // 3) * 3 + 1
+                return date(dt.year, quarter_month, 1)
+            case "year":
+                return date(dt.year, 1, 1)
+            case _:
+                raise ValueError(f"Unknown period type: {period}")
