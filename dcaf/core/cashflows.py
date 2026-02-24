@@ -961,7 +961,7 @@ class CashFlowStream:
         - Only cashflows with `is_cash=True` are included in the calculation, as
           non-cash items (e.g., depreciation) don't represent actual cash movements.
         - Time differences are calculated in days and converted to years using a
-          365-day year convention.
+          365.25-day year convention.
         - The discount formula is: PV = CF / (1 + r)^t where t can be positive
           (future cashflows) or negative (past cashflows).
         - When t is negative (past cashflows), dividing by (1+r)^negative effectively
