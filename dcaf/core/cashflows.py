@@ -270,7 +270,7 @@ class CashFlowGroup:
 
 @dataclass
 class CashFlowStream:
-    flows: list[CashFlow]
+    flows: list[CashFlow] | None = field(default_factory=list)
 
     @classmethod
     def from_recurring(
