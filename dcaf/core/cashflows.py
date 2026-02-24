@@ -8,7 +8,17 @@ from datetime import date
 from dateutil.relativedelta import relativedelta
 from decimal import Decimal
 from enum import Enum
-from typing import Any, Callable, Collection, Iterable, Iterator, Literal, Optional, Protocol, TypeAlias
+from typing import (
+    Any,
+    Callable,
+    Collection,
+    Iterable,
+    Iterator,
+    Literal,
+    Optional,
+    Protocol,
+    TypeAlias,
+)
 
 Money: TypeAlias = Decimal
 type Period = Literal["day", "month", "quarter", "year"]
@@ -150,7 +160,7 @@ class CashFlowGroup[KeyType]:
     def apply_to_groups(
         self,
         fn: Callable[["CashFlowStream"], "CashFlowStream"],
-        keys: KeyType | Collection[KeyType] | None = None
+        keys: KeyType | Collection[KeyType] | None = None,
     ) -> "CashFlowGroup":
         """
         Apply a function to each group's CashFlowStream, optionally filtered by keys.
@@ -230,8 +240,7 @@ class CashFlowGroup[KeyType]:
             for key in transformed_keys:
                 if key not in self.groups:
                     raise ValueError(
-                        f"Unknown group key {key!r}. "
-                        f"Known group keys: {list(self.groups.keys())}"
+                        f"Unknown group key {key!r}. Known group keys: {list(self.groups.keys())}"
                     )
         elif keys in self.groups:
             # Single key (works for any hashable type, including strings)
@@ -617,7 +626,9 @@ class CashFlowStream:
         """
         return CashFlowStream([fn(flow) for flow in self.flows])
 
-    def apply_streamwise(self, fn: Callable[["CashFlowStream"], "CashFlowStream"]) -> "CashFlowStream":
+    def apply_streamwise(
+        self, fn: Callable[["CashFlowStream"], "CashFlowStream"]
+    ) -> "CashFlowStream":
         """
         Apply a function to an entire CashFlowStream.
 

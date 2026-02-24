@@ -5,6 +5,7 @@ import pytest
 
 from dcaf import CashFlow, CashFlowTags
 
+
 def testCashFlow():
     """
     Checks that the CashFlow class can be initialized properly,
@@ -28,4 +29,3 @@ def testCashFlow():
 
     with pytest.raises(FrozenInstanceError):
         cf.amount = Decimal(600)
-
