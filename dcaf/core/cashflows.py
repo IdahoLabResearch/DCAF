@@ -5,14 +5,17 @@ Docstring for dcaf.core.cashflows
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date
+from dateutil.relativedelta import relativedelta
 from decimal import Decimal
 from enum import Enum
-from typing import Any, Callable, Literal, Optional, TypeAlias
-
-from dateutil.relativedelta import relativedelta
+from typing import Any, Callable, Collection, Iterable, Iterator, Literal, Optional, Protocol, TypeAlias
 
 Money: TypeAlias = Decimal
 type Period = Literal["day", "month", "quarter", "year"]
+
+
+class SupportsLessThan(Protocol):
+    def __lt__(self, __other: Any) -> bool: ...
 
 
 class CashFlowTags(Enum):
@@ -99,7 +102,7 @@ class CashFlow:
 
 
 @dataclass
-class CashFlowGroup:
+class CashFlowGroup[KeyType]:
     """
     A dictionary-like container for grouped CashFlows.
 
@@ -107,17 +110,17 @@ class CashFlowGroup:
     across groups.
     """
 
-    ## NOTE: Is CashFlowGroup a terminal object or an object that we would want
-    ## to be able to transform back into CashFlowStream space? Perhaps we would need
-    ## to add helper methods such as ``flatten()`` to smoosh back to CFS space?
-    groups: dict[Any, "CashFlowStream"]
+    groups: dict[KeyType, "CashFlowStream"]
 
-    def aggregate(self, fn: Callable) -> dict[Any, Any]:
+    def aggregate[T](self, fn: Callable[["CashFlowStream"], T]) -> dict[KeyType, T]:
         """
         Aggregate each group using a function.
 
         Applies the function to each group's CashFlowStream and returns a dictionary
         mapping each group key to its aggregated value.
+
+        If wanting to chain operations within the `CashFlowGroup` object, use the
+        `apply_to_groups` function instead.
 
         Parameters
         ----------
@@ -142,11 +145,106 @@ class CashFlowGroup:
         >>> counts = by_year.aggregate(lambda s: len(s.flows))
         >>> # Returns: {2023: 15, 2024: 23, ...}
         """
-        ## NOTE: is this the right name for this kind of function? The purpose of this
-        ## function is to apply a function to each group in the structure. Aggregate
-        ## implies a gathering together of all values instead of maintaining a grouped
-        ## structure.
         return {key: fn(stream) for key, stream in self.groups.items()}
+
+    def apply_to_groups(
+        self,
+        fn: Callable[["CashFlowStream"], "CashFlowStream"],
+        keys: KeyType | Collection[KeyType] | None = None
+    ) -> "CashFlowGroup":
+        """
+        Apply a function to each group's CashFlowStream, optionally filtered by keys.
+
+        Applies the provided function to groups within this CashFlowGroup,
+        transforming each selected group's CashFlowStream and returning a new
+        CashFlowGroup with the results. Groups not selected remain unchanged.
+        This enables selective group-wise transformations while preserving
+        the overall grouping structure.
+
+        If wanting a return type from the transformation function that is *not* a
+        `CashFlowStream`, use the `aggregate` function.
+
+        Parameters
+        ----------
+        fn : Callable
+            A function that takes a CashFlowStream and returns a transformed
+            CashFlowStream. Applied to each selected group independently.
+        keys : KeyType or Collection[KeyType], optional
+            Group key(s) to which the transformation should be applied. Can be:
+            - None (default): Apply transformation to all groups
+            - A single key: Apply to only that group (works for any key type)
+            - A collection of keys: Apply to those specific groups (list, tuple, set, etc.)
+
+        Returns
+        -------
+        CashFlowGroup
+            A new CashFlowGroup with the function applied to selected groups' streams.
+            Non-selected groups remain unchanged.
+
+        Raises
+        ------
+        ValueError
+            If any provided key is not found in this CashFlowGroup.
+
+        Examples
+        --------
+        >>> # Scale all amounts in each group by 1.1 (all groups)
+        >>> by_tag = stream.group_by_tag()
+        >>> scaled_groups = by_tag.apply_to_groups(
+        ...     lambda s: s.apply(lambda cf: CashFlow(
+        ...         cf.amount * Decimal('1.1'), cf.date, cf.label, cf.is_cash, cf.tags
+        ...     ))
+        ... )
+
+        >>> # Filter each group to only include cashflows after a certain date
+        >>> by_year = stream.group_by_period("year")
+        >>> recent_groups = by_year.apply_to_groups(
+        ...     lambda s: s.filter(lambda cf: cf.date >= date(2024, 1, 1))
+        ... )
+
+        >>> # Sort each group by date
+        >>> sorted_groups = by_year.apply_to_groups(lambda s: s.sort(lambda cf: cf.date))
+
+        >>> # Apply transformation only to specific groups (sequence of keys)
+        >>> by_tag = stream.group_by_tag()
+        >>> scaled_revenue = by_tag.apply_to_groups(
+        ...     lambda s: s.apply(lambda cf: CashFlow(
+        ...         cf.amount * Decimal('1.05'), cf.date, cf.label, cf.is_cash, cf.tags
+        ...     )),
+        ...     keys=[CashFlowTags.REVENUE]
+        ... )
+
+        >>> # Apply transformation to a single group
+        >>> scaled_one_year = by_year.apply_to_groups(
+        ...     lambda s: s.apply(lambda cf: CashFlow(
+        ...         cf.amount * 1.5, cf.date, cf.label, cf.is_cash, cf.tags
+        ...     )),
+        ...     keys=date(2024, 1, 1)
+        ... )
+        """
+        if keys is None:
+            # Apply to all groups
+            transformed_keys = list(self.groups.keys())
+        elif isinstance(keys, Collection) and not isinstance(keys, str):
+            transformed_keys = list(keys)
+            for key in transformed_keys:
+                if key not in self.groups:
+                    raise ValueError(
+                        f"Unknown group key {key!r}. "
+                        f"Known group keys: {list(self.groups.keys())}"
+                    )
+        elif keys in self.groups:
+            # Single key (works for any hashable type, including strings)
+            transformed_keys = [keys]
+        else:
+            raise ValueError(
+                f"Could not interpret keys={keys!r} as valid grouping keys. "
+                "Expected None, a single key, or a sequence of keys. "
+                f"Valid keys: {list(self.groups.keys())}."
+            )
+
+        groups = {k: fn(cfs) if k in transformed_keys else cfs for k, cfs in self.groups.items()}
+        return CashFlowGroup(groups)
 
     def ungroup(self) -> "CashFlowStream":
         """
@@ -200,19 +298,19 @@ class CashFlowGroup:
 
         return CashFlowStream(all_flows)
 
-    def keys(self):
+    def keys(self) -> Iterable[KeyType]:
         """Return the group keys."""
         return self.groups.keys()
 
-    def values(self):
+    def values(self) -> Iterable["CashFlowStream"]:
         """Return the CashFlowStream values."""
         return self.groups.values()
 
-    def items(self):
+    def items(self) -> Iterable[tuple[KeyType, "CashFlowStream"]]:
         """Return key-value pairs of (key, CashFlowStream)."""
         return self.groups.items()
 
-    def __getitem__(self, key) -> "CashFlowStream":
+    def __getitem__(self, key: KeyType) -> "CashFlowStream":
         """Access a specific group by key."""
         return self.groups[key]
 
@@ -220,11 +318,11 @@ class CashFlowGroup:
         """Return the number of groups."""
         return len(self.groups)
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[KeyType]:
         """Iterate over group keys."""
         return iter(self.groups)
 
-    def sum(self) -> dict[Any, Money]:
+    def sum(self) -> dict[KeyType, Money]:
         """
         Return the sum of amounts for each group.
 
@@ -252,7 +350,7 @@ class CashFlowGroup:
         """
         return {key: stream.sum() for key, stream in self.groups.items()}
 
-    def count(self) -> dict[Any, int]:
+    def count(self) -> dict[KeyType, int]:
         """
         Return the count of cashflows for each group.
 
@@ -480,7 +578,7 @@ class CashFlowStream:
 
         return cls(all_flows)
 
-    def apply(self, fn: Callable) -> "CashFlowStream":
+    def apply(self, fn: Callable[[CashFlow], CashFlow]) -> "CashFlowStream":
         """
         Apply a function to each cashflow within the CashFlowStream.
 
@@ -519,7 +617,7 @@ class CashFlowStream:
         """
         return CashFlowStream([fn(flow) for flow in self.flows])
 
-    def apply_streamwise(self, fn: Callable) -> "CashFlowStream":
+    def apply_streamwise(self, fn: Callable[["CashFlowStream"], "CashFlowStream"]) -> "CashFlowStream":
         """
         Apply a function to an entire CashFlowStream.
 
@@ -593,7 +691,7 @@ class CashFlowStream:
         """
         return CashFlowStream([flow for flow in self.flows if fn(flow)])
 
-    def group_by(self, fn: Callable) -> CashFlowGroup:
+    def group_by[KeyType](self, fn: Callable[[CashFlow], KeyType]) -> CashFlowGroup[KeyType]:
         """
         Group cashflows by a key function.
 
@@ -626,14 +724,14 @@ class CashFlowStream:
         >>> # Then aggregate
         >>> yearly_totals = by_year.aggregate(lambda s: sum(cf.amount for cf in s.flows))
         """
-        groups: defaultdict[Any, list[CashFlow]] = defaultdict(list)
+        groups: defaultdict[KeyType, list[CashFlow]] = defaultdict(list)
         for flow in self.flows:
             key = fn(flow)
             groups[key].append(flow)
 
-        return CashFlowGroup({key: CashFlowStream(flows) for key, flows in groups.items()})
+        return CashFlowGroup[KeyType]({key: CashFlowStream(flows) for key, flows in groups.items()})
 
-    def group_by_tag(self) -> CashFlowGroup:
+    def group_by_tag(self) -> CashFlowGroup[CashFlowTags]:
         """
         Group cashflows by their tags.
 
@@ -681,7 +779,7 @@ class CashFlowStream:
 
         return CashFlowGroup({key: CashFlowStream(flows) for key, flows in groups.items()})
 
-    def group_by_period(self, period: Period) -> CashFlowGroup:
+    def group_by_period(self, period: Period) -> CashFlowGroup[date]:
         """
         Group cashflows by time period.
 
@@ -738,15 +836,16 @@ class CashFlowStream:
         """
         return self.group_by(lambda cf: self._get_period_start(cf.date, period))
 
-    def sort(self, fn: Callable) -> "CashFlowStream":
+    def sort(self, fn: Callable[[CashFlow], SupportsLessThan]) -> "CashFlowStream":
         """
         Return a new CashFlowStream with cashflows sorted by a key function.
 
         Parameters
         ----------
-        fn : Callable
+        fn : Callable[[CashFlow], SupportsLessThan]
             A function that takes a CashFlow object and returns a sortable key value
-            (e.g., date, amount, label). For descending order, use negative values
+            (e.g., date, amount, label; more generally, any value which supports the
+            `<` comparison operator). For descending order, use negative values
             or reverse the result.
 
         Returns
@@ -846,7 +945,7 @@ class CashFlowStream:
         """
         return len(self.flows)
 
-    def min(self, key: Optional[Callable[[CashFlow], Any]] = None) -> CashFlow:
+    def min(self, key: Optional[Callable[[CashFlow], SupportsLessThan]] = None) -> CashFlow:
         """
         Return the cashflow with the minimum value.
 
@@ -884,7 +983,7 @@ class CashFlowStream:
             return min(self.flows, key=lambda cf: cf.amount)
         return min(self.flows, key=key)
 
-    def max(self, key: Optional[Callable[[CashFlow], Any]] = None) -> CashFlow:
+    def max(self, key: Optional[Callable[[CashFlow], SupportsLessThan]] = None) -> CashFlow:
         """
         Return the cashflow with the maximum value.
 
