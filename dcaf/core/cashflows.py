@@ -86,6 +86,17 @@ class CashFlow:
         """
         return tag in self.tags
 
+    def to_stream(self) -> "CashFlowStream":
+        """
+        Wrap the CashFlow object in a CashFlowStream
+
+        Returns
+        -------
+        CashFlowStream
+            A CashFlowStream object with only the current CashFlow in the stream
+        """
+        return CashFlowStream([self])
+
 
 @dataclass
 class CashFlowGroup:
