@@ -1,5 +1,4 @@
 from datetime import date
-from decimal import Decimal
 import pytest
 
 from dcaf import CashFlow, CashFlowGroup, CashFlowTags, CashFlowStream
@@ -9,20 +8,20 @@ from dcaf import CashFlow, CashFlowGroup, CashFlowTags, CashFlowStream
 def _create_cf_grp():
     """Creates a CashFlowGroup instance on which tests can be executed."""
     cf1 = CashFlow(
-        Decimal(1000),
+        1000.0,
         date(2025, 1, 1),
         is_cash=True,
         label="cf1",
         tags=frozenset({CashFlowTags.REVENUE}),
     )
     cf2 = CashFlow(
-        Decimal(-2000),
+        -2000.0,
         date(2026, 8, 1),
         is_cash=True,
         label="cf2",
     )
     cf3 = CashFlow(
-        Decimal(5000),
+        5000.0,
         date(2026, 12, 31),
         is_cash=False,
         tags=frozenset({CashFlowTags.EXPENSE}),
@@ -77,7 +76,7 @@ def test_magic_methods(_create_cf_grp):
 def test_sum(_create_cf_grp):
     """Tests the CashFlowGroup.sum method."""
     cf_group = _create_cf_grp[0]
-    assert cf_group.sum() == {"stream1": Decimal(1000), "stream2": Decimal(3000)}
+    assert cf_group.sum() == {"stream1": 1000.0, "stream2": 3000.0}
 
 
 def test_count(_create_cf_grp):

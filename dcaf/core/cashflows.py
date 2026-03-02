@@ -6,7 +6,6 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date
 from dateutil.relativedelta import relativedelta
-from decimal import Decimal
 from enum import Enum
 from typing import (
     Any,
@@ -17,10 +16,8 @@ from typing import (
     Literal,
     Optional,
     Protocol,
-    TypeAlias,
 )
 
-Money: TypeAlias = Decimal
 type Period = Literal["day", "month", "quarter", "year"]
 
 
@@ -57,7 +54,7 @@ class CashFlow:
 
     Attributes
     ----------
-    amount : Money
+    amount : float
         The monetary amount of the cashflow (positive for inflows, negative for outflows).
     date : date
         The date when the cashflow occurs.
@@ -69,7 +66,7 @@ class CashFlow:
         Set of tags for categorization (e.g., REVENUE, TAXABLE, EXPENSE).
     """
 
-    amount: Money
+    amount: float
     date: date
     label: str = ""
     is_cash: bool = True
@@ -91,7 +88,7 @@ class CashFlow:
 
         Examples
         --------
-        >>> cf = CashFlow(Decimal('1000'), date(2024, 1, 1), tags=frozenset({CashFlowTags.REVENUE}))
+        >>> cf = CashFlow(1000.0, date(2024, 1, 1), tags=frozenset({CashFlowTags.REVENUE}))
         >>> cf.has_tag(CashFlowTags.REVENUE)
         True
         >>> cf.has_tag(CashFlowTags.EXPENSE)
@@ -148,7 +145,7 @@ class CashFlowGroup[KeyType]:
         >>> # Group by date and get total amount per date
         >>> grouped = stream.group_by(lambda cf: cf.date)
         >>> totals = grouped.aggregate(lambda s: sum(cf.amount for cf in s.flows))
-        >>> # Returns: {date1: Decimal('1000'), date2: Decimal('2000'), ...}
+        >>> # Returns: {date1: 1000.0, date2: 2000.0, ...}
 
         >>> # Get count of cashflows per year
         >>> by_year = stream.group_by(lambda cf: cf.date.year)
@@ -202,7 +199,7 @@ class CashFlowGroup[KeyType]:
         >>> by_tag = stream.group_by_tag()
         >>> scaled_groups = by_tag.apply_to_groups(
         ...     lambda s: s.apply(lambda cf: CashFlow(
-        ...         cf.amount * Decimal('1.1'), cf.date, cf.label, cf.is_cash, cf.tags
+        ...         cf.amount * 1.1, cf.date, cf.label, cf.is_cash, cf.tags
         ...     ))
         ... )
 
@@ -219,7 +216,7 @@ class CashFlowGroup[KeyType]:
         >>> by_tag = stream.group_by_tag()
         >>> scaled_revenue = by_tag.apply_to_groups(
         ...     lambda s: s.apply(lambda cf: CashFlow(
-        ...         cf.amount * Decimal('1.05'), cf.date, cf.label, cf.is_cash, cf.tags
+        ...         cf.amount * 1.05, cf.date, cf.label, cf.is_cash, cf.tags
         ...     )),
         ...     keys=[CashFlowTags.REVENUE]
         ... )
@@ -288,7 +285,7 @@ class CashFlowGroup[KeyType]:
         >>> by_tag = stream.group_by_tag()
         >>> # Scale revenue by 1.05
         >>> revenue_scaled = by_tag[CashFlowTags.REVENUE].apply(
-        ...     lambda cf: CashFlow(cf.amount * Decimal('1.05'), cf.date, cf.label, cf.is_cash, cf.tags)
+        ...     lambda cf: CashFlow(cf.amount * 1.05, cf.date, cf.label, cf.is_cash, cf.tags)
         ... )
         >>> # Put back into a stream
         >>> scaled_stream = CashFlowGroup({CashFlowTags.REVENUE: revenue_scaled}).ungroup()
@@ -331,7 +328,7 @@ class CashFlowGroup[KeyType]:
         """Iterate over group keys."""
         return iter(self.groups)
 
-    def sum(self) -> dict[KeyType, Money]:
+    def sum(self) -> dict[KeyType, float]:
         """
         Return the sum of amounts for each group.
 
@@ -348,14 +345,14 @@ class CashFlowGroup[KeyType]:
         >>> # Get total amount per tag
         >>> by_tag = stream.group_by_tag()
         >>> totals = by_tag.sum()
-        >>> # Returns: {CashFlowTags.REVENUE: Decimal('50000'),
-        >>> #           CashFlowTags.EXPENSE: Decimal('-20000'), ...}
+        >>> # Returns: {CashFlowTags.REVENUE: 50000.0,
+        >>> #           CashFlowTags.EXPENSE: -20000.0, ...}
 
         >>> # Get monthly totals
         >>> by_month = stream.group_by_period("month")
         >>> monthly_totals = by_month.sum()
-        >>> # Returns: {date(2024, 1, 1): Decimal('5000'),
-        >>> #           date(2024, 2, 1): Decimal('6000'), ...}
+        >>> # Returns: {date(2024, 1, 1): 5000.0,
+        >>> #           date(2024, 2, 1): 6000.0, ...}
         """
         return {key: stream.sum() for key, stream in self.groups.items()}
 
@@ -395,9 +392,9 @@ class CashFlowStream:
         cls,
         start: date,
         periods: int,
-        amount: Money,
+        amount: float,
         frequency: Literal["annual", "monthly", "quarterly"] = "annual",
-        escalation: Money = Decimal("0"),
+        escalation: float = 0.0,
         label: str = "Recurring Payment",
         is_cash: bool = True,
         tags: frozenset[CashFlowTags] = frozenset(),
@@ -416,7 +413,7 @@ class CashFlowStream:
         periods : int
             Number of periods (e.g., years if frequency='annual', months if
             frequency='monthly').
-        amount : Money
+        amount : float
             Base amount for the first period. Can be positive (inflows) or negative
             (outflows). Subsequent periods will be escalated if escalation > 0.
         frequency : Literal["annual", "monthly", "quarterly"], optional
@@ -424,8 +421,8 @@ class CashFlowStream:
             - "annual": One cashflow per year
             - "quarterly": Four cashflows per year (every 3 months)
             - "monthly": Twelve cashflows per year
-        escalation : Money, optional
-            Per-period compound escalation rate as a decimal (e.g., Decimal('0.025')
+        escalation : float, optional
+            Per-period compound escalation rate as a decimal (e.g., 0.025
             for 2.5% growth per period). Default is 0 (no escalation).
             Formula: amount_n = amount_0 * (1 + escalation)^n
         label : str, optional
@@ -447,9 +444,9 @@ class CashFlowStream:
         >>> revenue = CashFlowStream.from_recurring(
         ...     start=date(2028, 1, 1),
         ...     periods=20,
-        ...     amount=Decimal('51_246_000'),
+        ...     amount=51_246_000.0,
         ...     frequency='annual',
-        ...     escalation=Decimal('0.025'),
+        ...     escalation=0.025,
         ...     label="Year {n} Revenue",
         ...     tags=frozenset({CashFlowTags.REVENUE, CashFlowTags.TAXABLE})
         ... )
@@ -458,7 +455,7 @@ class CashFlowStream:
         >>> rent = CashFlowStream.from_recurring(
         ...     start=date(2025, 1, 1),
         ...     periods=36,
-        ...     amount=Decimal('-5000'),
+        ...     amount=-5000.0,
         ...     frequency='monthly',
         ...     label="Monthly Rent",
         ...     tags=frozenset({CashFlowTags.OPEX, CashFlowTags.TAX_DEDUCTIBLE})
@@ -468,9 +465,9 @@ class CashFlowStream:
         >>> dividends = CashFlowStream.from_recurring(
         ...     start=date(2025, 3, 31),
         ...     periods=12,
-        ...     amount=Decimal('25000'),
+        ...     amount=25000.0,
         ...     frequency='quarterly',
-        ...     escalation=Decimal('0.0075'),
+        ...     escalation=0.0075,
         ...     label="Q{n} Dividend"
         ... )
 
@@ -483,7 +480,7 @@ class CashFlowStream:
         flows = []
         for i in range(periods):
             # Calculate escalated amount using compound growth
-            escalated_amount = amount * ((Decimal("1") + escalation) ** i)
+            escalated_amount = amount * ((1.0 + escalation) ** i)
             match frequency:
                 case "annual":
                     flow_date = date(start.year + i, start.month, start.day)
@@ -554,7 +551,7 @@ class CashFlowStream:
         ... )
 
         >>> # Combine all cashflows for a project with individual flows
-        >>> initial_investment = CashFlow(Decimal('-1000000'), date(2024, 1, 1))
+        >>> initial_investment = CashFlow(-1_000_000.0, date(2024, 1, 1))
         >>> project = CashFlowStream.from_streams(
         ...     initial_investment,  # Individual cashflow
         ...     CashFlowStream.from_recurring(start, 20, revenue, 'annual', escalation),
@@ -610,7 +607,7 @@ class CashFlowStream:
 
         >>> # Apply discount factor to all amounts
         >>> discounted = stream.apply(lambda cf: CashFlow(
-        ...     cf.amount * Decimal('0.9'), cf.date, cf.label, cf.is_cash, cf.tags
+        ...     cf.amount * 0.9, cf.date, cf.label, cf.is_cash, cf.tags
         ... ))
 
         >>> # Add a tag to all cashflows
@@ -818,7 +815,7 @@ class CashFlowStream:
         >>> # Group by month and get monthly totals
         >>> by_month = stream.group_by_period("month")
         >>> monthly_totals = by_month.aggregate(lambda s: sum(cf.amount for cf in s.flows))
-        >>> # Returns: {date(2024, 1, 1): Decimal('5000'), date(2024, 2, 1): Decimal('6000'), ...}
+        >>> # Returns: {date(2024, 1, 1): 5000.0, date(2024, 2, 1): 6000.0, ...}
 
         >>> # Group by year
         >>> by_year = stream.group_by_period("year")
@@ -898,25 +895,25 @@ class CashFlowStream:
         ## in the future to have an optional `by` and `key` parameter.
         return CashFlowStream(sorted(self.flows, key=fn))
 
-    def sum(self) -> Money:
+    def sum(self) -> float:
         """
         Return the sum of all cashflow amounts.
 
         Returns
         -------
-        Money (Decimal)
+        float
             The sum of all cashflow amounts in the stream, including both
             positive (inflows) and negative (outflows) amounts.
 
         Examples
         --------
         >>> stream = CashFlowStream([
-        ...     CashFlow(Decimal('1000'), date(2024, 1, 1)),
-        ...     CashFlow(Decimal('-500'), date(2024, 2, 1)),
-        ...     CashFlow(Decimal('2000'), date(2024, 3, 1))
+        ...     CashFlow(1000.0, date(2024, 1, 1)),
+        ...     CashFlow(-500.0, date(2024, 2, 1)),
+        ...     CashFlow(2000.0, date(2024, 3, 1))
         ... ])
         >>> total = stream.sum()
-        >>> # Returns: Decimal('2500')
+        >>> # Returns: 2500.0
 
         >>> # Get total revenue
         >>> revenue_total = stream.filter(lambda cf: cf.has_tag(CashFlowTags.REVENUE)).sum()
@@ -926,11 +923,11 @@ class CashFlowStream:
 
         Notes
         -----
-        Returns Decimal('0') for empty streams.
+        Returns 0.0 for empty streams.
         """
         ## NOTE: Need to think about this and handling nested CFS. Jacob says we
         ## never want nested CFS. If you want to do anything nested, use a CashFlowGroup.
-        return sum((flow.amount for flow in self.flows), start=Decimal("0"))
+        return sum((flow.amount for flow in self.flows), start=0.0)
 
     def count(self) -> int:
         """
@@ -1032,7 +1029,7 @@ class CashFlowStream:
             return max(self.flows, key=lambda cf: cf.amount)
         return max(self.flows, key=key)
 
-    def npv(self, rate: float, valuation_date: date) -> Money:
+    def npv(self, rate: float, valuation_date: date) -> float:
         """
         Calculate the Net Present Value (NPV) of the cashflow stream.
 
@@ -1051,7 +1048,7 @@ class CashFlowStream:
 
         Returns
         -------
-        Money (Decimal)
+        float
             The net present value of all cash cashflows in the stream, evaluated
             at the valuation date.
 
@@ -1059,9 +1056,9 @@ class CashFlowStream:
         --------
         >>> # Calculate NPV at project start with 10% discount rate
         >>> stream = CashFlowStream([
-        ...     CashFlow(Decimal('-10000'), date(2024, 1, 1)),  # Initial investment
-        ...     CashFlow(Decimal('5000'), date(2024, 6, 1)),    # Return after 5 months
-        ...     CashFlow(Decimal('6000'), date(2025, 1, 1))     # Return after 1 year
+        ...     CashFlow(-10000.0, date(2024, 1, 1)),  # Initial investment
+        ...     CashFlow(5000.0, date(2024, 6, 1)),    # Return after 5 months
+        ...     CashFlow(6000.0, date(2025, 1, 1))     # Return after 1 year
         ... ])
         >>> npv_value = stream.npv(rate=0.10, valuation_date=date(2024, 1, 1))
 
@@ -1087,31 +1084,16 @@ class CashFlowStream:
           (future cashflows) or negative (past cashflows).
         - When t is negative (past cashflows), dividing by (1+r)^negative effectively
           compounds the value forward to the valuation date.
-        - Returns Decimal('0') for empty streams or streams with no cash flows.
+        - Returns 0.0 for empty streams or streams with no cash flows.
         """
-        total = Decimal("0")
-        rate_decimal = Decimal(str(rate))
-
+        total = 0.0
         for flow in self.flows:
-            # Only include actual cash flows
             if not flow.is_cash:
                 continue
-
-            # Calculate time difference in years (365.25-day convention)
             days_diff = (flow.date - valuation_date).days
-            ## NOTE: MPR tool uses a 365.25 value - hardcoded for now.
-            years = Decimal(days_diff) / Decimal("365.25")
-
-            # Discount or compound the cashflow to the valuation date
-            # Formula: PV = CF / (1 + r)^t
-            # If t > 0 (future): discounts back to present
-            # If t < 0 (past): compounds forward to present (dividing by (1+r)^negative)
-            # If t = 0 (same date): no adjustment needed
-            discount_factor = (Decimal("1") + rate_decimal) ** years
-            present_value = flow.amount / discount_factor
-
-            total += present_value
-
+            years = days_diff / 365.25
+            discount_factor = (1.0 + rate) ** years
+            total += flow.amount / discount_factor
         return total
 
     @staticmethod

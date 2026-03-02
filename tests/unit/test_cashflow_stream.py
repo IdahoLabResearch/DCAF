@@ -1,5 +1,4 @@
 from datetime import date
-from decimal import Decimal
 import pytest
 
 from dcaf import CashFlow, CashFlowGroup, CashFlowStream, CashFlowTags
@@ -12,26 +11,26 @@ def _create_cf_stream():
     set of cashflows on which tests can be executed.
     """
     cf1 = CashFlow(
-        amount=Decimal(-500),
+        amount=-500.0,
         date=date(2026, 1, 1),
         label="exp",
         tags=frozenset([CashFlowTags.EXPENSE, CashFlowTags.TAXABLE]),
     )
     cf2 = CashFlow(
-        amount=Decimal(2000),
+        amount=2000.0,
         date=date(2026, 1, 31),
         label="rev",
         tags=frozenset([CashFlowTags.REVENUE, CashFlowTags.TAXABLE]),
     )
     cf3 = CashFlow(
-        amount=Decimal(-1000),
+        amount=-1000.0,
         date=date(2026, 4, 1),
         label="exp_2",
         tags=frozenset([CashFlowTags.EXPENSE]),
         is_cash=False,
     )
     cf4 = CashFlow(
-        amount=Decimal(100),
+        amount=100.0,
         date=date(2026, 6, 30),
         label="rev_2",
     )
@@ -41,14 +40,12 @@ def _create_cf_stream():
 
 def test_from_recurring_defaults():
     """Tests the CashFlowStream.from_recurring method with defaults for all optional arguments."""
-    cf_stream = CashFlowStream.from_recurring(
-        start=date(2026, 1, 1), periods=4, amount=Decimal(1000)
-    )
+    cf_stream = CashFlowStream.from_recurring(start=date(2026, 1, 1), periods=4, amount=1000.0)
     assert len(cf_stream.flows) == 4
     expected_dates = [date(2026, 1, 1), date(2027, 1, 1), date(2028, 1, 1), date(2029, 1, 1)]
     for i, flow in enumerate(cf_stream.flows):
         assert flow.date == expected_dates[i]  # Check that annual frequency is default
-        assert flow.amount == Decimal(1000)  # Check that escalation is zero by default
+        assert flow.amount == 1000.0  # Check that escalation is zero by default
         assert len(flow.label) > 0  # Check that some default label is set
         assert flow.is_cash is True  # Check that is_cash defaults to True
         assert len(flow.tags) == 0  # Check that no tags are added by default
@@ -63,7 +60,7 @@ def test_from_recurring_bad_frequency():
         CashFlowStream.from_recurring(
             start=date(2026, 1, 1),
             periods=4,
-            amount=Decimal(1000),
+            amount=1000.0,
             frequency="daily",
         )
 
@@ -76,18 +73,18 @@ def test_from_recurring_1():
     cf_stream = CashFlowStream.from_recurring(
         start=date(2026, 3, 5),
         periods=3,
-        amount=Decimal(-200),
+        amount=-200.0,
         frequency="monthly",
-        escalation=Decimal(0.1),
+        escalation=0.1,
         label="test recurring cf",
         is_cash=False,
         tags=frozenset([CashFlowTags.TAXABLE]),
     )
     expected_dates = [date(2026, 3, 5), date(2026, 4, 5), date(2026, 5, 5)]
-    expected_amounts = [Decimal(-200), Decimal(-220), Decimal(-242)]
+    expected_amounts = [-200.0, -220.0, -242.0]
     for i, flow in enumerate(cf_stream.flows):
         assert flow.date == expected_dates[i]
-        assert abs(flow.amount - expected_amounts[i]) < abs(Decimal(1e-8) * flow.amount)
+        assert abs(flow.amount - expected_amounts[i]) < abs(1e-8 * flow.amount)
         assert flow.label == "test recurring cf"
         assert flow.is_cash is False
         assert flow.tags == frozenset([CashFlowTags.TAXABLE])
@@ -101,16 +98,16 @@ def test_from_recurring_2():
     cf_stream = CashFlowStream.from_recurring(
         start=date(2030, 9, 4),
         periods=3,
-        amount=Decimal(10_000),
+        amount=10_000.0,
         frequency="quarterly",
-        escalation=Decimal(0.2),
+        escalation=0.2,
         label="quarter #{n}",
     )
     expected_dates = [date(2030, 9, 4), date(2030, 12, 4), date(2031, 3, 4)]
-    expected_amounts = [Decimal(10_000), Decimal(12_000), Decimal(14_400)]
+    expected_amounts = [10_000.0, 12_000.0, 14_400.0]
     for i, flow in enumerate(cf_stream.flows):
         assert flow.date == expected_dates[i]
-        assert abs(flow.amount - expected_amounts[i]) < abs(Decimal(1e-8) * flow.amount)
+        assert abs(flow.amount - expected_amounts[i]) < abs(1e-8 * flow.amount)
         assert flow.label == f"quarter #{i + 1}"
 
 
@@ -119,13 +116,13 @@ def test_from_streams():
     Tests the CashFlowStream.from_streams method, providing a CashFlow, a CashFlowStream,
     a list of CashFlow objects, and a set of CashFlow objects as arguments.
     """
-    cf = CashFlow(amount=Decimal(100), date=date(2020, 1, 1))
-    cf_stream_old = CashFlowStream([CashFlow(amount=Decimal(-300), date=date(2023, 1, 1))])
+    cf = CashFlow(amount=100.0, date=date(2020, 1, 1))
+    cf_stream_old = CashFlowStream([CashFlow(amount=-300.0, date=date(2023, 1, 1))])
     cf_list = [
-        CashFlow(amount=Decimal(200), date=date(2021, 1, 1)),
-        CashFlow(amount=Decimal(-100), date=date(2022, 1, 1)),
+        CashFlow(amount=200.0, date=date(2021, 1, 1)),
+        CashFlow(amount=-100.0, date=date(2022, 1, 1)),
     ]
-    cf_set = {CashFlow(amount=Decimal(-200), date=date(2025, 1, 1))}
+    cf_set = {CashFlow(amount=-200.0, date=date(2025, 1, 1))}
 
     cf_stream_new = CashFlowStream.from_streams(cf, cf_stream_old, cf_list, cf_set)
     expected_flows = {cf, cf_stream_old.flows[0], cf_list[0], cf_list[1], list(cf_set)[0]}
@@ -290,7 +287,7 @@ def test_sum(_create_cf_stream):
     """Tests the CashFlowStream.sum method."""
     cf_stream = _create_cf_stream[0]
     cf_sum = cf_stream.sum()
-    assert cf_sum == Decimal(600)
+    assert cf_sum == 600.0
 
 
 def test_count(_create_cf_stream):
@@ -350,8 +347,8 @@ def test_npv_main(_create_cf_stream):
     cf_stream = _create_cf_stream[0]
     npv = cf_stream.npv(0.1, date(2026, 1, 31))
 
-    tol = Decimal(1e-8)
-    assert abs(npv - Decimal(1592.2319017407383)) < tol
+    tol = 1e-8
+    assert abs(npv - 1592.2319017407383) < tol
 
     # cf1: -500 * (1 + 0.1)^(30 / 365.25) = -503.929536591041
     # cf2: 2000 / (1 + 0.1)^0             = 2000
@@ -365,5 +362,5 @@ def test_npv_no_cashflows():
     """Tests the CashFlowStream.npv method with a stream that has no cashflows."""
     cf_stream = CashFlowStream([])
     npv = cf_stream.npv(0.1, date(2100, 1, 1))
-    tol = Decimal(1e-8)
+    tol = 1e-8
     assert abs(npv) < tol

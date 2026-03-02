@@ -1,6 +1,5 @@
 from dataclasses import FrozenInstanceError
 from datetime import date
-from decimal import Decimal
 import pytest
 
 from dcaf import CashFlow, CashFlowTags
@@ -11,7 +10,7 @@ def testCashFlow():
     Checks that the CashFlow class can be initialized properly,
     has the correct defaults, and is immutable.
     """
-    test_amount = Decimal(500)
+    test_amount = 500.0
     test_date = date(2025, 1, 1)
     cf = CashFlow(
         test_amount,
@@ -28,4 +27,4 @@ def testCashFlow():
     assert cf.has_tag(CashFlowTags.EXPENSE) is False
 
     with pytest.raises(FrozenInstanceError):
-        cf.amount = Decimal(600)
+        cf.amount = 600.0
