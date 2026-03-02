@@ -9,6 +9,7 @@ from dcaf.core.cashflows import (
     CashFlowGroup,
     CashFlowStream,
     CashFlowTags,
+    DayCountConvention,
 )
 
 
@@ -17,4 +18,5 @@ __all__ = [
     "CashFlowGroup",
     "CashFlowStream",
     "CashFlowTags",
+    "DayCountConvention",
 ]

@@ -9,6 +9,7 @@ from dateutil.relativedelta import relativedelta
 from enum import Enum
 from typing import (
     Any,
+    assert_never,
     Callable,
     Collection,
     Iterable,
@@ -19,6 +20,16 @@ from typing import (
 )
 
 type Period = Literal["day", "month", "quarter", "year"]
+type DayCountConvention = Literal["actual/365"]
+
+
+def _year_fraction(start: date, end: date, convention: DayCountConvention = "actual/365") -> float:
+    """Calculate the year fraction between two dates using the given day count convention."""
+    match convention:
+        case "actual/365":
+            return (end - start).days / 365.0
+        case _:
+            assert_never(convention)
 
 
 class SupportsLessThan(Protocol):
@@ -385,7 +396,7 @@ class CashFlowGroup[KeyType]:
 
 @dataclass
 class CashFlowStream:
-    flows: list[CashFlow] | None = field(default_factory=list)
+    flows: list[CashFlow] = field(default_factory=list)
 
     @classmethod
     def from_recurring(
@@ -490,10 +501,7 @@ class CashFlowStream:
                 case "monthly":
                     flow_date = start + relativedelta(months=i)
                 case _:
-                    raise ValueError(
-                        f"Unsupported frequency: {frequency}. "
-                        f"Must be 'annual', 'monthly', or 'quarterly'."
-                    )
+                    assert_never(frequency)
 
             flow_label = label.format(n=i + 1) if "{n}" in label else label
             flows.append(
@@ -1029,7 +1037,9 @@ class CashFlowStream:
             return max(self.flows, key=lambda cf: cf.amount)
         return max(self.flows, key=key)
 
-    def npv(self, rate: float, valuation_date: date) -> float:
+    def npv(
+        self, rate: float, valuation_date: date, convention: DayCountConvention = "actual/365"
+    ) -> float:
         """
         Calculate the Net Present Value (NPV) of the cashflow stream.
 
@@ -1045,6 +1055,9 @@ class CashFlowStream:
         valuation_date : date
             The date at which to calculate the present value. This is the reference
             point for all discounting/compounding calculations.
+        convention : DayCountConvention, optional
+            The day count convention for converting days to year fractions.
+            Default is "actual/365" (standard economics convention).
 
         Returns
         -------
@@ -1078,8 +1091,8 @@ class CashFlowStream:
         -----
         - Only cashflows with `is_cash=True` are included in the calculation, as
           non-cash items (e.g., depreciation) don't represent actual cash movements.
-        - Time differences are calculated in days and converted to years using a
-          365.25-day year convention.
+        - Time differences are calculated in days and converted to years using the
+          specified day count convention (default: actual/365).
         - The discount formula is: PV = CF / (1 + r)^t where t can be positive
           (future cashflows) or negative (past cashflows).
         - When t is negative (past cashflows), dividing by (1+r)^negative effectively
@@ -1090,10 +1103,16 @@ class CashFlowStream:
         for flow in self.flows:
             if not flow.is_cash:
                 continue
-            days_diff = (flow.date - valuation_date).days
-            years = days_diff / 365.25
+            years = _year_fraction(valuation_date, flow.date, convention)
+
+            # Discount or compound the cashflow to the valuation date
+            # Formula: PV = CF / (1 + r)^t
+            # If t > 0 (future): discounts back to present
+            # If t < 0 (past): compounds forward to present (dividing by (1+r)^negative)
+            # If t = 0 (same date): no adjustment needed
             discount_factor = (1.0 + rate) ** years
             total += flow.amount / discount_factor
+
         return total
 
     @staticmethod
@@ -1109,4 +1128,4 @@ class CashFlowStream:
             case "year":
                 return date(dt.year, 1, 1)
             case _:
-                raise ValueError(f"Unknown period type: {period}")
+                assert_never(period)

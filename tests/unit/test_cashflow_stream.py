@@ -56,7 +56,7 @@ def test_from_recurring_bad_frequency():
     Tests that the CashFlowSTream.from_recurring method
     errors when an unacceptable frequency is provided.
     """
-    with pytest.raises(ValueError):
+    with pytest.raises(AssertionError):
         CashFlowStream.from_recurring(
             start=date(2026, 1, 1),
             periods=4,
@@ -268,7 +268,7 @@ def test_group_by_period_bad_period(_create_cf_stream):
     errors when an unacceptable period is provided.
     """
     cf_stream = _create_cf_stream[0]
-    with pytest.raises(ValueError):
+    with pytest.raises(AssertionError):
         cf_stream.group_by_period("week")
 
 
@@ -348,14 +348,22 @@ def test_npv_main(_create_cf_stream):
     npv = cf_stream.npv(0.1, date(2026, 1, 31))
 
     tol = 1e-8
-    assert abs(npv - 1592.2319017407383) < tol
+    assert abs(npv - 1592.2266217233482) < tol
 
-    # cf1: -500 * (1 + 0.1)^(30 / 365.25) = -503.929536591041
-    # cf2: 2000 / (1 + 0.1)^0             = 2000
-    # cf3: is_cash is false, so           = 0
-    # cf4: 100 / (1 + 0.1)^(150 / 365.25) = 96.16143833177938
+    # cf1: -500 * (1 + 0.1)^(30 / 365) = -503.932238610309
+    # cf2: 2000 / (1 + 0.1)^0           = 2000
+    # cf3: is_cash is false, so         = 0
+    # cf4: 100 / (1 + 0.1)^(150 / 365)  = 96.158860333658
     # ------------------------------------------------------------
-    # TOTAL                               = 1592.2319017407383
+    # TOTAL                             = 1592.2266217233482
+
+
+def test_npv_default_convention(_create_cf_stream):
+    """Tests that the default day count convention is actual/365."""
+    cf_stream = _create_cf_stream[0]
+    npv_default = cf_stream.npv(0.1, date(2026, 1, 31))
+    npv_explicit = cf_stream.npv(0.1, date(2026, 1, 31), convention="actual/365")
+    assert npv_default == npv_explicit
 
 
 def test_npv_no_cashflows():
