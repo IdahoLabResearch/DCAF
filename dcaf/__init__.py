@@ -11,6 +11,11 @@ from dcaf.core.cashflows import (
     CashFlowTags,
     DayCountConvention,
 )
+from dcaf.core.generation import (
+    Generation,
+    GenerationGroup,
+    GenerationStream,
+)
 
 
 __all__ = [
@@ -19,4 +24,7 @@ __all__ = [
     "CashFlowStream",
     "CashFlowTags",
     "DayCountConvention",
+    "Generation",
+    "GenerationGroup",
+    "GenerationStream",
 ]

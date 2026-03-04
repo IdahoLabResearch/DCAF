@@ -61,7 +61,7 @@ def test_from_recurring_bad_frequency():
             start=date(2026, 1, 1),
             periods=4,
             amount=1000.0,
-            frequency="daily",
+            frequency="weekly",
         )
 
 
@@ -74,7 +74,7 @@ def test_from_recurring_1():
         start=date(2026, 3, 5),
         periods=3,
         amount=-200.0,
-        frequency="monthly",
+        frequency="month",
         escalation=0.1,
         label="test recurring cf",
         is_cash=False,
@@ -99,7 +99,7 @@ def test_from_recurring_2():
         start=date(2030, 9, 4),
         periods=3,
         amount=10_000.0,
-        frequency="quarterly",
+        frequency="quarter",
         escalation=0.2,
         label="quarter #{n}",
     )
@@ -204,9 +204,9 @@ def test_group_by(_create_cf_stream):
 
 
 def test_group_by_tag(_create_cf_stream):
-    """Tests the CashFlowStream.group_by_tag method."""
+    """Tests the CashFlowStream.group_by(tag=True) method."""
     cf_stream, flows = _create_cf_stream
-    cf_group = cf_stream.group_by_tag()
+    cf_group = cf_stream.group_by(tag=True)
     assert isinstance(cf_group, CashFlowGroup)
     assert len(cf_group.groups) == 3
     assert cf_group[CashFlowTags.EXPENSE].flows == [flows[0], flows[2]]
@@ -251,11 +251,11 @@ def test_group_by_tag(_create_cf_stream):
 )
 def test_group_by_period(_create_cf_stream, period, groups_by_cf_index):
     """
-    Tests the CashFlowStream.group_by_period method with each allowed period.
-    Also implicitly tests the _get_period_start method.
+    Tests the CashFlowStream.group_by(period=...) method with each allowed period.
+    Also implicitly tests the _period_start helper.
     """
     cf_stream, flows = _create_cf_stream
-    cf_group = cf_stream.group_by_period(period)
+    cf_group = cf_stream.group_by(period=period)
     expected_groups = {}
     for date_key, cf_indices in groups_by_cf_index.items():
         expected_groups[date_key] = CashFlowStream([flows[cf_i] for cf_i in cf_indices])
@@ -264,12 +264,12 @@ def test_group_by_period(_create_cf_stream, period, groups_by_cf_index):
 
 def test_group_by_period_bad_period(_create_cf_stream):
     """
-    Tests that the CashFlowStream.group_by_period method
+    Tests that the CashFlowStream.group_by(period=...) method
     errors when an unacceptable period is provided.
     """
     cf_stream = _create_cf_stream[0]
     with pytest.raises(AssertionError):
-        cf_stream.group_by_period("week")
+        cf_stream.group_by(period="week")
 
 
 def test_sort(_create_cf_stream):
@@ -372,3 +372,320 @@ def test_npv_no_cashflows():
     npv = cf_stream.npv(0.1, date(2100, 1, 1))
     tol = 1e-8
     assert abs(npv) < tol
+
+
+# ---- filter by tag / is_cash keyword tests ----
+
+
+def test_filter_by_tag(_create_cf_stream):
+    """Tests filter(tag=...) keyword argument."""
+    cf_stream, flows = _create_cf_stream
+    result = cf_stream.filter(tag=CashFlowTags.EXPENSE)
+    assert result.flows == [flows[0], flows[2]]
+
+
+def test_filter_by_tag_no_match(_create_cf_stream):
+    """Tests filter(tag=...) when no flows have the tag."""
+    cf_stream = _create_cf_stream[0]
+    result = cf_stream.filter(tag=CashFlowTags.DEPRECIATION)
+    assert result.flows == []
+
+
+def test_filter_by_tag_empty_stream():
+    """Tests filter(tag=...) on an empty stream."""
+    result = CashFlowStream([]).filter(tag=CashFlowTags.REVENUE)
+    assert result.flows == []
+
+
+# ---- with_recurring tests ----
+
+
+def test_with_recurring():
+    """Tests that with_recurring appends recurring flows."""
+    base = CashFlowStream([CashFlow(100.0, date(2026, 1, 1))])
+    result = base.with_recurring(start=date(2026, 6, 1), periods=2, amount=50.0)
+    assert len(result.flows) == 3
+    assert result.flows[0].amount == 100.0
+    assert result.flows[1].amount == 50.0
+    assert result.flows[2].amount == 50.0
+
+
+def test_with_recurring_chaining():
+    """Tests chaining with_recurring calls."""
+    result = (
+        CashFlowStream([])
+        .with_recurring(start=date(2026, 1, 1), periods=2, amount=10.0)
+        .with_recurring(start=date(2027, 1, 1), periods=1, amount=20.0)
+    )
+    assert len(result.flows) == 3
+
+
+def test_with_recurring_immutability():
+    """Tests that with_recurring does not modify the original stream."""
+    original = CashFlowStream([CashFlow(100.0, date(2026, 1, 1))])
+    _ = original.with_recurring(start=date(2026, 6, 1), periods=3, amount=50.0)
+    assert len(original.flows) == 1
+
+
+# ---- append tests ----
+
+
+def test_append():
+    """Tests appending a single cashflow."""
+    stream = CashFlowStream([CashFlow(100.0, date(2026, 1, 1))])
+    new_flow = CashFlow(200.0, date(2026, 2, 1))
+    result = stream.append(new_flow)
+    assert len(result.flows) == 2
+    assert result.flows[1] == new_flow
+
+
+def test_append_immutability():
+    """Tests that append does not modify the original stream."""
+    original = CashFlowStream([CashFlow(100.0, date(2026, 1, 1))])
+    _ = original.append(CashFlow(200.0, date(2026, 2, 1)))
+    assert len(original.flows) == 1
+
+
+def test_append_empty_stream():
+    """Tests appending to an empty stream."""
+    flow = CashFlow(100.0, date(2026, 1, 1))
+    result = CashFlowStream([]).append(flow)
+    assert result.flows == [flow]
+
+
+# ---- extend tests ----
+
+
+def test_extend_with_stream():
+    """Tests extending with another CashFlowStream."""
+    s1 = CashFlowStream([CashFlow(100.0, date(2026, 1, 1))])
+    s2 = CashFlowStream([CashFlow(200.0, date(2026, 2, 1))])
+    result = s1.extend(s2)
+    assert len(result.flows) == 2
+
+
+def test_extend_with_iterable():
+    """Tests extending with a plain list of CashFlow objects."""
+    s1 = CashFlowStream([CashFlow(100.0, date(2026, 1, 1))])
+    extra = [CashFlow(200.0, date(2026, 2, 1)), CashFlow(300.0, date(2026, 3, 1))]
+    result = s1.extend(extra)
+    assert len(result.flows) == 3
+
+
+def test_extend_immutability():
+    """Tests that extend does not modify the original stream."""
+    original = CashFlowStream([CashFlow(100.0, date(2026, 1, 1))])
+    _ = original.extend(CashFlowStream([CashFlow(200.0, date(2026, 2, 1))]))
+    assert len(original.flows) == 1
+
+
+# ---- flat_apply tests ----
+
+
+def test_flat_apply():
+    """Tests flat_apply producing multiple flows per input."""
+    stream = CashFlowStream([CashFlow(100.0, date(2026, 1, 1))])
+    result = stream.flat_apply(lambda cf: [cf, CashFlow(cf.amount * 2, cf.date, "doubled")])
+    assert len(result.flows) == 2
+    assert result.flows[1].amount == 200.0
+
+
+def test_flat_apply_filtering():
+    """Tests flat_apply returning empty iterables to drop flows."""
+    stream = CashFlowStream(
+        [
+            CashFlow(100.0, date(2026, 1, 1)),
+            CashFlow(-50.0, date(2026, 2, 1)),
+        ]
+    )
+    result = stream.flat_apply(lambda cf: [cf] if cf.amount > 0 else [])
+    assert len(result.flows) == 1
+    assert result.flows[0].amount == 100.0
+
+
+def test_flat_apply_empty_stream():
+    """Tests flat_apply on an empty stream."""
+    result = CashFlowStream([]).flat_apply(lambda cf: [cf])
+    assert result.flows == []
+
+
+# ---- filter_apply tests ----
+
+
+def test_filter_apply():
+    """Tests filter_apply keeping and transforming flows."""
+    stream = CashFlowStream(
+        [
+            CashFlow(100.0, date(2026, 1, 1)),
+            CashFlow(-50.0, date(2026, 2, 1)),
+        ]
+    )
+    result = stream.filter_apply(
+        lambda cf: CashFlow(cf.amount * 2, cf.date) if cf.amount > 0 else None
+    )
+    assert len(result.flows) == 1
+    assert result.flows[0].amount == 200.0
+
+
+def test_filter_apply_all_none():
+    """Tests filter_apply when all flows are dropped."""
+    stream = CashFlowStream([CashFlow(100.0, date(2026, 1, 1))])
+    result = stream.filter_apply(lambda cf: None)
+    assert result.flows == []
+
+
+def test_filter_apply_empty_stream():
+    """Tests filter_apply on an empty stream."""
+    result = CashFlowStream([]).filter_apply(lambda cf: cf)
+    assert result.flows == []
+
+
+# ---- inflows / outflows / cash_only tests ----
+
+
+def test_inflows(_create_cf_stream):
+    """Tests the inflows convenience method."""
+    cf_stream, flows = _create_cf_stream
+    result = cf_stream.inflows()
+    assert result.flows == [flows[1], flows[3]]
+
+
+def test_outflows(_create_cf_stream):
+    """Tests the outflows convenience method."""
+    cf_stream, flows = _create_cf_stream
+    result = cf_stream.outflows()
+    assert result.flows == [flows[0], flows[2]]
+
+
+def test_cash_only(_create_cf_stream):
+    """Tests the cash_only convenience method."""
+    cf_stream, flows = _create_cf_stream
+    result = cf_stream.cash_only()
+    # cf3 has is_cash=False, rest are True
+    assert result.flows == [flows[0], flows[1], flows[3]]
+
+
+# ---- date_range tests ----
+
+
+def test_date_range_both_bounds(_create_cf_stream):
+    """Tests date_range with both start and end."""
+    cf_stream, flows = _create_cf_stream
+    result = cf_stream.date_range(start=date(2026, 1, 31), end=date(2026, 4, 1))
+    assert result.flows == [flows[1], flows[2]]
+
+
+def test_date_range_start_only(_create_cf_stream):
+    """Tests date_range with only start bound."""
+    cf_stream, flows = _create_cf_stream
+    result = cf_stream.date_range(start=date(2026, 4, 1))
+    assert result.flows == [flows[2], flows[3]]
+
+
+def test_date_range_end_only(_create_cf_stream):
+    """Tests date_range with only end bound."""
+    cf_stream, flows = _create_cf_stream
+    result = cf_stream.date_range(end=date(2026, 1, 31))
+    assert result.flows == [flows[0], flows[1]]
+
+
+def test_date_range_no_bounds(_create_cf_stream):
+    """Tests date_range with no bounds returns all flows."""
+    cf_stream, flows = _create_cf_stream
+    result = cf_stream.date_range()
+    assert result.flows == list(flows)
+
+
+def test_date_range_empty_result(_create_cf_stream):
+    """Tests date_range that matches nothing."""
+    cf_stream = _create_cf_stream[0]
+    result = cf_stream.date_range(start=date(2030, 1, 1))
+    assert result.flows == []
+
+
+# ---- sort_by tests ----
+
+
+def test_sort_by_date(_create_cf_stream):
+    """Tests sort_by with default attr='date'."""
+    cf_stream, flows = _create_cf_stream
+    result = cf_stream.sort_by()
+    assert result.flows == [flows[0], flows[1], flows[2], flows[3]]
+
+
+def test_sort_by_date_descending(_create_cf_stream):
+    """Tests sort_by date descending."""
+    cf_stream, flows = _create_cf_stream
+    result = cf_stream.sort_by(ascending=False)
+    assert result.flows == [flows[3], flows[2], flows[1], flows[0]]
+
+
+def test_sort_by_amount(_create_cf_stream):
+    """Tests sort_by amount ascending."""
+    cf_stream, flows = _create_cf_stream
+    result = cf_stream.sort_by(attr="amount")
+    assert result.flows == [flows[2], flows[0], flows[3], flows[1]]
+
+
+def test_sort_by_label(_create_cf_stream):
+    """Tests sort_by label ascending."""
+    cf_stream, flows = _create_cf_stream
+    result = cf_stream.sort_by(attr="label")
+    assert result.flows == [flows[0], flows[2], flows[1], flows[3]]
+
+
+def test_sort_by_immutability(_create_cf_stream):
+    """Tests that sort_by does not modify the original stream."""
+    cf_stream, flows = _create_cf_stream
+    _ = cf_stream.sort_by(attr="amount")
+    assert cf_stream.flows == list(flows)
+
+
+def test_sort_by_empty_stream():
+    """Tests sort_by on an empty stream."""
+    result = CashFlowStream([]).sort_by()
+    assert result.flows == []
+
+
+def test_sort_by_default(_create_cf_stream):
+    """Tests that sort_by default is equivalent to sort_by(attr='date', ascending=True)."""
+    cf_stream = _create_cf_stream[0]
+    assert cf_stream.sort_by().flows == cf_stream.sort_by(attr="date", ascending=True).flows
+
+
+def test_sort_by_bad_attr(_create_cf_stream):
+    """Tests that sort_by raises on an invalid attribute."""
+    cf_stream = _create_cf_stream[0]
+    with pytest.raises(AssertionError):
+        cf_stream.sort_by(attr="nonexistent")
+
+
+# ---- unified sort tests ----
+
+
+def test_sort_bare_call_sorts_by_date(_create_cf_stream):
+    """sort() with no arguments sorts by date ascending."""
+    cf_stream, flows = _create_cf_stream
+    result = cf_stream.sort()
+    assert result.flows == [flows[0], flows[1], flows[2], flows[3]]
+
+
+def test_sort_attr_amount_descending(_create_cf_stream):
+    """sort(attr='amount', descending=True) sorts by amount descending."""
+    cf_stream, flows = _create_cf_stream
+    result = cf_stream.sort(attr="amount", descending=True)
+    assert result.flows == [flows[1], flows[3], flows[0], flows[2]]
+
+
+def test_sort_callable_descending(_create_cf_stream):
+    """sort(fn, descending=True) uses the callable key in descending order."""
+    cf_stream, flows = _create_cf_stream
+    result = cf_stream.sort(lambda cf: cf.date, descending=True)
+    assert result.flows == [flows[3], flows[2], flows[1], flows[0]]
+
+
+def test_sort_fn_and_attr_raises(_create_cf_stream):
+    """sort(fn, attr=...) raises ValueError."""
+    cf_stream = _create_cf_stream[0]
+    with pytest.raises(ValueError, match="Cannot pass both"):
+        cf_stream.sort(lambda cf: cf.date, attr="date")

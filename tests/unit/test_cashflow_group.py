@@ -83,3 +83,44 @@ def test_count(_create_cf_grp):
     """Tests the CashFlowGroup.count method."""
     cf_group = _create_cf_grp[0]
     assert cf_group.count() == {"stream1": 1, "stream2": 2}
+
+
+# ---- filter_groups tests ----
+
+
+def test_filter_groups(_create_cf_grp):
+    """Tests filter_groups keeps groups matching the predicate."""
+    cf_group = _create_cf_grp[0]
+    result = cf_group.filter_groups(lambda k, s: s.count() > 1)
+    assert len(result) == 1
+    assert "stream2" in result
+
+
+def test_filter_groups_by_key(_create_cf_grp):
+    """Tests filter_groups filtering by key value."""
+    cf_group = _create_cf_grp[0]
+    result = cf_group.filter_groups(lambda k, s: k == "stream1")
+    assert len(result) == 1
+    assert "stream1" in result
+
+
+def test_filter_groups_none_match(_create_cf_grp):
+    """Tests filter_groups when no groups match."""
+    cf_group = _create_cf_grp[0]
+    result = cf_group.filter_groups(lambda k, s: False)
+    assert len(result) == 0
+
+
+def test_filter_groups_all_match(_create_cf_grp):
+    """Tests filter_groups when all groups match."""
+    cf_group = _create_cf_grp[0]
+    result = cf_group.filter_groups(lambda k, s: True)
+    assert len(result) == 2
+    assert result.groups == cf_group.groups
+
+
+def test_filter_groups_by_sum(_create_cf_grp):
+    """Tests filter_groups using aggregate-like condition on sum."""
+    cf_group = _create_cf_grp[0]
+    result = cf_group.filter_groups(lambda k, s: s.sum() > 0)
+    assert len(result) == 2  # stream1=1000, stream2=3000, both positive

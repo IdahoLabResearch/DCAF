@@ -1,11 +1,14 @@
 """
-Docstring for dcaf.core.cashflows
+Core cashflow abstractions for discounted cash-flow analysis.
+
+Provides CashFlow (immutable data point), CashFlowStream (functional container),
+CashFlowGroup (grouped container), and CashFlowTags (categorisation enum).
 """
 
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date
-from dateutil.relativedelta import relativedelta
+from operator import attrgetter
 from enum import Enum
 from typing import (
     Any,
@@ -16,24 +19,11 @@ from typing import (
     Iterator,
     Literal,
     Optional,
-    Protocol,
+    overload,
 )
 
-type Period = Literal["day", "month", "quarter", "year"]
-type DayCountConvention = Literal["actual/365"]
-
-
-def _year_fraction(start: date, end: date, convention: DayCountConvention = "actual/365") -> float:
-    """Calculate the year fraction between two dates using the given day count convention."""
-    match convention:
-        case "actual/365":
-            return (end - start).days / 365.0
-        case _:
-            assert_never(convention)
-
-
-class SupportsLessThan(Protocol):
-    def __lt__(self, __other: Any) -> bool: ...
+from .types import DayCountConvention, Period, SupportsLessThan
+from .utils import compound_factor, period_start, time_delta_per_period, timedelta_fractional_years
 
 
 class CashFlowTags(Enum):
@@ -155,12 +145,12 @@ class CashFlowGroup[KeyType]:
         --------
         >>> # Group by date and get total amount per date
         >>> grouped = stream.group_by(lambda cf: cf.date)
-        >>> totals = grouped.aggregate(lambda s: sum(cf.amount for cf in s.flows))
+        >>> totals = grouped.aggregate(lambda s: s.sum())
         >>> # Returns: {date1: 1000.0, date2: 2000.0, ...}
 
         >>> # Get count of cashflows per year
         >>> by_year = stream.group_by(lambda cf: cf.date.year)
-        >>> counts = by_year.aggregate(lambda s: len(s.flows))
+        >>> counts = by_year.aggregate(lambda s: s.count())
         >>> # Returns: {2023: 15, 2024: 23, ...}
         """
         return {key: fn(stream) for key, stream in self.groups.items()}
@@ -207,7 +197,7 @@ class CashFlowGroup[KeyType]:
         Examples
         --------
         >>> # Scale all amounts in each group by 1.1 (all groups)
-        >>> by_tag = stream.group_by_tag()
+        >>> by_tag = stream.group_by(tag=True)
         >>> scaled_groups = by_tag.apply_to_groups(
         ...     lambda s: s.apply(lambda cf: CashFlow(
         ...         cf.amount * 1.1, cf.date, cf.label, cf.is_cash, cf.tags
@@ -215,16 +205,16 @@ class CashFlowGroup[KeyType]:
         ... )
 
         >>> # Filter each group to only include cashflows after a certain date
-        >>> by_year = stream.group_by_period("year")
+        >>> by_year = stream.group_by(period="year")
         >>> recent_groups = by_year.apply_to_groups(
         ...     lambda s: s.filter(lambda cf: cf.date >= date(2024, 1, 1))
         ... )
 
         >>> # Sort each group by date
-        >>> sorted_groups = by_year.apply_to_groups(lambda s: s.sort(lambda cf: cf.date))
+        >>> sorted_groups = by_year.apply_to_groups(lambda s: s.sort())
 
         >>> # Apply transformation only to specific groups (sequence of keys)
-        >>> by_tag = stream.group_by_tag()
+        >>> by_tag = stream.group_by(tag=True)
         >>> scaled_revenue = by_tag.apply_to_groups(
         ...     lambda s: s.apply(lambda cf: CashFlow(
         ...         cf.amount * 1.05, cf.date, cf.label, cf.is_cash, cf.tags
@@ -263,6 +253,24 @@ class CashFlowGroup[KeyType]:
         groups = {k: fn(cfs) if k in transformed_keys else cfs for k, cfs in self.groups.items()}
         return CashFlowGroup(groups)
 
+    def filter_groups(
+        self, fn: Callable[[KeyType, "CashFlowStream"], bool]
+    ) -> "CashFlowGroup[KeyType]":
+        """
+        Return a new CashFlowGroup containing only groups where the predicate is True.
+
+        Parameters
+        ----------
+        fn : Callable[[KeyType, CashFlowStream], bool]
+            A predicate that receives each group's key and stream.
+
+        Returns
+        -------
+        CashFlowGroup
+            A new CashFlowGroup with only the matching groups.
+        """
+        return CashFlowGroup({k: v for k, v in self.groups.items() if fn(k, v)})
+
     def ungroup(self) -> "CashFlowStream":
         """
         Ungroup the cashflows and return them as a single CashFlowStream.
@@ -279,12 +287,12 @@ class CashFlowGroup[KeyType]:
         Examples
         --------
         >>> # Group by period, then ungroup back to a single stream
-        >>> by_month = stream.group_by_period("month")
+        >>> by_month = stream.group_by(period="month")
         >>> ungrouped = by_month.ungroup()
         >>> # ungrouped contains all original cashflows
 
         >>> # Filter groups, then ungroup
-        >>> by_year = stream.group_by_period("year")
+        >>> by_year = stream.group_by(period="year")
         >>> recent_years = CashFlowGroup({
         ...     year: flows
         ...     for year, flows in by_year.items()
@@ -293,7 +301,7 @@ class CashFlowGroup[KeyType]:
         >>> recent_flows = recent_years.ungroup()
 
         >>> # Apply transformations to groups, then ungroup
-        >>> by_tag = stream.group_by_tag()
+        >>> by_tag = stream.group_by(tag=True)
         >>> # Scale revenue by 1.05
         >>> revenue_scaled = by_tag[CashFlowTags.REVENUE].apply(
         ...     lambda cf: CashFlow(cf.amount * 1.05, cf.date, cf.label, cf.is_cash, cf.tags)
@@ -354,13 +362,13 @@ class CashFlowGroup[KeyType]:
         Examples
         --------
         >>> # Get total amount per tag
-        >>> by_tag = stream.group_by_tag()
+        >>> by_tag = stream.group_by(tag=True)
         >>> totals = by_tag.sum()
         >>> # Returns: {CashFlowTags.REVENUE: 50000.0,
         >>> #           CashFlowTags.EXPENSE: -20000.0, ...}
 
         >>> # Get monthly totals
-        >>> by_month = stream.group_by_period("month")
+        >>> by_month = stream.group_by(period="month")
         >>> monthly_totals = by_month.sum()
         >>> # Returns: {date(2024, 1, 1): 5000.0,
         >>> #           date(2024, 2, 1): 6000.0, ...}
@@ -382,12 +390,12 @@ class CashFlowGroup[KeyType]:
         Examples
         --------
         >>> # Get count per tag
-        >>> by_tag = stream.group_by_tag()
+        >>> by_tag = stream.group_by(tag=True)
         >>> counts = by_tag.count()
         >>> # Returns: {CashFlowTags.REVENUE: 15, CashFlowTags.EXPENSE: 42, ...}
 
         >>> # Get cashflows per year
-        >>> by_year = stream.group_by_period("year")
+        >>> by_year = stream.group_by(period="year")
         >>> yearly_counts = by_year.count()
         >>> # Returns: {date(2023, 1, 1): 24, date(2024, 1, 1): 36, ...}
         """
@@ -404,7 +412,7 @@ class CashFlowStream:
         start: date,
         periods: int,
         amount: float,
-        frequency: Literal["annual", "monthly", "quarterly"] = "annual",
+        frequency: Period = "year",
         escalation: float = 0.0,
         label: str = "Recurring Payment",
         is_cash: bool = True,
@@ -422,16 +430,17 @@ class CashFlowStream:
         start : date
             The date of the first cashflow.
         periods : int
-            Number of periods (e.g., years if frequency='annual', months if
-            frequency='monthly').
+            Number of periods (e.g., years if frequency='year', months if
+            frequency='month').
         amount : float
             Base amount for the first period. Can be positive (inflows) or negative
             (outflows). Subsequent periods will be escalated if escalation > 0.
-        frequency : Literal["annual", "monthly", "quarterly"], optional
-            Frequency of the cashflows. Default is "annual".
-            - "annual": One cashflow per year
-            - "quarterly": Four cashflows per year (every 3 months)
-            - "monthly": Twelve cashflows per year
+        frequency : Period, optional
+            Frequency of the cashflows. Default is "year".
+            - "year": One cashflow per year
+            - "quarter": Four cashflows per year (every 3 months)
+            - "month": Twelve cashflows per year
+            - "day": One cashflow per day
         escalation : float, optional
             Per-period compound escalation rate as a decimal (e.g., 0.025
             for 2.5% growth per period). Default is 0 (no escalation).
@@ -449,60 +458,17 @@ class CashFlowStream:
         CashFlowStream
             A new stream containing the recurring cashflows.
 
-        Examples
-        --------
-        >>> # Annual revenue with 2.5% escalation for 20 years
-        >>> revenue = CashFlowStream.from_recurring(
-        ...     start=date(2028, 1, 1),
-        ...     periods=20,
-        ...     amount=51_246_000.0,
-        ...     frequency='annual',
-        ...     escalation=0.025,
-        ...     label="Year {n} Revenue",
-        ...     tags=frozenset({CashFlowTags.REVENUE, CashFlowTags.TAXABLE})
-        ... )
-
-        >>> # Monthly rent payments for 3 years (no escalation)
-        >>> rent = CashFlowStream.from_recurring(
-        ...     start=date(2025, 1, 1),
-        ...     periods=36,
-        ...     amount=-5000.0,
-        ...     frequency='monthly',
-        ...     label="Monthly Rent",
-        ...     tags=frozenset({CashFlowTags.OPEX, CashFlowTags.TAX_DEDUCTIBLE})
-        ... )
-
-        >>> # Quarterly dividends with 3% annual growth (0.75% per quarter)
-        >>> dividends = CashFlowStream.from_recurring(
-        ...     start=date(2025, 3, 31),
-        ...     periods=12,
-        ...     amount=25000.0,
-        ...     frequency='quarterly',
-        ...     escalation=0.0075,
-        ...     label="Q{n} Dividend"
-        ... )
-
         Notes
         -----
         - Escalation is compounded, not simple interest
         - Date arithmetic handles month-end edge cases (e.g., Jan 31 + 1 month = Feb 28/29)
         - For annual escalation with monthly frequency, use (1 + annual_rate)^(1/12) - 1
         """
+        delta = time_delta_per_period(frequency)
         flows = []
         for i in range(periods):
-            # Calculate escalated amount using compound growth
-            escalated_amount = amount * ((1.0 + escalation) ** i)
-            match frequency:
-                case "annual":
-                    flow_date = date(start.year + i, start.month, start.day)
-                case "quarterly":
-                    months_offset = i * 3
-                    flow_date = start + relativedelta(months=months_offset)
-                case "monthly":
-                    flow_date = start + relativedelta(months=i)
-                case _:
-                    assert_never(frequency)
-
+            escalated_amount = amount * compound_factor(escalation, i)
+            flow_date = start + delta * i
             flow_label = label.format(n=i + 1) if "{n}" in label else label
             flows.append(
                 CashFlow(
@@ -592,6 +558,62 @@ class CashFlowStream:
 
         return cls(all_flows)
 
+    def append(self, flow: CashFlow) -> "CashFlowStream":
+        """Return a new CashFlowStream with a single cashflow appended."""
+        return CashFlowStream(self.flows + [flow])
+
+    def extend(self, other: "CashFlowStream | Iterable[CashFlow]") -> "CashFlowStream":
+        """
+        Return a new CashFlowStream with additional cashflows appended.
+
+        Parameters
+        ----------
+        other : CashFlowStream or Iterable[CashFlow]
+            Cashflows to append.
+
+        Returns
+        -------
+        CashFlowStream
+            A new CashFlowStream containing all original and additional cashflows.
+        """
+        if isinstance(other, CashFlowStream):
+            return CashFlowStream(self.flows + other.flows)
+        return CashFlowStream(self.flows + list(other))
+
+    def with_recurring(
+        self,
+        start: date,
+        periods: int,
+        amount: float,
+        frequency: Period = "year",
+        escalation: float = 0.0,
+        label: str = "Recurring Payment",
+        is_cash: bool = True,
+        tags: frozenset[CashFlowTags] = frozenset(),
+    ) -> "CashFlowStream":
+        """
+        Chain ``from_recurring`` onto the current stream.
+
+        Generates recurring cashflows and appends them to this stream, returning
+        a new CashFlowStream. All parameters are forwarded to ``from_recurring``.
+
+        Returns
+        -------
+        CashFlowStream
+            A new CashFlowStream with the recurring cashflows added.
+        """
+        recurring = CashFlowStream.from_recurring(
+            start=start,
+            periods=periods,
+            amount=amount,
+            frequency=frequency,
+            escalation=escalation,
+            label=label,
+            is_cash=is_cash,
+            tags=tags,
+        )
+        return CashFlowStream(self.flows + recurring.flows)
+
     def apply(self, fn: Callable[[CashFlow], CashFlow]) -> "CashFlowStream":
         """
         Apply a function to each cashflow within the CashFlowStream.
@@ -673,80 +695,220 @@ class CashFlowStream:
         ## Keep an eye on this and how it gets used.
         return fn(self)
 
-    def filter(self, fn: Callable[[CashFlow], bool]) -> "CashFlowStream":
+    def flat_apply(self, fn: Callable[[CashFlow], Iterable[CashFlow]]) -> "CashFlowStream":
         """
-        Return a new CashFlowStream object filtered by a predicate function.
+        Flat-map: apply *fn* to each cashflow, collecting all produced flows.
 
         Parameters
         ----------
-        fn : Callable
-            A predicate function that takes a CashFlow object and returns a boolean.
-            Only cashflows for which the predicate returns True will be included in
-            the resulting stream.
+        fn : Callable[[CashFlow], Iterable[CashFlow]]
+            A function that takes a CashFlow and returns zero or more CashFlows.
 
         Returns
         -------
         CashFlowStream
-            A new CashFlowStream object containing only the cashflows that satisfy
-            the predicate.
+            A new CashFlowStream containing all cashflows produced by *fn*.
 
         Examples
         --------
-        >>> # Filter for positive cashflows only
-        >>> positive_stream = stream.filter(lambda cf: cf.amount > 0)
-
-        >>> # Filter for cashflows in a specific year
-        >>> year_2024 = stream.filter(lambda cf: cf.date.year == 2024)
-
-        >>> # Filter for cash-basis items only
-        >>> cash_only = stream.filter(lambda cf: cf.is_cash)
-
-        >>> # Filter by tag
-        >>> revenue_only = stream.filter(lambda cf: cf.has_tag(CashFlowTags.REVENUE))
-        >>> taxable = stream.filter(lambda cf: cf.has_tag(CashFlowTags.TAXABLE))
+        >>> # Split each annual cashflow into monthly instalments
+        >>> def monthly_split(cf: CashFlow) -> list[CashFlow]:
+        ...     monthly = cf.amount / 12
+        ...     return [CashFlow(monthly, cf.date + relativedelta(months=m))
+        ...             for m in range(12)]
+        >>> monthly_stream = stream.flat_apply(monthly_split)
         """
-        return CashFlowStream([flow for flow in self.flows if fn(flow)])
+        result: list[CashFlow] = []
+        for flow in self.flows:
+            result.extend(fn(flow))
+        return CashFlowStream(result)
 
-    def group_by[KeyType](self, fn: Callable[[CashFlow], KeyType]) -> CashFlowGroup[KeyType]:
+    def filter_apply(self, fn: Callable[[CashFlow], CashFlow | None]) -> "CashFlowStream":
         """
-        Group cashflows by a key function.
-
-        Applies the key function to each cashflow and groups all cashflows that
-        return the same key value together.
+        Filter-and-transform: *fn* returns a transformed CashFlow or ``None`` to drop.
 
         Parameters
         ----------
-        fn : Callable
-            A function that takes a CashFlow object and returns a hashable key value
-            to group by (e.g., date, year, label, etc.).
+        fn : Callable[[CashFlow], CashFlow | None]
+            A function that takes a CashFlow and returns a (possibly transformed)
+            CashFlow, or ``None`` to exclude it.
+
+        Returns
+        -------
+        CashFlowStream
+            A new CashFlowStream with only the non-None results.
+
+        Examples
+        --------
+        >>> # Double revenue flows, drop everything else
+        >>> def double_revenue(cf: CashFlow) -> CashFlow | None:
+        ...     if cf.has_tag(CashFlowTags.REVENUE):
+        ...         return CashFlow(cf.amount * 2, cf.date, cf.label, cf.is_cash, cf.tags)
+        ...     return None
+        >>> revenue_doubled = stream.filter_apply(double_revenue)
+        """
+        result: list[CashFlow] = []
+        for flow in self.flows:
+            transformed = fn(flow)
+            if transformed is not None:
+                result.append(transformed)
+        return CashFlowStream(result)
+
+    def filter(
+        self,
+        fn: Callable[[CashFlow], bool] | None = None,
+        *,
+        tag: CashFlowTags | None = None,
+        is_cash: bool | None = None,
+    ) -> "CashFlowStream":
+        """
+        Return a new CashFlowStream object filtered by a predicate or keyword criteria.
+
+        Accepts either a callable predicate **or** keyword arguments (``tag``,
+        ``is_cash``), but not both. Multiple keyword arguments are combined with
+        AND semantics.
+
+        Parameters
+        ----------
+        fn : Callable, optional
+            A predicate function that takes a CashFlow object and returns a boolean.
+        tag : CashFlowTags, optional
+            Keep only cashflows that have this tag.
+        is_cash : bool, optional
+            Keep only cashflows where ``is_cash`` matches this value.
+
+        Returns
+        -------
+        CashFlowStream
+            A new CashFlowStream containing only the matching cashflows.
+
+        Raises
+        ------
+        ValueError
+            If both *fn* and keyword arguments are provided, or if neither is.
+        """
+        has_kwargs = tag is not None or is_cash is not None
+
+        if fn is not None and has_kwargs:
+            raise ValueError("Cannot combine a callable predicate with keyword arguments.")
+        if fn is None and not has_kwargs:
+            raise ValueError("Provide either a callable predicate or keyword arguments.")
+
+        if fn is not None:
+            return CashFlowStream([flow for flow in self.flows if fn(flow)])
+
+        # Keyword-based filtering (AND semantics)
+        result = self.flows
+        if tag is not None:
+            result = [flow for flow in result if flow.has_tag(tag)]
+        if is_cash is not None:
+            result = [flow for flow in result if flow.is_cash is is_cash]
+        return CashFlowStream(result)
+
+    def inflows(self) -> "CashFlowStream":
+        """Return only cashflows with positive amounts."""
+        return CashFlowStream([flow for flow in self.flows if flow.amount > 0])
+
+    def outflows(self) -> "CashFlowStream":
+        """Return only cashflows with negative amounts."""
+        return CashFlowStream([flow for flow in self.flows if flow.amount < 0])
+
+    def cash_only(self) -> "CashFlowStream":
+        """Return only cash-basis cashflows (``is_cash=True``)."""
+        return CashFlowStream([flow for flow in self.flows if flow.is_cash])
+
+    def date_range(
+        self,
+        start: date | None = None,
+        end: date | None = None,
+    ) -> "CashFlowStream":
+        """
+        Filter cashflows by inclusive date bounds.
+
+        Parameters
+        ----------
+        start : date, optional
+            Earliest date to include. If ``None``, no lower bound.
+        end : date, optional
+            Latest date to include. If ``None``, no upper bound.
+
+        Returns
+        -------
+        CashFlowStream
+            A new CashFlowStream with only cashflows within the date range.
+        """
+        result = self.flows
+        if start is not None:
+            result = [flow for flow in result if flow.date >= start]
+        if end is not None:
+            result = [flow for flow in result if flow.date <= end]
+        return CashFlowStream(result)
+
+    @overload
+    def group_by[KeyType](self, fn: Callable[[CashFlow], KeyType]) -> CashFlowGroup[KeyType]: ...
+    @overload
+    def group_by(self, *, tag: Literal[True]) -> CashFlowGroup[CashFlowTags]: ...
+    @overload
+    def group_by(self, *, period: Period) -> CashFlowGroup[date]: ...
+
+    def group_by(
+        self,
+        fn: Callable[[CashFlow], Any] | None = None,
+        *,
+        tag: bool = False,
+        period: Period | None = None,
+    ) -> CashFlowGroup:
+        """
+        Group cashflows by a key function, by tags, or by time period.
+
+        Exactly one of *fn*, *tag*, or *period* must be provided.
+
+        Parameters
+        ----------
+        fn : Callable, optional
+            A key function applied to each cashflow.
+        tag : bool, optional
+            If ``True``, group by tags (fan-out: a flow with multiple tags
+            appears in each corresponding group).
+        period : Period, optional
+            Group by time period (``"day"``, ``"month"``, ``"quarter"``,
+            ``"year"``).
 
         Returns
         -------
         CashFlowGroup
-            A CashFlowGroup object mapping each unique key to a CashFlowStream of
-            cashflows that share that key.
+            A CashFlowGroup mapping keys to CashFlowStreams.
 
-        Examples
-        --------
-        >>> # Group by exact date
-        >>> by_date = stream.group_by(lambda cf: cf.date)
-
-        >>> # Group by year
-        >>> by_year = stream.group_by(lambda cf: cf.date.year)
-
-        >>> # Group by positive/negative
-        >>> by_sign = stream.group_by(lambda cf: "positive" if cf.amount > 0 else "negative")
-
-        >>> # Then aggregate
-        >>> yearly_totals = by_year.aggregate(lambda s: sum(cf.amount for cf in s.flows))
+        Raises
+        ------
+        ValueError
+            If not exactly one argument is provided.
         """
-        groups: defaultdict[KeyType, list[CashFlow]] = defaultdict(list)
+        provided = (fn is not None) + tag + (period is not None)
+        if provided != 1:
+            raise ValueError("Provide exactly one of 'fn', 'tag=True', or 'period'.")
+
+        if fn is not None:
+            groups: defaultdict[Any, list[CashFlow]] = defaultdict(list)
+            for flow in self.flows:
+                groups[fn(flow)].append(flow)
+            return CashFlowGroup({k: CashFlowStream(v) for k, v in groups.items()})
+
+        if tag:
+            tag_groups: defaultdict[CashFlowTags, list[CashFlow]] = defaultdict(list)
+            for flow in self.flows:
+                for t in flow.tags:
+                    tag_groups[t].append(flow)
+            return CashFlowGroup({k: CashFlowStream(v) for k, v in tag_groups.items()})
+
+        # period path
+        assert period is not None
+        period_groups: defaultdict[date, list[CashFlow]] = defaultdict(list)
         for flow in self.flows:
-            key = fn(flow)
-            groups[key].append(flow)
+            period_groups[period_start(flow.date, period)].append(flow)
+        return CashFlowGroup({k: CashFlowStream(v) for k, v in period_groups.items()})
 
-        return CashFlowGroup[KeyType]({key: CashFlowStream(flows) for key, flows in groups.items()})
-
+    # Keep group_by_tag as alias for backwards compat during transition
     def group_by_tag(self) -> CashFlowGroup[CashFlowTags]:
         """
         Group cashflows by their tags.
@@ -766,14 +928,14 @@ class CashFlowStream:
         --------
         >>> # Group by tags and get total per tag
         >>> by_tag = stream.group_by_tag()
-        >>> revenue_total = sum(cf.amount for cf in by_tag[CashFlowTags.REVENUE].flows)
-        >>> expense_total = sum(cf.amount for cf in by_tag[CashFlowTags.EXPENSE].flows)
+        >>> revenue_total = by_tag[CashFlowTags.REVENUE].sum()
+        >>> expense_total = by_tag[CashFlowTags.EXPENSE].sum()
 
         >>> # Get all taxable cashflows
         >>> taxable_flows = by_tag[CashFlowTags.TAXABLE]
 
         >>> # Count cashflows per tag
-        >>> counts = by_tag.aggregate(lambda s: len(s.flows))
+        >>> counts = by_tag.aggregate(lambda s: s.count())
         >>> # Returns: {CashFlowTags.REVENUE: 5, CashFlowTags.EXPENSE: 12, ...}
 
         Notes
@@ -822,13 +984,13 @@ class CashFlowStream:
         --------
         >>> # Group by month and get monthly totals
         >>> by_month = stream.group_by_period("month")
-        >>> monthly_totals = by_month.aggregate(lambda s: sum(cf.amount for cf in s.flows))
+        >>> monthly_totals = by_month.aggregate(lambda s: s.sum())
         >>> # Returns: {date(2024, 1, 1): 5000.0, date(2024, 2, 1): 6000.0, ...}
 
-        >>> # Group by year
+        >>> # Group by year and get yearly revenue
         >>> by_year = stream.group_by_period("year")
         >>> yearly_revenue = by_year.aggregate(
-        ...     lambda s: sum(cf.amount for cf in s.flows if cf.has_tag(CashFlowTags.REVENUE))
+        ...     lambda s: s.filter(tag=CashFlowTags.REVENUE).sum()
         ... )
 
         >>> # Group by quarter
@@ -845,41 +1007,67 @@ class CashFlowStream:
 
         This method is equivalent to:
 
-        >>> # Instead of:
-        >>> by_month = stream.group_by(lambda cf: date(cf.date.year, cf.date.month, 1))
-        >>> # You can do:
-        >>> by_month = stream.group_by_period("month")
+        >>> by_month = stream.group_by(period="month")
         """
-        return self.group_by(lambda cf: self._get_period_start(cf.date, period))
+        return self.group_by(lambda cf: period_start(cf.date, period))
 
-    def sort(self, fn: Callable[[CashFlow], SupportsLessThan]) -> "CashFlowStream":
+    @overload
+    def sort(
+        self, fn: Callable[[CashFlow], SupportsLessThan], *, descending: bool = ...
+    ) -> "CashFlowStream": ...
+    @overload
+    def sort(
+        self,
+        *,
+        attr: Literal["date", "amount", "label"],
+        descending: bool = ...,
+    ) -> "CashFlowStream": ...
+    @overload
+    def sort(self) -> "CashFlowStream": ...
+
+    def sort(
+        self,
+        fn: Callable[[CashFlow], SupportsLessThan] | None = None,
+        *,
+        attr: Literal["date", "amount", "label"] | None = None,
+        descending: bool = False,
+    ) -> "CashFlowStream":
         """
-        Return a new CashFlowStream with cashflows sorted by a key function.
+        Return a new CashFlowStream with cashflows sorted by a key function or attribute.
+
+        Accepts either a callable key function **or** an ``attr`` keyword, but not both.
+        When called with no arguments, sorts by date ascending.
 
         Parameters
         ----------
-        fn : Callable[[CashFlow], SupportsLessThan]
-            A function that takes a CashFlow object and returns a sortable key value
-            (e.g., date, amount, label; more generally, any value which supports the
-            `<` comparison operator). For descending order, use negative values
-            or reverse the result.
+        fn : Callable[[CashFlow], SupportsLessThan], optional
+            A function that takes a CashFlow and returns a sortable key value.
+            Mutually exclusive with *attr*.
+        attr : Literal["date", "amount", "label"], optional
+            A named CashFlow attribute to sort by.  Mutually exclusive with *fn*.
+        descending : bool, optional
+            If ``True``, sort in descending order. Default is ``False`` (ascending).
 
         Returns
         -------
         CashFlowStream
-            A new CashFlowStream with cashflows sorted by the key function in
-            ascending order.
+            A new sorted CashFlowStream.
+
+        Raises
+        ------
+        ValueError
+            If both *fn* and *attr* are provided.
 
         Examples
         --------
-        >>> # Sort by date (ascending) - most common use case
-        >>> sorted_stream = stream.sort(lambda cf: cf.date)
+        >>> # Sort by date ascending (default)
+        >>> sorted_stream = stream.sort()
 
-        >>> # Sort by amount (descending) using negative
-        >>> sorted_stream = stream.sort(lambda cf: -cf.amount)
+        >>> # Sort by amount descending using attr keyword
+        >>> sorted_stream = stream.sort(attr="amount", descending=True)
 
-        >>> # Sort by label alphabetically
-        >>> sorted_stream = stream.sort(lambda cf: cf.label)
+        >>> # Sort by a custom key function
+        >>> sorted_stream = stream.sort(lambda cf: cf.date, descending=True)
 
         >>> # Sort by multiple keys: year then amount
         >>> sorted_stream = stream.sort(lambda cf: (cf.date.year, cf.amount))
@@ -887,7 +1075,7 @@ class CashFlowStream:
         >>> # Chain with other operations
         >>> recent_revenue = (stream
         ...     .filter(lambda cf: cf.has_tag(CashFlowTags.REVENUE))
-        ...     .sort(lambda cf: cf.date)
+        ...     .sort()
         ...     .flows[-10:])  # Get 10 most recent revenue cashflows
 
         Notes
@@ -896,12 +1084,45 @@ class CashFlowStream:
         The sorting is stable, meaning that when multiple cashflows have the same
         key value, they maintain their original relative order.
         """
-        ## NOTE: There is some conversation to be had about the flexibility of
-        ## lambda functions, while also being cumbersome to simply sort by innate
-        ## cashflow attributes like date. It would be easier to just do
-        ## CFS.sort(by=date, ascending=False). We could do @overloads
-        ## in the future to have an optional `by` and `key` parameter.
-        return CashFlowStream(sorted(self.flows, key=fn))
+        if fn is not None and attr is not None:
+            raise ValueError("Cannot pass both a key function and 'attr' to sort()")
+
+        if fn is not None:
+            return CashFlowStream(sorted(self.flows, key=fn, reverse=descending))
+
+        # Default to date when neither fn nor attr is provided
+        resolved_attr = attr if attr is not None else "date"
+        match resolved_attr:
+            case "date" | "amount" | "label":
+                key = attrgetter(resolved_attr)
+            case _:
+                assert_never(resolved_attr)
+        return CashFlowStream(sorted(self.flows, key=key, reverse=descending))
+
+    def sort_by(
+        self,
+        attr: Literal["date", "amount", "label"] = "date",
+        ascending: bool = True,
+    ) -> "CashFlowStream":
+        """
+        Sort cashflows by a named attribute.
+
+        .. deprecated::
+            Use ``sort(attr=..., descending=...)`` instead.
+
+        Parameters
+        ----------
+        attr : Literal["date", "amount", "label"], optional
+            The cashflow attribute to sort by. Default is ``"date"``.
+        ascending : bool, optional
+            Sort in ascending order if ``True`` (default), descending if ``False``.
+
+        Returns
+        -------
+        CashFlowStream
+            A new sorted CashFlowStream.
+        """
+        return self.sort(attr=attr, descending=not ascending)
 
     def sum(self) -> float:
         """
@@ -1103,29 +1324,13 @@ class CashFlowStream:
         for flow in self.flows:
             if not flow.is_cash:
                 continue
-            years = _year_fraction(valuation_date, flow.date, convention)
+            years = timedelta_fractional_years(valuation_date, flow.date, convention)
 
             # Discount or compound the cashflow to the valuation date
             # Formula: PV = CF / (1 + r)^t
             # If t > 0 (future): discounts back to present
             # If t < 0 (past): compounds forward to present (dividing by (1+r)^negative)
             # If t = 0 (same date): no adjustment needed
-            discount_factor = (1.0 + rate) ** years
-            total += flow.amount / discount_factor
+            total += flow.amount / compound_factor(rate, years)
 
         return total
-
-    @staticmethod
-    def _get_period_start(dt: date, period: Period) -> date:
-        match period:
-            case "day":
-                return dt
-            case "month":
-                return date(dt.year, dt.month, 1)
-            case "quarter":
-                quarter_month = ((dt.month - 1) // 3) * 3 + 1
-                return date(dt.year, quarter_month, 1)
-            case "year":
-                return date(dt.year, 1, 1)
-            case _:
-                assert_never(period)
