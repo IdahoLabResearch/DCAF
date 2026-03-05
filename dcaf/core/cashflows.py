@@ -47,6 +47,10 @@ class CashFlowTags(Enum):
     OPEX = "opex"  # Operating expense
     DEPRECIATION = "depreciation"
 
+    # Debt service
+    DEBT_INTEREST = "debt_interest"
+    DEBT_PRINCIPAL = "debt_principal"
+
 
 @dataclass(frozen=True)
 class CashFlow:

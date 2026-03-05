@@ -4,6 +4,10 @@ DCAF - Discounted Cash Flow Analysis Framework
 A Python package for financial modeling and cashflow analysis.
 """
 
+from dcaf.core.amortization import (
+    AmortizationBuilder,
+    AmortizationSchedule,
+)
 from dcaf.core.cashflows import (
     CashFlow,
     CashFlowGroup,
@@ -25,6 +29,8 @@ from dcaf.core.types import MACRSConvention, MACRSPropertyClass
 
 
 __all__ = [
+    "AmortizationBuilder",
+    "AmortizationSchedule",
     "CashFlow",
     "CashFlowGroup",
     "CashFlowStream",
