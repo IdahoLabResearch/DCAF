@@ -101,14 +101,24 @@ class CashFlow:
         """
         return tag in self.tags
 
-    def replace(self, **changes: Any) -> "CashFlow":
+    def replace(
+        self,
+        amount: float | None = None,
+        date: date | None = None,
+        label: str | None = None,
+        is_cash: bool | None = None,
+        tags: frozenset[CashFlowTags] | None = None,
+    ) -> "CashFlow":
         """
         Return a new version of this CashFlow with the specified changes to parameters.
 
         Parameters
         ----------
-        **changes : Any
-            Parameters to change, passed as keyword arguments using <param_name>=<new_value>.
+        amount: float | None = None
+        date: date | None = None
+        label: str | None = None
+        is_cash: bool | None = None
+        tags: frozenset[CashFlowTags] | None = None
 
         Returns
         -------
@@ -138,6 +148,8 @@ class CashFlow:
         ... )
         >>> # This reduces the expense magnitude by 500 and moves it back 6 months
         """
+        params = {"amount": amount, "date": date, "label": label, "is_cash": is_cash, "tags": tags}
+        changes = {argname: arg for argname, arg in params.items() if arg is not None}
         return dc_replace(self, **changes)
 
     def to_stream(self) -> "CashFlowStream":
