@@ -18,7 +18,7 @@ from typing import (
     overload,
 )
 
-from dcaf.core.cashflows import (
+from .cashflows import (
     CashFlow,
     CashFlowStream,
     CashFlowTags,
