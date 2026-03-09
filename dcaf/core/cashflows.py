@@ -6,7 +6,7 @@ CashFlowGroup (grouped container), and CashFlowTags (categorisation enum).
 """
 
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace as dc_replace
 from datetime import date
 from operator import attrgetter
 from enum import Enum
@@ -100,6 +100,57 @@ class CashFlow:
         False
         """
         return tag in self.tags
+
+    def replace(
+        self,
+        amount: float | None = None,
+        date: date | None = None,
+        label: str | None = None,
+        is_cash: bool | None = None,
+        tags: frozenset[CashFlowTags] | None = None,
+    ) -> "CashFlow":
+        """
+        Return a new version of this CashFlow with the specified changes to parameters.
+
+        Parameters
+        ----------
+        amount: float | None = None
+        date: date | None = None
+        label: str | None = None
+        is_cash: bool | None = None
+        tags: frozenset[CashFlowTags] | None = None
+
+        Returns
+        -------
+        CashFlow
+            A new CashFlow instance with the specified parameters updated to the new values provided.
+
+        Examples
+        --------
+        >>> # Change the label
+        >>> cf = CashFlow(Decimal(1000), date(2026, 1, 1), label="old_cf")
+        >>> new_cf = cf.replace(label="new_cf")
+
+        >>> # Increase the magnitude of the amount
+        >>> cf = CashFlow(Decimal(-500), date(2026, 1, 1))
+        >>> new_amount = Decimal(-100) if cf.amount < Decimal(0) else Decimal(100)
+        >>> larger_cf = cf.replace(amount=new_amount)
+
+        >>> # Perform multiple modifications
+        >>> old_cf = CashFlow(
+        ...     Decimal(-3000),
+        ...     date(2027, 6, 1),
+        ...     tags=frozenset([CashFlowTags.EXPENSE]),
+        ... )
+        >>> new_cf = old_cf.replace(
+        ...     amount = old_cf.amount + Decimal(500),
+        ...     date = (old_cf.date + relativedelta(months=6)),
+        ... )
+        >>> # This reduces the expense magnitude by 500 and moves it back 6 months
+        """
+        params = {"amount": amount, "date": date, "label": label, "is_cash": is_cash, "tags": tags}
+        changes = {argname: arg for argname, arg in params.items() if arg is not None}
+        return dc_replace(self, **changes)
 
     def to_stream(self) -> "CashFlowStream":
         """
