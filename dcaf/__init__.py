@@ -25,6 +25,7 @@ from dcaf.generation import (
     GenerationGroup,
     GenerationStream,
 )
+from dcaf.opex import fixed_opex
 from dcaf.types import MACRSConvention, MACRSPropertyClass
 
 
@@ -42,6 +43,7 @@ __all__ = [
     "MACRS_MID_QUARTER_RATES",
     "MACRS_RATES",
     "MACRSConvention",
+    "fixed_opex",
     "MACRSPropertyClass",
     "macrs_schedule",
 ]
