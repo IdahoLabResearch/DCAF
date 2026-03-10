@@ -40,7 +40,7 @@ class TestComputeTaxableIncome:
 
         assert len(result.flows) == 1
         assert result.flows[0].amount == 80_000  # 100,000 - 20,000
-        assert result.flows[0].date == date(2025, 1, 1)  # Period start
+        assert result.flows[0].date == date(2025, 12, 31)  # Period end
         assert result.flows[0].is_cash is False  # Accrual concept
         assert result.flows[0].tags == frozenset()  # No tags
 
@@ -86,10 +86,10 @@ class TestComputeTaxableIncome:
         result = result.sort(lambda cf: cf.date)
 
         assert result.flows[0].amount == 80_000  # 2025: 100,000 - 20,000
-        assert result.flows[0].date == date(2025, 1, 1)
+        assert result.flows[0].date == date(2025, 12, 31)
 
         assert result.flows[1].amount == 120_000  # 2026: 150,000 - 30,000
-        assert result.flows[1].date == date(2026, 1, 1)
+        assert result.flows[1].date == date(2026, 12, 31)
 
     def test_negative_taxable_income_loss(self):
         """Test that negative taxable income (losses) are preserved."""
@@ -225,8 +225,8 @@ class TestComputeTaxableIncome:
 
         assert result.flows[0].label == "Custom Taxable Income"
 
-    def test_ignores_non_taxable_flows(self):
-        """Test that flows without TAXABLE or TAX_DEDUCTIBLE tags are ignored."""
+    def test_sums_all_flows_in_streams(self):
+        """Test that all flows in both streams are summed (callers are trusted to pass correct streams)."""
         revenue = CashFlowStream(
             [
                 CashFlow(
@@ -238,8 +238,8 @@ class TestComputeTaxableIncome:
                 CashFlow(
                     amount=50_000,
                     date=date(2025, 6, 1),
-                    label="Non-taxable Revenue",
-                    tags=frozenset({CashFlowTags.REVENUE}),  # No TAXABLE tag
+                    label="Other Revenue",
+                    tags=frozenset({CashFlowTags.REVENUE}),
                 ),
             ]
         )
@@ -254,8 +254,8 @@ class TestComputeTaxableIncome:
                 CashFlow(
                     amount=-10_000,
                     date=date(2025, 3, 1),
-                    label="Non-deductible Expense",
-                    tags=frozenset({CashFlowTags.EXPENSE}),  # No TAX_DEDUCTIBLE tag
+                    label="Other Expense",
+                    tags=frozenset({CashFlowTags.EXPENSE}),
                 ),
             ]
         )
@@ -263,8 +263,8 @@ class TestComputeTaxableIncome:
         result = compute_taxable_income(revenue, deductions)
 
         assert len(result.flows) == 1
-        # Should only count 100k taxable revenue and -20k deductible expense
-        assert result.flows[0].amount == 80_000
+        # All flows in both streams are summed: 100k + 50k + (-20k) + (-10k) = 120k
+        assert result.flows[0].amount == 120_000
 
 
 class TestTaxLiability:
@@ -525,9 +525,9 @@ class TestIntegration:
 
         # Expected: 100k revenue - 30k opex - 10.5k taxes = 59.5k, discounted
         # Flows occur at different dates in 2025, so there's time value discounting
-        # OPEX on 3/1, revenue on 6/1, tax on 1/1
-        assert npv > 55_000  # Approximate check
-        assert npv < 57_000
+        # OPEX on 3/1, revenue on 6/1, tax on 12/31
+        assert npv > 56_500  # Approximate check
+        assert npv < 58_000
 
     def test_multi_year_with_losses(self):
         """Test multi-year scenario with both profits and losses."""
@@ -578,4 +578,4 @@ class TestIntegration:
         # Should only have tax for 2026
         assert len(taxes.flows) == 1
         assert taxes.flows[0].amount == -21_000
-        assert taxes.flows[0].date == date(2026, 1, 1)
+        assert taxes.flows[0].date == date(2026, 12, 31)

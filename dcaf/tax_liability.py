@@ -10,7 +10,7 @@ Functions:
 """
 
 from dcaf.cashflows import CashFlow, CashFlowStream, CashFlowTags
-from dcaf.utils import period_start
+from dcaf.utils import period_end
 
 
 def compute_taxable_income(
@@ -31,7 +31,7 @@ def compute_taxable_income(
 
     Returns:
         CashFlowStream of taxable income amounts (can be positive or negative for losses),
-        with is_cash=False and dates set to period start (January 1 for annual).
+        with is_cash=False and dates set to period end (December 31 for annual).
 
     Example:
         >>> from datetime import date
@@ -51,36 +51,16 @@ def compute_taxable_income(
 
     # Return empty stream if no flows
     if not combined:
-        return CashFlowStream([])
+        return CashFlowStream()
 
-    # Group by year
-    grouped = combined.group_by_period("year")
+    # Group by year and aggregate net amount per period
+    grouped = combined.group_by(period="year")
+    net_by_period = grouped.aggregate(lambda s: s.sum())
 
-    # Calculate net taxable income for each period
-    taxable_income_flows: list[CashFlow] = []
-    for period, stream in grouped.items():
-        # Sum taxable revenue (positive)
-        taxable_revenue = stream.filter(lambda cf: CashFlowTags.TAXABLE in cf.tags).sum()
-
-        # Sum tax deductible amounts (negative)
-        tax_deductible = stream.filter(lambda cf: CashFlowTags.TAX_DEDUCTIBLE in cf.tags).sum()
-
-        # Net taxable income = revenue + deductions (deductions are already negative)
-        net_taxable_income = taxable_revenue + tax_deductible
-
-        # Create cashflow with period start date (January 1)
-        period_start_date = period_start(period, "year")
-        taxable_income_flows.append(
-            CashFlow(
-                amount=net_taxable_income,
-                date=period_start_date,
-                label=label,
-                is_cash=False,  # Accrual concept, not cash
-                tags=frozenset(),  # No tags - intermediate calculation
-            )
-        )
-
-    return CashFlowStream(taxable_income_flows)
+    return CashFlowStream([
+        CashFlow(amount=net, date=period_end(period, "year"), label=label, is_cash=False, tags=frozenset())
+        for period, net in net_by_period.items()
+    ])
 
 
 def tax_liability(
@@ -106,6 +86,11 @@ def tax_liability(
         CashFlowStream of tax payment cashflows with negative amounts (outflows) and
         is_cash=True. Only positive taxable income generates tax liability.
 
+    Note:
+        This implementation does not model tax loss carryforwards or refunds.
+        Negative taxable income (losses) produce no tax liability. This differs
+        from the MPR tool, where a loss generates a tax credit (refund).
+
     Example:
         >>> from datetime import date
         >>> from dcaf import CashFlowStream, CashFlow
@@ -119,11 +104,11 @@ def tax_liability(
         True
     """
     # Filter for positive taxable income only (negative = losses, no tax owed)
-    positive_income = taxable_income_stream.filter(lambda cf: cf.amount > 0)
+    positive_income = taxable_income_stream.inflows()
 
     # Return empty stream if no positive income
     if not positive_income:
-        return CashFlowStream([])
+        return CashFlowStream()
 
     # Apply tax rate and convert to negative (outflow)
     tax_flows = positive_income.apply(
