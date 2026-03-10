@@ -23,6 +23,24 @@ def period_start(dt: date, period: Period) -> date:
             assert_never(period)
 
 
+def period_end(dt: date, period: Period) -> date:
+    """Return the last date of the period containing *dt*."""
+    match period:
+        case "day":
+            return dt
+        case "month":
+            next_month = date(dt.year, dt.month, 1) + relativedelta(months=1)
+            return next_month - relativedelta(days=1)
+        case "quarter":
+            quarter_month = ((dt.month - 1) // 3) * 3 + 1
+            quarter_start = date(dt.year, quarter_month, 1)
+            return quarter_start + relativedelta(months=3) - relativedelta(days=1)
+        case "year":
+            return date(dt.year, 12, 31)
+        case _:
+            assert_never(period)
+
+
 def timedelta_fractional_years(
     start: date, end: date, convention: DayCountConvention = "actual/365"
 ) -> float:
