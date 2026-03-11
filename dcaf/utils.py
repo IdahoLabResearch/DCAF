@@ -4,12 +4,20 @@ from typing import assert_never
 
 from dateutil.relativedelta import relativedelta
 
-from .types import DayCountConvention, Period
+from dcaf.types import DayCountConvention, Period, parse_period
+
+
+def _normalize_period(period: Period) -> str:
+    try:
+        return parse_period(period).value
+    except ValueError as exc:
+        raise AssertionError(str(exc)) from exc
 
 
 def period_start(dt: date, period: Period) -> date:
     """Return the start date of the period containing *dt*."""
-    match period:
+    normalized_period = _normalize_period(period)
+    match normalized_period:
         case "day":
             return dt
         case "month":
@@ -20,7 +28,7 @@ def period_start(dt: date, period: Period) -> date:
         case "year":
             return date(dt.year, 1, 1)
         case _:
-            assert_never(period)
+            assert_never(normalized_period)
 
 
 def period_end(dt: date, period: Period) -> date:
@@ -80,7 +88,8 @@ def compound_factor(rate: float, periods: float) -> float:
 @cache
 def hours_per_period(period: Period) -> float:
     """Return the number of hours in a period."""
-    match period:
+    normalized_period = _normalize_period(period)
+    match normalized_period:
         case "year":
             return 8760.0
         case "quarter":
@@ -90,13 +99,14 @@ def hours_per_period(period: Period) -> float:
         case "day":
             return 24.0
         case _:
-            assert_never(period)
+            assert_never(normalized_period)
 
 
 @cache
 def time_delta_per_period(period: Period) -> relativedelta:
     """Return a relativedelta representing one period."""
-    match period:
+    normalized_period = _normalize_period(period)
+    match normalized_period:
         case "year":
             return relativedelta(years=1)
         case "quarter":
@@ -106,4 +116,4 @@ def time_delta_per_period(period: Period) -> relativedelta:
         case "day":
             return relativedelta(days=1)
         case _:
-            assert_never(period)
+            assert_never(normalized_period)

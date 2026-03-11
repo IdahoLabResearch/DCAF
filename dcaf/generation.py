@@ -18,14 +18,14 @@ from typing import (
     overload,
 )
 
-from .cashflows import (
+from dcaf.cashflows import (
     CashFlow,
     CashFlowStream,
     CashFlowTags,
 )
 
-from .types import DayCountConvention, Period
-from .utils import (
+from dcaf.types import DayCountConvention, Period
+from dcaf.utils import (
     compound_factor,
     hours_per_period,
     period_start,

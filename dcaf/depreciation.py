@@ -8,8 +8,8 @@ depreciation CashFlowStream objects.
 from datetime import date
 from typing import assert_never
 
-from .cashflows import CashFlow, CashFlowStream, CashFlowTags
-from .types import MACRSConvention, MACRSPropertyClass
+from dcaf.cashflows import CashFlow, CashFlowStream, CashFlowTags
+from dcaf.types import MACRSConvention, MACRSPropertyClass
 
 
 # Tables A-1 through A-5 from the provided PDF, encoded as decimals.

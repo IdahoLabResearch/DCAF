@@ -22,8 +22,8 @@ from typing import (
     overload,
 )
 
-from .types import DayCountConvention, Period, SupportsLessThan
-from .utils import compound_factor, period_start, time_delta_per_period, timedelta_fractional_years
+from dcaf.types import DayCountConvention, Period, SupportsLessThan
+from dcaf.utils import compound_factor, period_start, time_delta_per_period, timedelta_fractional_years
 
 
 class CashFlowTags(Enum):

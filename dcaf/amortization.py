@@ -19,9 +19,9 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Self, assert_never, overload
 
-from .cashflows import CashFlow, CashFlowStream, CashFlowTags
-from .types import Period
-from .utils import time_delta_per_period
+from dcaf.cashflows import CashFlow, CashFlowStream, CashFlowTags
+from dcaf.types import Period
+from dcaf.utils import time_delta_per_period
 
 
 @dataclass(frozen=True)
