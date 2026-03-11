@@ -8,11 +8,9 @@ CashFlowGroup (grouped container), and CashFlowTags (categorisation enum).
 from collections import defaultdict
 from dataclasses import dataclass, field, replace as dc_replace
 from datetime import date
-from operator import attrgetter
 from enum import Enum
 from typing import (
     Any,
-    assert_never,
     Callable,
     Collection,
     Iterable,
@@ -22,8 +20,9 @@ from typing import (
     overload,
 )
 
+from dcaf._streams import BaseGroup, BaseStream
 from dcaf.types import DayCountConvention, Period, SupportsLessThan
-from dcaf.utils import compound_factor, period_start, time_delta_per_period, timedelta_fractional_years
+from dcaf.utils import compound_factor, time_delta_per_period, timedelta_fractional_years
 
 
 class CashFlowTags(Enum):
@@ -165,7 +164,7 @@ class CashFlow:
 
 
 @dataclass
-class CashFlowGroup[KeyType]:
+class CashFlowGroup[KeyType](BaseGroup[KeyType, CashFlow, "CashFlowStream"]):
     """
     A dictionary-like container for grouped CashFlows.
 
@@ -173,7 +172,9 @@ class CashFlowGroup[KeyType]:
     across groups.
     """
 
-    groups: dict[KeyType, "CashFlowStream"]
+    def _empty_stream(self) -> "CashFlowStream":
+        """Return an empty stream for internal regrouping helpers."""
+        return CashFlowStream()
 
     def aggregate[T](self, fn: Callable[["CashFlowStream"], T]) -> dict[KeyType, T]:
         """
@@ -208,7 +209,7 @@ class CashFlowGroup[KeyType]:
         >>> counts = by_year.aggregate(lambda s: s.count())
         >>> # Returns: {2023: 15, 2024: 23, ...}
         """
-        return {key: fn(stream) for key, stream in self.groups.items()}
+        return super().aggregate(fn)
 
     def apply_to_groups(
         self,
@@ -285,28 +286,7 @@ class CashFlowGroup[KeyType]:
         ...     keys=date(2024, 1, 1)
         ... )
         """
-        if keys is None:
-            # Apply to all groups
-            transformed_keys = list(self.groups.keys())
-        elif isinstance(keys, Collection) and not isinstance(keys, str):
-            transformed_keys = list(keys)
-            for key in transformed_keys:
-                if key not in self.groups:
-                    raise ValueError(
-                        f"Unknown group key {key!r}. Known group keys: {list(self.groups.keys())}"
-                    )
-        elif keys in self.groups:
-            # Single key (works for any hashable type, including strings)
-            transformed_keys = [keys]
-        else:
-            raise ValueError(
-                f"Could not interpret keys={keys!r} as valid grouping keys. "
-                "Expected None, a single key, or a sequence of keys. "
-                f"Valid keys: {list(self.groups.keys())}."
-            )
-
-        groups = {k: fn(cfs) if k in transformed_keys else cfs for k, cfs in self.groups.items()}
-        return CashFlowGroup(groups)
+        return super().apply_to_groups(fn, keys=keys)
 
     def filter_groups(
         self, fn: Callable[[KeyType, "CashFlowStream"], bool]
@@ -324,7 +304,7 @@ class CashFlowGroup[KeyType]:
         CashFlowGroup
             A new CashFlowGroup with only the matching groups.
         """
-        return CashFlowGroup({k: v for k, v in self.groups.items() if fn(k, v)})
+        return super().filter_groups(fn)
 
     def ungroup(self) -> "CashFlowStream":
         """
@@ -371,36 +351,31 @@ class CashFlowGroup[KeyType]:
         - Cashflows that appear in multiple groups (e.g., from group_by_tag)
           will appear multiple times in the ungrouped stream.
         """
-        all_flows: list[CashFlow] = []
-
-        for stream in self.groups.values():
-            all_flows.extend(stream.flows)
-
-        return CashFlowStream(all_flows)
+        return super().ungroup()
 
     def keys(self) -> Iterable[KeyType]:
         """Return the group keys."""
-        return self.groups.keys()
+        return super().keys()
 
     def values(self) -> Iterable["CashFlowStream"]:
         """Return the CashFlowStream values."""
-        return self.groups.values()
+        return super().values()
 
     def items(self) -> Iterable[tuple[KeyType, "CashFlowStream"]]:
         """Return key-value pairs of (key, CashFlowStream)."""
-        return self.groups.items()
+        return super().items()
 
     def __getitem__(self, key: KeyType) -> "CashFlowStream":
         """Access a specific group by key."""
-        return self.groups[key]
+        return super().__getitem__(key)
 
     def __len__(self) -> int:
         """Return the number of groups."""
-        return len(self.groups)
+        return super().__len__()
 
     def __iter__(self) -> Iterator[KeyType]:
         """Iterate over group keys."""
-        return iter(self.groups)
+        return super().__iter__()
 
     def sum(self) -> dict[KeyType, float]:
         """
@@ -428,7 +403,7 @@ class CashFlowGroup[KeyType]:
         >>> # Returns: {date(2024, 1, 1): 5000.0,
         >>> #           date(2024, 2, 1): 6000.0, ...}
         """
-        return {key: stream.sum() for key, stream in self.groups.items()}
+        return super().sum()
 
     def count(self) -> dict[KeyType, int]:
         """
@@ -454,12 +429,89 @@ class CashFlowGroup[KeyType]:
         >>> yearly_counts = by_year.count()
         >>> # Returns: {date(2023, 1, 1): 24, date(2024, 1, 1): 36, ...}
         """
-        return {key: stream.count() for key, stream in self.groups.items()}
+        return super().count()
 
 
 @dataclass
-class CashFlowStream:
-    flows: list[CashFlow] = field(default_factory=list)
+class CashFlowStream(BaseStream[CashFlow]):
+    """
+    Functional container for ``CashFlow`` entries.
+
+    The stream preserves insertion order and supports common sequence-style
+    operations such as iteration, indexing, slicing, and ``len()`` in addition
+    to the domain-specific cashflow helpers defined on the class.
+    """
+
+    def _amount(self, entry: CashFlow) -> float:
+        """Return the numeric amount for internal shared helpers."""
+        return entry.amount
+
+    @overload
+    def __getitem__(self, index: int) -> CashFlow: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> "CashFlowStream": ...
+
+    def __getitem__(self, index: int | slice) -> "CashFlow | CashFlowStream":
+        """
+        Return a single cashflow or a sliced stream.
+
+        Parameters
+        ----------
+        index : int or slice
+            Integer position of a single cashflow, or a slice selecting a
+            contiguous subset of the stream.
+
+        Returns
+        -------
+        CashFlow or CashFlowStream
+            A single ``CashFlow`` when *index* is an integer, or a new
+            ``CashFlowStream`` containing the selected entries when *index* is
+            a slice.
+
+        Examples
+        --------
+        >>> stream = CashFlowStream.from_recurring(date(2026, 1, 1), 3, 100.0)
+        >>> stream[0].amount
+        100.0
+        >>> stream[1:].count()
+        2
+        """
+        return super().__getitem__(index)
+
+    def __iter__(self) -> Iterator[CashFlow]:
+        """
+        Iterate over cashflows in insertion order.
+
+        Returns
+        -------
+        Iterator[CashFlow]
+            Iterator yielding each cashflow in the stream.
+
+        Examples
+        --------
+        >>> stream = CashFlowStream.from_recurring(date(2026, 1, 1), 2, 100.0)
+        >>> [cf.amount for cf in stream]
+        [100.0, 100.0]
+        """
+        return super().__iter__()
+
+    def __len__(self) -> int:
+        """
+        Return the number of cashflows in the stream.
+
+        Returns
+        -------
+        int
+            Number of cashflows stored in the stream.
+
+        Examples
+        --------
+        >>> stream = CashFlowStream.from_recurring(date(2026, 1, 1), 4, 100.0)
+        >>> len(stream)
+        4
+        """
+        return super().__len__()
 
     @classmethod
     def from_recurring(
@@ -520,12 +572,12 @@ class CashFlowStream:
         - For annual escalation with monthly frequency, use (1 + annual_rate)^(1/12) - 1
         """
         delta = time_delta_per_period(frequency)
-        flows = []
+        entries = []
         for i in range(periods):
             escalated_amount = amount * compound_factor(escalation, i)
             flow_date = start + delta * i
             flow_label = label.format(n=i + 1) if "{n}" in label else label
-            flows.append(
+            entries.append(
                 CashFlow(
                     amount=escalated_amount,
                     date=flow_date,
@@ -535,7 +587,7 @@ class CashFlowStream:
                 )
             )
 
-        return cls(flows)
+        return cls(entries)
 
     @classmethod
     def from_streams(cls, *iterables) -> "CashFlowStream":
@@ -600,22 +652,30 @@ class CashFlowStream:
         - This is more convenient than manual list concatenation when working with
           multiple CashFlowStream objects
         """
-        all_flows: list[CashFlow] = []
-
-        for item in iterables:
-            if isinstance(item, CashFlowStream):
-                all_flows.extend(item.flows)
-            elif isinstance(item, CashFlow):
-                all_flows.append(item)
-            else:
-                # Assume it's an iterable of CashFlow objects
-                all_flows.extend(item)
-
-        return cls(all_flows)
+        return super().from_streams(*iterables)
 
     def append(self, flow: CashFlow) -> "CashFlowStream":
-        """Return a new CashFlowStream with a single cashflow appended."""
-        return CashFlowStream(self.flows + [flow])
+        """
+        Return a new CashFlowStream with one cashflow appended.
+
+        Parameters
+        ----------
+        flow : CashFlow
+            Cashflow to append to the stream.
+
+        Returns
+        -------
+        CashFlowStream
+            A new CashFlowStream containing all original cashflows plus *flow*.
+
+        Examples
+        --------
+        >>> base = CashFlowStream([CashFlow(100.0, date(2026, 1, 1))])
+        >>> updated = base.append(CashFlow(-25.0, date(2026, 2, 1)))
+        >>> updated.count()
+        2
+        """
+        return super().append(flow)
 
     def extend(self, other: "CashFlowStream | Iterable[CashFlow]") -> "CashFlowStream":
         """
@@ -631,9 +691,7 @@ class CashFlowStream:
         CashFlowStream
             A new CashFlowStream containing all original and additional cashflows.
         """
-        if isinstance(other, CashFlowStream):
-            return CashFlowStream(self.flows + other.flows)
-        return CashFlowStream(self.flows + list(other))
+        return super().extend(other)
 
     def with_recurring(
         self,
@@ -667,7 +725,7 @@ class CashFlowStream:
             is_cash=is_cash,
             tags=tags,
         )
-        return CashFlowStream(self.flows + recurring.flows)
+        return self.extend(recurring)
 
     def apply(self, fn: Callable[[CashFlow], CashFlow]) -> "CashFlowStream":
         """
@@ -706,7 +764,7 @@ class CashFlowStream:
         This method returns a new CashFlowStream and does not modify the original.
         For operations on the entire stream (not element-wise), use ``apply_streamwise()``.
         """
-        return CashFlowStream([fn(flow) for flow in self.flows])
+        return super().apply(fn)
 
     def apply_streamwise(
         self, fn: Callable[["CashFlowStream"], "CashFlowStream"]
@@ -734,9 +792,9 @@ class CashFlowStream:
         Examples
         --------
         >>> def normalize_to_first(stream: CashFlowStream) -> CashFlowStream:
-        ...     if not stream.flows:
+        ...     if not stream:
         ...         return stream
-        ...     first_amount = stream.flows[0].amount
+        ...     first_amount = stream[0].amount
         ...     return stream.apply(lambda cf: CashFlow(
         ...         cf.amount / first_amount, cf.date, cf.label, cf.is_cash, cf.tags))
         >>> stream = CashFlowStream([cf1, cf2, cf3])
@@ -745,10 +803,7 @@ class CashFlowStream:
         >>> # Or using lambda for composition
         >>> result = stream.apply_streamwise(lambda s: s.filter(some_pred).apply(scale_fn))
         """
-        ## NOTE: Depending on the passed in callable, this could modify self in
-        ## place instead of creating new CFS object. Perhaps make self a (deep)copy?
-        ## Keep an eye on this and how it gets used.
-        return fn(self)
+        return super().apply_streamwise(fn)
 
     def flat_apply(self, fn: Callable[[CashFlow], Iterable[CashFlow]]) -> "CashFlowStream":
         """
@@ -773,10 +828,7 @@ class CashFlowStream:
         ...             for m in range(12)]
         >>> monthly_stream = stream.flat_apply(monthly_split)
         """
-        result: list[CashFlow] = []
-        for flow in self.flows:
-            result.extend(fn(flow))
-        return CashFlowStream(result)
+        return super().flat_apply(fn)
 
     def filter_apply(self, fn: Callable[[CashFlow], CashFlow | None]) -> "CashFlowStream":
         """
@@ -802,12 +854,7 @@ class CashFlowStream:
         ...     return None
         >>> revenue_doubled = stream.filter_apply(double_revenue)
         """
-        result: list[CashFlow] = []
-        for flow in self.flows:
-            transformed = fn(flow)
-            if transformed is not None:
-                result.append(transformed)
-        return CashFlowStream(result)
+        return super().filter_apply(fn)
 
     def filter(
         self,
@@ -850,27 +897,25 @@ class CashFlowStream:
             raise ValueError("Provide either a callable predicate or keyword arguments.")
 
         if fn is not None:
-            return CashFlowStream([flow for flow in self.flows if fn(flow)])
+            return self._filter_where(fn)
 
         # Keyword-based filtering (AND semantics)
-        result = self.flows
-        if tag is not None:
-            result = [flow for flow in result if flow.has_tag(tag)]
-        if is_cash is not None:
-            result = [flow for flow in result if flow.is_cash is is_cash]
-        return CashFlowStream(result)
+        return self._filter_where(
+            lambda flow: (tag is None or flow.has_tag(tag))
+            and (is_cash is None or flow.is_cash is is_cash)
+        )
 
     def inflows(self) -> "CashFlowStream":
         """Return only cashflows with positive amounts."""
-        return CashFlowStream([flow for flow in self.flows if flow.amount > 0])
+        return self._filter_where(lambda flow: flow.amount > 0)
 
     def outflows(self) -> "CashFlowStream":
         """Return only cashflows with negative amounts."""
-        return CashFlowStream([flow for flow in self.flows if flow.amount < 0])
+        return self._filter_where(lambda flow: flow.amount < 0)
 
     def cash_only(self) -> "CashFlowStream":
         """Return only cash-basis cashflows (``is_cash=True``)."""
-        return CashFlowStream([flow for flow in self.flows if flow.is_cash])
+        return self._filter_where(lambda flow: flow.is_cash)
 
     def date_range(
         self,
@@ -892,12 +937,7 @@ class CashFlowStream:
         CashFlowStream
             A new CashFlowStream with only cashflows within the date range.
         """
-        result = self.flows
-        if start is not None:
-            result = [flow for flow in result if flow.date >= start]
-        if end is not None:
-            result = [flow for flow in result if flow.date <= end]
-        return CashFlowStream(result)
+        return super().date_range(start=start, end=end)
 
     @overload
     def group_by[KeyType](self, fn: Callable[[CashFlow], KeyType]) -> CashFlowGroup[KeyType]: ...
@@ -944,24 +984,20 @@ class CashFlowStream:
             raise ValueError("Provide exactly one of 'fn', 'tag=True', or 'period'.")
 
         if fn is not None:
-            groups: defaultdict[Any, list[CashFlow]] = defaultdict(list)
-            for flow in self.flows:
-                groups[fn(flow)].append(flow)
-            return CashFlowGroup({k: CashFlowStream(v) for k, v in groups.items()})
+            groups = self._grouped_entries_by_key(fn)
+            return CashFlowGroup(self._grouped_streams(groups))
 
         if tag:
             tag_groups: defaultdict[CashFlowTags, list[CashFlow]] = defaultdict(list)
-            for flow in self.flows:
+            for flow in self.entries:
                 for t in flow.tags:
                     tag_groups[t].append(flow)
-            return CashFlowGroup({k: CashFlowStream(v) for k, v in tag_groups.items()})
+            return CashFlowGroup(self._grouped_streams(dict(tag_groups)))
 
         # period path
         assert period is not None
-        period_groups: defaultdict[date, list[CashFlow]] = defaultdict(list)
-        for flow in self.flows:
-            period_groups[period_start(flow.date, period)].append(flow)
-        return CashFlowGroup({k: CashFlowStream(v) for k, v in period_groups.items()})
+        period_groups = self._grouped_entries_by_period(period)
+        return CashFlowGroup(self._grouped_streams(period_groups))
 
     # Keep group_by_tag as alias for backwards compat during transition
     def group_by_tag(self) -> CashFlowGroup[CashFlowTags]:
@@ -1005,12 +1041,7 @@ class CashFlowStream:
         >>> revenue = by_tag[CashFlowTags.REVENUE]
         >>> expense = by_tag[CashFlowTags.EXPENSE]
         """
-        groups: defaultdict[CashFlowTags, list[CashFlow]] = defaultdict(list)
-        for flow in self.flows:
-            for tag in flow.tags:
-                groups[tag].append(flow)
-
-        return CashFlowGroup({key: CashFlowStream(flows) for key, flows in groups.items()})
+        return self.group_by(tag=True)
 
     def group_by_period(self, period: Period) -> CashFlowGroup[date]:
         """
@@ -1064,7 +1095,7 @@ class CashFlowStream:
 
         >>> by_month = stream.group_by(period="month")
         """
-        return self.group_by(lambda cf: period_start(cf.date, period))
+        return self.group_by(period=period)
 
     @overload
     def sort(
@@ -1130,8 +1161,7 @@ class CashFlowStream:
         >>> # Chain with other operations
         >>> recent_revenue = (stream
         ...     .filter(lambda cf: cf.has_tag(CashFlowTags.REVENUE))
-        ...     .sort()
-        ...     .flows[-10:])  # Get 10 most recent revenue cashflows
+        ...     .sort()[-10:])  # Get 10 most recent revenue cashflows
 
         Notes
         -----
@@ -1139,20 +1169,9 @@ class CashFlowStream:
         The sorting is stable, meaning that when multiple cashflows have the same
         key value, they maintain their original relative order.
         """
-        if fn is not None and attr is not None:
-            raise ValueError("Cannot pass both a key function and 'attr' to sort()")
-
-        if fn is not None:
-            return CashFlowStream(sorted(self.flows, key=fn, reverse=descending))
-
-        # Default to date when neither fn nor attr is provided
-        resolved_attr = attr if attr is not None else "date"
-        match resolved_attr:
-            case "date" | "amount" | "label":
-                key = attrgetter(resolved_attr)
-            case _:
-                assert_never(resolved_attr)
-        return CashFlowStream(sorted(self.flows, key=key, reverse=descending))
+        if attr not in (None, "date", "amount", "label"):
+            raise AssertionError(f"Unexpected sort attribute: {attr!r}")
+        return super().sort(fn, attr=attr, descending=descending)
 
     def sort_by(
         self,
@@ -1211,7 +1230,7 @@ class CashFlowStream:
         """
         ## NOTE: Need to think about this and handling nested CFS. Jacob says we
         ## never want nested CFS. If you want to do anything nested, use a CashFlowGroup.
-        return sum((flow.amount for flow in self.flows), start=0.0)
+        return super().sum()
 
     def count(self) -> int:
         """
@@ -1235,7 +1254,7 @@ class CashFlowStream:
         >>> if stream.count() == 0:
         ...     print("No cashflows")
         """
-        return len(self.flows)
+        return super().count()
 
     def min(self, key: Optional[Callable[[CashFlow], SupportsLessThan]] = None) -> CashFlow:
         """
@@ -1269,11 +1288,11 @@ class CashFlowStream:
         >>> # Get cashflow with smallest absolute value
         >>> closest_to_zero = stream.min(key=lambda cf: abs(cf.amount))
         """
-        if not self.flows:
+        if not self.entries:
             raise ValueError("min() called on empty CashFlowStream")
         if key is None:
-            return min(self.flows, key=lambda cf: cf.amount)
-        return min(self.flows, key=key)
+            return min(self.entries, key=lambda cf: cf.amount)
+        return min(self.entries, key=key)
 
     def max(self, key: Optional[Callable[[CashFlow], SupportsLessThan]] = None) -> CashFlow:
         """
@@ -1307,11 +1326,11 @@ class CashFlowStream:
         >>> # Get cashflow with largest absolute value
         >>> largest_magnitude = stream.max(key=lambda cf: abs(cf.amount))
         """
-        if not self.flows:
+        if not self.entries:
             raise ValueError("max() called on empty CashFlowStream")
         if key is None:
-            return max(self.flows, key=lambda cf: cf.amount)
-        return max(self.flows, key=key)
+            return max(self.entries, key=lambda cf: cf.amount)
+        return max(self.entries, key=key)
 
     def npv(
         self, rate: float, valuation_date: date, convention: DayCountConvention = "actual/365"
@@ -1376,7 +1395,7 @@ class CashFlowStream:
         - Returns 0.0 for empty streams or streams with no cash flows.
         """
         total = 0.0
-        for flow in self.flows:
+        for flow in self.entries:
             if not flow.is_cash:
                 continue
             years = timedelta_fractional_years(valuation_date, flow.date, convention)

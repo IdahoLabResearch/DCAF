@@ -6,29 +6,29 @@ and GenerationGroup (grouped container) for modeling MWh production
 from various sources and energy carriers.
 """
 
-from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date
 from typing import (
     Any,
     Callable,
+    Collection,
     Iterable,
     Iterator,
     Literal,
     overload,
 )
 
+from dcaf._streams import BaseGroup, BaseStream
 from dcaf.cashflows import (
     CashFlow,
     CashFlowStream,
     CashFlowTags,
 )
 
-from dcaf.types import DayCountConvention, Period
+from dcaf.types import DayCountConvention, Period, SupportsLessThan
 from dcaf.utils import (
     compound_factor,
     hours_per_period,
-    period_start,
     time_delta_per_period,
     timedelta_fractional_years,
 )
@@ -61,51 +61,342 @@ class Generation:
 
 
 @dataclass
-class GenerationGroup[KeyType]:
-    """Dict-like container mapping keys to GenerationStream objects."""
+class GenerationGroup[KeyType](BaseGroup[KeyType, Generation, "GenerationStream"]):
+    """
+    Dictionary-like container mapping grouping keys to ``GenerationStream`` objects.
 
-    groups: dict[KeyType, "GenerationStream"]
+    The group container supports aggregation, selective group-wise transforms,
+    filtering by group predicate, and flattening back to a single stream.
+    """
+
+    def _empty_stream(self) -> "GenerationStream":
+        """Return an empty stream for internal regrouping helpers."""
+        return GenerationStream()
 
     def aggregate[T](self, fn: Callable[["GenerationStream"], T]) -> dict[KeyType, T]:
-        """Apply a function to each group and return a dict of results."""
-        return {key: fn(stream) for key, stream in self.groups.items()}
+        """
+        Apply a function to each group and return the results.
+
+        Parameters
+        ----------
+        fn : Callable[[GenerationStream], T]
+            Function applied independently to each grouped stream.
+
+        Returns
+        -------
+        dict[KeyType, T]
+            Mapping of each group key to the transformed value.
+
+        Examples
+        --------
+        >>> grouped = stream.group_by(source=True)
+        >>> grouped.aggregate(lambda s: s.sum())
+        {'unit_1': 1000.0}
+        """
+        return super().aggregate(fn)
+
+    def apply_to_groups(
+        self,
+        fn: Callable[["GenerationStream"], "GenerationStream"],
+        keys: KeyType | Collection[KeyType] | None = None,
+    ) -> "GenerationGroup[KeyType]":
+        """
+        Apply a transformation to selected groups and return a new group object.
+
+        Parameters
+        ----------
+        fn : Callable[[GenerationStream], GenerationStream]
+            Transformation applied to each selected grouped stream.
+        keys : KeyType or Collection[KeyType], optional
+            Group key or keys to transform. If ``None``, transforms all groups.
+
+        Returns
+        -------
+        GenerationGroup[KeyType]
+            New grouped result with transformed streams for the selected keys.
+
+        Raises
+        ------
+        ValueError
+            If any provided key is not present in this grouped container.
+
+        Examples
+        --------
+        >>> by_source = stream.group_by(source=True)
+        >>> scaled = by_source.apply_to_groups(
+        ...     lambda s: s.apply(lambda g: Generation(
+        ...         amount_mwh=g.amount_mwh * 1.1,
+        ...         date=g.date,
+        ...         source=g.source,
+        ...         carrier=g.carrier,
+        ...         label=g.label,
+        ...     ))
+        ... )
+        """
+        return super().apply_to_groups(fn, keys=keys)
+
+    def filter_groups(
+        self, fn: Callable[[KeyType, "GenerationStream"], bool]
+    ) -> "GenerationGroup[KeyType]":
+        """
+        Keep only groups matching a predicate.
+
+        Parameters
+        ----------
+        fn : Callable[[KeyType, GenerationStream], bool]
+            Predicate receiving each key and grouped stream.
+
+        Returns
+        -------
+        GenerationGroup[KeyType]
+            New grouped container containing only matching groups.
+
+        Examples
+        --------
+        >>> by_source = stream.group_by(source=True)
+        >>> large_groups = by_source.filter_groups(lambda key, s: s.sum() > 1_000.0)
+        """
+        return super().filter_groups(fn)
+
+    def ungroup(self) -> "GenerationStream":
+        """
+        Flatten all groups into a single ``GenerationStream``.
+
+        Returns
+        -------
+        GenerationStream
+            Stream containing the entries from every grouped stream.
+
+        Examples
+        --------
+        >>> by_source = stream.group_by(source=True)
+        >>> ungrouped = by_source.ungroup()
+        >>> ungrouped.count() == stream.count()
+        True
+        """
+        return super().ungroup()
 
     def keys(self) -> Iterable[KeyType]:
-        return self.groups.keys()
+        """
+        Return the available group keys.
+
+        Returns
+        -------
+        Iterable[KeyType]
+            View over the keys in this grouped container.
+
+        Examples
+        --------
+        >>> grouped = stream.group_by(source=True)
+        >>> list(grouped.keys())
+        ['unit_1']
+        """
+        return super().keys()
 
     def values(self) -> Iterable["GenerationStream"]:
-        return self.groups.values()
+        """
+        Return the grouped streams.
+
+        Returns
+        -------
+        Iterable[GenerationStream]
+            View over the grouped ``GenerationStream`` values.
+
+        Examples
+        --------
+        >>> grouped = stream.group_by(source=True)
+        >>> [group.count() for group in grouped.values()]
+        [1]
+        """
+        return super().values()
 
     def items(self) -> Iterable[tuple[KeyType, "GenerationStream"]]:
-        return self.groups.items()
+        """
+        Return ``(key, stream)`` pairs.
+
+        Returns
+        -------
+        Iterable[tuple[KeyType, GenerationStream]]
+            View over each grouping key and its associated stream.
+
+        Examples
+        --------
+        >>> grouped = stream.group_by(source=True)
+        >>> [(key, group.count()) for key, group in grouped.items()]
+        [('unit_1', 1)]
+        """
+        return super().items()
 
     def __getitem__(self, key: KeyType) -> "GenerationStream":
-        return self.groups[key]
+        """
+        Return the stream associated with a grouping key.
+
+        Parameters
+        ----------
+        key : KeyType
+            Key identifying the group to retrieve.
+
+        Returns
+        -------
+        GenerationStream
+            Stream stored for the requested group key.
+
+        Examples
+        --------
+        >>> grouped = stream.group_by(source=True)
+        >>> grouped['unit_1'].count()
+        1
+        """
+        return super().__getitem__(key)
 
     def __len__(self) -> int:
-        return len(self.groups)
+        """
+        Return the number of groups.
+
+        Returns
+        -------
+        int
+            Count of group keys in the container.
+
+        Examples
+        --------
+        >>> grouped = stream.group_by(source=True)
+        >>> len(grouped)
+        1
+        """
+        return super().__len__()
 
     def __iter__(self) -> Iterator[KeyType]:
-        return iter(self.groups)
+        """
+        Iterate over group keys.
+
+        Returns
+        -------
+        Iterator[KeyType]
+            Iterator yielding each grouping key once.
+
+        Examples
+        --------
+        >>> grouped = stream.group_by(source=True)
+        >>> list(grouped)
+        ['unit_1']
+        """
+        return super().__iter__()
 
     def sum(self) -> dict[KeyType, float]:
-        """Return the sum of MWh for each group."""
-        return {key: stream.sum() for key, stream in self.groups.items()}
+        """
+        Return total MWh for each group.
+
+        Returns
+        -------
+        dict[KeyType, float]
+            Mapping of each group key to the sum of ``amount_mwh``.
+
+        Examples
+        --------
+        >>> grouped = stream.group_by(source=True)
+        >>> grouped.sum()
+        {'unit_1': 1000.0}
+        """
+        return super().sum()
 
     def count(self) -> dict[KeyType, int]:
-        """Return the count of generation entries for each group."""
-        return {key: stream.count() for key, stream in self.groups.items()}
+        """
+        Return the number of generation entries in each group.
+
+        Returns
+        -------
+        dict[KeyType, int]
+            Mapping of each group key to the number of grouped entries.
+
+        Examples
+        --------
+        >>> grouped = stream.group_by(source=True)
+        >>> grouped.count()
+        {'unit_1': 1}
+        """
+        return super().count()
 
 
 @dataclass
-class GenerationStream:
+class GenerationStream(BaseStream[Generation]):
     """
     Container for Generation data points with a fluent API.
 
-    Mirrors the CashFlowStream pattern for physical energy quantities.
+    Mirrors the CashFlowStream pattern for physical energy quantities and
+    supports iteration, indexing, slicing, and ``len()``.
     """
 
-    entries: list[Generation] = field(default_factory=list)
+    def _amount(self, entry: Generation) -> float:
+        """Return the numeric amount for internal shared helpers."""
+        return entry.amount_mwh
+
+    @overload
+    def __getitem__(self, index: int) -> Generation: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> "GenerationStream": ...
+
+    def __getitem__(self, index: int | slice) -> "Generation | GenerationStream":
+        """
+        Return a single generation entry or a sliced stream.
+
+        Parameters
+        ----------
+        index : int or slice
+            Integer position of a single generation entry, or a slice selecting
+            a contiguous subset of the stream.
+
+        Returns
+        -------
+        Generation or GenerationStream
+            A single ``Generation`` when *index* is an integer, or a new
+            ``GenerationStream`` containing the selected entries when *index* is
+            a slice.
+
+        Examples
+        --------
+        >>> stream = GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 3)
+        >>> stream[0].date
+        datetime.date(2030, 1, 1)
+        >>> stream[1:].count()
+        2
+        """
+        return super().__getitem__(index)
+
+    def __iter__(self) -> Iterator[Generation]:
+        """
+        Iterate over generation entries in insertion order.
+
+        Returns
+        -------
+        Iterator[Generation]
+            Iterator yielding each generation entry in the stream.
+
+        Examples
+        --------
+        >>> stream = GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 2)
+        >>> [entry.date.year for entry in stream]
+        [2030, 2031]
+        """
+        return super().__iter__()
+
+    def __len__(self) -> int:
+        """
+        Return the number of generation entries in the stream.
+
+        Returns
+        -------
+        int
+            Number of generation entries stored in the stream.
+
+        Examples
+        --------
+        >>> stream = GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 4)
+        >>> len(stream)
+        4
+        """
+        return super().__len__()
 
     @classmethod
     def from_capacity(
@@ -144,6 +435,21 @@ class GenerationStream:
         Returns
         -------
         GenerationStream
+            New stream containing one generation entry per modeled period.
+
+        Examples
+        --------
+        >>> stream = GenerationStream.from_capacity(
+        ...     capacity_mw=100.0,
+        ...     capacity_factor=0.9,
+        ...     start=date(2030, 1, 1),
+        ...     periods=2,
+        ...     source="unit_1",
+        ... )
+        >>> stream.count()
+        2
+        >>> stream[0].source
+        'unit_1'
         """
         entries: list[Generation] = []
         hours = hours_per_period(frequency)
@@ -165,12 +471,175 @@ class GenerationStream:
         return cls(entries)
 
     @classmethod
-    def from_streams(cls, *streams: "GenerationStream") -> "GenerationStream":
-        """Combine multiple GenerationStreams into one."""
-        all_entries: list[Generation] = []
-        for s in streams:
-            all_entries.extend(s.entries)
-        return cls(all_entries)
+    def from_streams(
+        cls, *iterables: "GenerationStream | Generation | Iterable[Generation]"
+    ) -> "GenerationStream":
+        """
+        Create a ``GenerationStream`` from streams, entries, or iterables of entries.
+
+        Parameters
+        ----------
+        *iterables : GenerationStream or Generation or Iterable[Generation]
+            Sources whose entries should be concatenated in order.
+
+        Returns
+        -------
+        GenerationStream
+            New stream containing all provided generation entries.
+
+        Examples
+        --------
+        >>> g1 = Generation(100.0, date(2030, 1, 1), source="unit_1")
+        >>> g2 = Generation(200.0, date(2031, 1, 1), source="unit_2")
+        >>> stream = GenerationStream.from_streams(g1, [g2])
+        >>> stream.count()
+        2
+        """
+        return super().from_streams(*iterables)
+
+    def append(self, entry: Generation) -> "GenerationStream":
+        """
+        Return a new stream with one generation entry appended.
+
+        Parameters
+        ----------
+        entry : Generation
+            Entry to append.
+
+        Returns
+        -------
+        GenerationStream
+            New stream containing the original entries plus *entry*.
+
+        Examples
+        --------
+        >>> stream = GenerationStream()
+        >>> updated = stream.append(Generation(100.0, date(2030, 1, 1)))
+        >>> updated.count()
+        1
+        """
+        return super().append(entry)
+
+    def extend(self, other: "GenerationStream | Iterable[Generation]") -> "GenerationStream":
+        """
+        Return a new stream with additional generation entries appended.
+
+        Parameters
+        ----------
+        other : GenerationStream or Iterable[Generation]
+            Additional entries to append.
+
+        Returns
+        -------
+        GenerationStream
+            New stream containing the original and appended entries.
+
+        Examples
+        --------
+        >>> base = GenerationStream([Generation(100.0, date(2030, 1, 1))])
+        >>> extra = [Generation(200.0, date(2031, 1, 1))]
+        >>> base.extend(extra).count()
+        2
+        """
+        return super().extend(other)
+
+    def apply(self, fn: Callable[[Generation], Generation]) -> "GenerationStream":
+        """
+        Apply a transformation to each generation entry.
+
+        Parameters
+        ----------
+        fn : Callable[[Generation], Generation]
+            One-to-one transformation function applied to every entry.
+
+        Returns
+        -------
+        GenerationStream
+            New stream containing the transformed entries.
+
+        Examples
+        --------
+        >>> stream = GenerationStream([Generation(100.0, date(2030, 1, 1))])
+        >>> doubled = stream.apply(
+        ...     lambda g: Generation(g.amount_mwh * 2, g.date, g.source, g.carrier, g.label)
+        ... )
+        >>> doubled[0].amount_mwh
+        200.0
+        """
+        return super().apply(fn)
+
+    def apply_streamwise(
+        self, fn: Callable[["GenerationStream"], "GenerationStream"]
+    ) -> "GenerationStream":
+        """
+        Apply a transformation to the entire stream at once.
+
+        Parameters
+        ----------
+        fn : Callable[[GenerationStream], GenerationStream]
+            Transformation receiving the whole stream and returning a new stream.
+
+        Returns
+        -------
+        GenerationStream
+            Result returned by *fn*.
+
+        Examples
+        --------
+        >>> stream = GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 3)
+        >>> trimmed = stream.apply_streamwise(lambda s: s[1:])
+        >>> trimmed.count()
+        2
+        """
+        return super().apply_streamwise(fn)
+
+    def flat_apply(self, fn: Callable[[Generation], Iterable[Generation]]) -> "GenerationStream":
+        """
+        Flat-map generation entries to zero or more output entries.
+
+        Parameters
+        ----------
+        fn : Callable[[Generation], Iterable[Generation]]
+            Mapping function that can emit multiple entries per input entry.
+
+        Returns
+        -------
+        GenerationStream
+            New stream containing all emitted entries.
+
+        Examples
+        --------
+        >>> stream = GenerationStream([Generation(100.0, date(2030, 1, 1))])
+        >>> duplicated = stream.flat_apply(lambda g: [g, g])
+        >>> duplicated.count()
+        2
+        """
+        return super().flat_apply(fn)
+
+    def filter_apply(
+        self, fn: Callable[[Generation], Generation | None]
+    ) -> "GenerationStream":
+        """
+        Transform entries while dropping ``None`` results.
+
+        Parameters
+        ----------
+        fn : Callable[[Generation], Generation | None]
+            Mapping function returning either a replacement entry or ``None``.
+
+        Returns
+        -------
+        GenerationStream
+            New stream containing only the non-``None`` results.
+
+        Examples
+        --------
+        >>> stream = GenerationStream([Generation(100.0, date(2030, 1, 1))])
+        >>> kept = stream.filter_apply(lambda g: g if g.amount_mwh > 0 else None)
+        >>> kept.count()
+        1
+        """
+        return super().filter_apply(fn)
 
     def with_capacity(
         self,
@@ -183,7 +652,40 @@ class GenerationStream:
         carrier: str = "electricity",
         label: str = "Generation {n}",
     ) -> "GenerationStream":
-        """Create generation from capacity and append to this stream."""
+        """
+        Generate additional capacity-based entries and append them to this stream.
+
+        Parameters
+        ----------
+        capacity_mw : float
+            Installed capacity in MW for the appended entries.
+        capacity_factor : float
+            Capacity factor as a decimal.
+        start : date
+            Date of the first appended generation entry.
+        periods : int
+            Number of periods to generate.
+        frequency : Period, optional
+            Generation frequency. Default ``"year"``.
+        source : str, optional
+            Source identifier for the appended entries.
+        carrier : str, optional
+            Energy carrier for the appended entries.
+        label : str, optional
+            Label template for the appended entries.
+
+        Returns
+        -------
+        GenerationStream
+            New stream containing the original and appended entries.
+
+        Examples
+        --------
+        >>> base = GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 2, source="a")
+        >>> expanded = base.with_capacity(50, 0.8, date(2030, 1, 1), 1, source="b")
+        >>> expanded.count()
+        3
+        """
         new = GenerationStream.from_capacity(
             capacity_mw=capacity_mw,
             capacity_factor=capacity_factor,
@@ -194,7 +696,7 @@ class GenerationStream:
             carrier=carrier,
             label=label,
         )
-        return GenerationStream.from_streams(self, new)
+        return self.extend(new)
 
     def filter(
         self,
@@ -216,31 +718,38 @@ class GenerationStream:
         carrier : str, optional
             Keep only entries with exactly this carrier value.
 
-        Multiple keyword arguments are combined with AND semantics.
-        Passing *fn* together with any keyword argument raises ``ValueError``.
+        Returns
+        -------
+        GenerationStream
+            New stream containing only entries that match the predicate or field filters.
+
+        Raises
+        ------
+        ValueError
+            If both a predicate and keyword filters are supplied, or if no filter
+            criterion is supplied.
 
         Examples
         --------
         >>> stream.filter(lambda g: g.amount_mwh > 1000)
         >>> stream.filter(source="uprate")
         >>> stream.filter(source="unit_1", carrier="electricity")
+
+        Notes
+        -----
+        Multiple keyword filters are combined with AND semantics.
         """
         kwargs_given = source is not None or carrier is not None
         if fn is not None and kwargs_given:
             raise ValueError(
                 "Cannot pass both a predicate function and keyword arguments to filter()"
             )
+        if fn is None and not kwargs_given:
+            raise ValueError("Provide either a predicate function or keyword arguments.")
         if fn is not None:
-            return GenerationStream([e for e in self.entries if fn(e)])
+            return self._filter_where(fn)
 
-        def _pred(g: Generation) -> bool:
-            if source is not None and g.source != source:
-                return False
-            if carrier is not None and g.carrier != carrier:
-                return False
-            return True
-
-        return GenerationStream([e for e in self.entries if _pred(e)])
+        return self._filter_by_attrs(source=source, carrier=carrier)
 
     @overload
     def group_by[KeyType](
@@ -276,8 +785,16 @@ class GenerationStream:
         period : Period, optional
             Group by time period (``"day"``, ``"month"``, ``"quarter"``, ``"year"``).
 
-        Exactly one of *fn* or a keyword argument must be provided; combining them
-        raises ``ValueError``.  Calling with no arguments also raises ``ValueError``.
+        Returns
+        -------
+        GenerationGroup[Any]
+            Grouped container mapping each computed key to a ``GenerationStream``.
+
+        Raises
+        ------
+        ValueError
+            If more than one grouping mode is requested, or if no grouping mode
+            is provided.
 
         Examples
         --------
@@ -301,37 +818,133 @@ class GenerationStream:
             raise ValueError("group_by() requires a key function or keyword argument")
 
         if fn is not None:
-            groups: defaultdict[Any, list[Generation]] = defaultdict(list)
-            for entry in self.entries:
-                groups[fn(entry)].append(entry)
-            return GenerationGroup({k: GenerationStream(v) for k, v in groups.items()})
+            groups = self._grouped_entries_by_key(fn)
+            return GenerationGroup(self._grouped_streams(groups))
 
         if source is True:
-            src_groups: defaultdict[str, list[Generation]] = defaultdict(list)
-            for entry in self.entries:
-                src_groups[entry.source].append(entry)
-            return GenerationGroup({k: GenerationStream(v) for k, v in src_groups.items()})
+            src_groups = self._grouped_entries_by_attr("source")
+            return GenerationGroup(self._grouped_streams(src_groups))
 
         if carrier is True:
-            car_groups: defaultdict[str, list[Generation]] = defaultdict(list)
-            for entry in self.entries:
-                car_groups[entry.carrier].append(entry)
-            return GenerationGroup({k: GenerationStream(v) for k, v in car_groups.items()})
+            car_groups = self._grouped_entries_by_attr("carrier")
+            return GenerationGroup(self._grouped_streams(car_groups))
 
         # period is set
         assert period is not None
-        per_groups: defaultdict[date, list[Generation]] = defaultdict(list)
-        for entry in self.entries:
-            per_groups[period_start(entry.date, period)].append(entry)
-        return GenerationGroup({k: GenerationStream(v) for k, v in per_groups.items()})
+        per_groups = self._grouped_entries_by_period(period)
+        return GenerationGroup(self._grouped_streams(per_groups))
+
+    def date_range(
+        self,
+        start: date | None = None,
+        end: date | None = None,
+    ) -> "GenerationStream":
+        """
+        Filter generation entries by inclusive date bounds.
+
+        Parameters
+        ----------
+        start : date, optional
+            Earliest date to include. If ``None``, no lower bound is applied.
+        end : date, optional
+            Latest date to include. If ``None``, no upper bound is applied.
+
+        Returns
+        -------
+        GenerationStream
+            New stream containing only entries within the selected date range.
+
+        Examples
+        --------
+        >>> stream = GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 3)
+        >>> stream.date_range(start=date(2031, 1, 1)).count()
+        2
+        """
+        return super().date_range(start=start, end=end)
+
+    @overload
+    def sort(
+        self, fn: Callable[[Generation], SupportsLessThan], *, descending: bool = ...
+    ) -> "GenerationStream": ...
+    @overload
+    def sort(
+        self,
+        *,
+        attr: Literal["date", "amount_mwh", "source", "carrier", "label"],
+        descending: bool = ...,
+    ) -> "GenerationStream": ...
+    @overload
+    def sort(self) -> "GenerationStream": ...
+
+    def sort(
+        self,
+        fn: Callable[[Generation], SupportsLessThan] | None = None,
+        *,
+        attr: Literal["date", "amount_mwh", "source", "carrier", "label"] | None = None,
+        descending: bool = False,
+    ) -> "GenerationStream":
+        """
+        Return a new ``GenerationStream`` sorted by key function or attribute.
+
+        Parameters
+        ----------
+        fn : Callable[[Generation], SupportsLessThan], optional
+            Sort key function applied to each entry.
+        attr : {"date", "amount_mwh", "source", "carrier", "label"}, optional
+            Named ``Generation`` attribute to sort by.
+        descending : bool, optional
+            If ``True``, sort in descending order.
+
+        Returns
+        -------
+        GenerationStream
+            New sorted stream.
+
+        Examples
+        --------
+        >>> stream = GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 3)
+        >>> stream.sort(attr="date")[0].date
+        datetime.date(2030, 1, 1)
+        >>> stream.sort(lambda g: g.amount_mwh, descending=True).count()
+        3
+        """
+        if attr not in (None, "date", "amount_mwh", "source", "carrier", "label"):
+            raise AssertionError(f"Unexpected sort attribute: {attr!r}")
+        return super().sort(fn, attr=attr, descending=descending)
 
     def sum(self) -> float:
-        """Return total MWh across all entries."""
-        return sum((e.amount_mwh for e in self.entries), start=0.0)
+        """
+        Return total MWh across all entries.
+
+        Returns
+        -------
+        float
+            Sum of ``amount_mwh`` across the stream.
+
+        Examples
+        --------
+        >>> stream = GenerationStream([Generation(100.0, date(2030, 1, 1))])
+        >>> stream.sum()
+        100.0
+        """
+        return super().sum()
 
     def count(self) -> int:
-        """Return number of entries."""
-        return len(self.entries)
+        """
+        Return the number of generation entries in the stream.
+
+        Returns
+        -------
+        int
+            Number of stored generation entries.
+
+        Examples
+        --------
+        >>> stream = GenerationStream([Generation(100.0, date(2030, 1, 1))])
+        >>> stream.count()
+        1
+        """
+        return super().count()
 
     def discounted_sum(
         self,
@@ -358,6 +971,12 @@ class GenerationStream:
         -------
         float
             Discounted total MWh.
+
+        Examples
+        --------
+        >>> stream = GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 2)
+        >>> stream.discounted_sum(rate=0.08, valuation_date=date(2030, 1, 1)) > 0
+        True
         """
         total = 0.0
         for entry in self.entries:
@@ -389,6 +1008,7 @@ class GenerationStream:
         Returns
         -------
         CashFlowStream
+            Cashflow stream with positive revenue amounts for each generation entry.
 
         Examples
         --------
@@ -398,12 +1018,12 @@ class GenerationStream:
         if not self.entries:
             return CashFlowStream()
         base_year = min(e.date.year for e in self.entries)
-        flows: list[CashFlow] = []
+        entries: list[CashFlow] = []
         for i, entry in enumerate(self.entries):
             years_elapsed = entry.date.year - base_year
             price = price_per_mwh * compound_factor(escalation, years_elapsed)
             flow_label = label.format(n=i + 1) if "{n}" in label else label
-            flows.append(
+            entries.append(
                 CashFlow(
                     amount=entry.amount_mwh * price,
                     date=entry.date,
@@ -412,7 +1032,7 @@ class GenerationStream:
                     tags=tags,
                 )
             )
-        return CashFlowStream(flows)
+        return CashFlowStream(entries)
 
     def to_cost(
         self,
@@ -440,6 +1060,7 @@ class GenerationStream:
         Returns
         -------
         CashFlowStream
+            Cashflow stream with negative variable cost amounts for each generation entry.
 
         Examples
         --------
@@ -449,12 +1070,12 @@ class GenerationStream:
         if not self.entries:
             return CashFlowStream()
         base_year = min(e.date.year for e in self.entries)
-        flows: list[CashFlow] = []
+        entries: list[CashFlow] = []
         for i, entry in enumerate(self.entries):
             years_elapsed = entry.date.year - base_year
             cost = rate_per_mwh * compound_factor(escalation, years_elapsed)
             flow_label = label.format(n=i + 1) if "{n}" in label else label
-            flows.append(
+            entries.append(
                 CashFlow(
                     amount=-entry.amount_mwh * cost,
                     date=entry.date,
@@ -463,7 +1084,7 @@ class GenerationStream:
                     tags=tags,
                 )
             )
-        return CashFlowStream(flows)
+        return CashFlowStream(entries)
 
     def to_ptc(
         self,
@@ -495,6 +1116,7 @@ class GenerationStream:
         Returns
         -------
         CashFlowStream
+            Cashflow stream containing only PTC-eligible entries.
 
         Examples
         --------
@@ -505,7 +1127,7 @@ class GenerationStream:
             return CashFlowStream()
         base_year = min(e.date.year for e in self.entries)
         cutoff_year = base_year + years
-        flows: list[CashFlow] = []
+        entries: list[CashFlow] = []
         n = 0
         for entry in self.entries:
             if entry.date.year >= cutoff_year:
@@ -514,7 +1136,7 @@ class GenerationStream:
             years_elapsed = entry.date.year - base_year
             ptc_rate = rate_per_mwh * compound_factor(escalation, years_elapsed)
             flow_label = label.format(n=n) if "{n}" in label else label
-            flows.append(
+            entries.append(
                 CashFlow(
                     amount=entry.amount_mwh * ptc_rate,
                     date=entry.date,
@@ -523,4 +1145,4 @@ class GenerationStream:
                     tags=tags,
                 )
             )
-        return CashFlowStream(flows)
+        return CashFlowStream(entries)

@@ -159,13 +159,13 @@ def macrs_schedule(
             rates = MACRS_MID_QUARTER_RATES[property_class][quarter]
         case _:
             assert_never(convention)
-    flows: list[CashFlow] = []
+    entries: list[CashFlow] = []
     for i, rate in enumerate(rates):
         dep_date = date(
             placed_in_service.year + i, placed_in_service.month, placed_in_service.day
         )
         flow_label = label.format(n=i + 1) if "{n}" in label else label
-        flows.append(
+        entries.append(
             CashFlow(
                 amount=-cost_basis * rate,
                 date=dep_date,
@@ -174,4 +174,4 @@ def macrs_schedule(
                 tags=tags,
             )
         )
-    return CashFlowStream(flows)
+    return CashFlowStream(entries)

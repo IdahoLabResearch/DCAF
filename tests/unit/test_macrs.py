@@ -38,9 +38,9 @@ def test_from_macrs_5year():
         property_class=5,
     )
     assert stream.count() == 6
-    assert all(f.amount < 0 for f in stream.flows)
-    assert abs(sum(f.amount for f in stream.flows) + 100.0) < 0.1
-    assert all(not f.is_cash for f in stream.flows)
+    assert all(f.amount < 0 for f in stream.entries)
+    assert abs(sum(f.amount for f in stream.entries) + 100.0) < 0.1
+    assert all(not f.is_cash for f in stream.entries)
 
 
 def test_from_macrs_tags():
@@ -50,7 +50,7 @@ def test_from_macrs_tags():
         placed_in_service=date(2026, 1, 1),
         property_class=3,
     )
-    for f in stream.flows:
+    for f in stream.entries:
         assert f.has_tag(CashFlowTags.DEPRECIATION)
         assert f.has_tag(CashFlowTags.TAX_DEDUCTIBLE)
 
@@ -62,10 +62,10 @@ def test_from_macrs_dates():
         placed_in_service=date(2030, 6, 15),
         property_class=3,
     )
-    assert stream.flows[0].date == date(2030, 6, 15)
-    assert stream.flows[1].date == date(2031, 6, 15)
-    assert stream.flows[2].date == date(2032, 6, 15)
-    assert stream.flows[3].date == date(2033, 6, 15)
+    assert stream.entries[0].date == date(2030, 6, 15)
+    assert stream.entries[1].date == date(2031, 6, 15)
+    assert stream.entries[2].date == date(2032, 6, 15)
+    assert stream.entries[3].date == date(2033, 6, 15)
 
 
 # === MACRS_MID_QUARTER_RATES ===
@@ -108,7 +108,7 @@ def test_from_macrs_mid_quarter_derives_quarter(month, expected_quarter):
         convention="mid-quarter",
     )
     expected_rates = MACRS_MID_QUARTER_RATES[5][expected_quarter]
-    assert abs(stream.flows[0].amount + 1000.0 * expected_rates[0]) < 1e-6
+    assert abs(stream.entries[0].amount + 1000.0 * expected_rates[0]) < 1e-6
 
 
 def test_from_macrs_mid_quarter_total_equals_basis():
@@ -119,7 +119,7 @@ def test_from_macrs_mid_quarter_total_equals_basis():
         property_class=7,
         convention="mid-quarter",
     )
-    assert abs(sum(f.amount for f in stream.flows) + 500.0) < 0.5
+    assert abs(sum(f.amount for f in stream.entries) + 500.0) < 0.5
 
 
 def test_from_macrs_mid_quarter_flow_count():
@@ -153,7 +153,7 @@ def test_from_macrs_mid_quarter_q1_higher_first_year():
         property_class=5,
         convention="mid-quarter",
     )
-    assert abs(q1.flows[0].amount) > abs(q4.flows[0].amount)
+    assert abs(q1.entries[0].amount) > abs(q4.entries[0].amount)
 
 
 def test_from_macrs_half_year_unchanged():
@@ -164,4 +164,4 @@ def test_from_macrs_half_year_unchanged():
         property_class=5,
     )
     assert stream.count() == 6
-    assert abs(sum(f.amount for f in stream.flows) + 100.0) < 0.1
+    assert abs(sum(f.amount for f in stream.entries) + 100.0) < 0.1

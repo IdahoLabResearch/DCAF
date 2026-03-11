@@ -11,54 +11,54 @@ from dcaf.opex import fixed_opex
 def test_basic_call():
     """fixed_opex returns the correct number of negative flows at the base amount."""
     stream = fixed_opex(amount=100_000, start=date(2025, 1, 1), periods=5)
-    assert len(stream.flows) == 5
-    assert all(f.amount < 0 for f in stream.flows)
-    assert stream.flows[0].amount == -100_000
+    assert len(stream.entries) == 5
+    assert all(f.amount < 0 for f in stream.entries)
+    assert stream.entries[0].amount == -100_000
 
 
 def test_positive_amount_produces_negative_flows():
     """A positive amount is negated so OPEX flows represent cash outflows."""
     stream = fixed_opex(amount=50_000, start=date(2025, 1, 1), periods=3)
-    assert stream.flows[0].amount == -50_000
+    assert stream.entries[0].amount == -50_000
 
 
 def test_negative_amount_produces_negative_flows():
     """A pre-negated amount is kept negative rather than double-negated."""
     stream = fixed_opex(amount=-50_000, start=date(2025, 1, 1), periods=3)
-    assert stream.flows[0].amount == -50_000
+    assert stream.entries[0].amount == -50_000
 
 
 def test_escalation_compounds_correctly():
     """Annual escalation compounds multiplicatively across successive periods."""
     stream = fixed_opex(amount=100_000, start=date(2025, 1, 1), periods=3, escalation=0.02)
-    assert stream.flows[0].amount == pytest.approx(-100_000)
-    assert stream.flows[1].amount == pytest.approx(-102_000)
-    assert stream.flows[2].amount == pytest.approx(-104_040)
+    assert stream.entries[0].amount == pytest.approx(-100_000)
+    assert stream.entries[1].amount == pytest.approx(-102_000)
+    assert stream.entries[2].amount == pytest.approx(-104_040)
 
 
 def test_non_default_frequency():
     """Quarterly frequency spaces flows three months apart."""
     stream = fixed_opex(amount=10_000, start=date(2025, 1, 1), periods=4, frequency="quarter")
-    assert len(stream.flows) == 4
-    assert stream.flows[1].date == date(2025, 4, 1)
+    assert len(stream.entries) == 4
+    assert stream.entries[1].date == date(2025, 4, 1)
 
 
 def test_custom_label_with_template():
     """Label template '{n}' is replaced with the 1-based period index."""
     stream = fixed_opex(amount=1000, start=date(2025, 1, 1), periods=2, label="Maintenance {n}")
-    assert stream.flows[0].label == "Maintenance 1"
-    assert stream.flows[1].label == "Maintenance 2"
+    assert stream.entries[0].label == "Maintenance 1"
+    assert stream.entries[1].label == "Maintenance 2"
 
 
 def test_custom_tags_applied_to_all_flows():
     """Caller-supplied tags override the defaults on every flow."""
     custom_tags = frozenset({CashFlowTags.EXPENSE})
     stream = fixed_opex(amount=1000, start=date(2025, 1, 1), periods=3, tags=custom_tags)
-    assert all(f.tags == custom_tags for f in stream.flows)
+    assert all(f.tags == custom_tags for f in stream.entries)
 
 
 def test_default_tags_are_opex_tags():
     """Default tags include EXPENSE, OPEX, and TAX_DEDUCTIBLE."""
     stream = fixed_opex(amount=1000, start=date(2025, 1, 1), periods=1)
     expected = frozenset({CashFlowTags.EXPENSE, CashFlowTags.OPEX, CashFlowTags.TAX_DEDUCTIBLE})
-    assert stream.flows[0].tags == expected
+    assert stream.entries[0].tags == expected

@@ -46,7 +46,7 @@ def test_ungroup(_create_cf_grp):
     cf_group = _create_cf_grp[0]
     cf1, cf2, cf3 = _create_cf_grp[2]
     result_stream = cf_group.ungroup()
-    assert set(result_stream.flows) == {cf1, cf2, cf3}
+    assert set(result_stream.entries) == {cf1, cf2, cf3}
 
 
 def test_dict_methods(_create_cf_grp):

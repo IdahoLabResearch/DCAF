@@ -435,11 +435,11 @@ def _construction_interest_cashflow(
 
 def _build_cashflows(config: ConstructionSpendConfig) -> list[CashFlow]:
     """Build raw construction spend and interest cashflows from a config."""
-    flows: list[CashFlow] = []
+    entries: list[CashFlow] = []
     debt_balance = 0.0
 
     for spend in _scheduled_spends(config):
-        flows.append(_construction_spend_cashflow(spend))
+        entries.append(_construction_spend_cashflow(spend))
 
         if config.financing.debt_fraction == 0.0:
             continue
@@ -456,7 +456,7 @@ def _build_cashflows(config: ConstructionSpendConfig) -> list[CashFlow]:
                 config.financing.interest_treatment,
             )
             if interest_flow is not None:
-                flows.append(interest_flow)
+                entries.append(interest_flow)
 
         debt_balance += draw_amount
         if (
@@ -465,7 +465,7 @@ def _build_cashflows(config: ConstructionSpendConfig) -> list[CashFlow]:
         ):
             debt_balance += interest
 
-    return flows
+    return entries
 
 
 class ConstructionSpendBuilder:
@@ -506,7 +506,7 @@ class ConstructionSpendBuilder:
     ...     .escalation(0.03)
     ...     .build()
     ... )
-    >>> len(stream.flows) > 0
+    >>> len(stream.entries) > 0
     True
     """
 
@@ -733,7 +733,7 @@ class ConstructionSpendBuilder:
         ...     .curve("linear")
         ...     .build()
         ... )
-        >>> stream.flows[0].label
+        >>> stream[0].label
         'Construction Spend'
         """
         return CashFlowStream(_build_cashflows(self._config))
@@ -788,7 +788,7 @@ def construction_spend_schedule(
     >>> from datetime import date
     >>> from dcaf.construction import construction_spend_schedule
     >>> stream = construction_spend_schedule(1_000_000, date(2025, 1, 1), date(2026, 1, 1))
-    >>> len(stream.flows) > 0
+    >>> len(stream.entries) > 0
     True
 
     Usage with explicit financing and a named profile:
@@ -801,7 +801,7 @@ def construction_spend_schedule(
     ...     profile="linear",
     ...     financing=ConstructionFinancing.debt(0.7, interest_rate=0.06),
     ... )
-    >>> any(flow.label == "Capitalized Interest" for flow in financed.flows)
+    >>> any(flow.label == "Capitalized Interest" for flow in financed.entries)
     True
     """
     return ConstructionSpendBuilder(

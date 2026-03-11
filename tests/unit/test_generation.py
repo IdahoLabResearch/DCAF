@@ -4,7 +4,7 @@ from datetime import date
 
 import pytest
 
-from dcaf import Generation, GenerationStream, GenerationGroup, CashFlowTags
+from dcaf import CashFlowStream, CashFlowTags, Generation, GenerationGroup, GenerationStream
 
 
 # === Generation dataclass ===
@@ -100,6 +100,21 @@ def test_from_streams_combines():
     assert combined.count() == 5
 
 
+def test_from_streams_accepts_entries_and_iterables():
+    """from_streams also accepts individual Generation entries and plain iterables."""
+    g1 = Generation(100.0, date(2030, 1, 1), source="a")
+    g2 = Generation(200.0, date(2031, 1, 1), source="b")
+    combined = GenerationStream.from_streams(g1, [g2])
+    assert combined.entries == [g1, g2]
+
+
+def test_from_streams_rejects_other_stream_types():
+    """from_streams rejects stream subclasses from other domains."""
+    cashflow_stream = CashFlowStream.from_recurring(date(2030, 1, 1), 1, 100.0)
+    with pytest.raises(TypeError, match="Cannot combine GenerationStream with CashFlowStream"):
+        GenerationStream.from_streams(cashflow_stream)
+
+
 # === with_capacity ===
 
 
@@ -110,6 +125,33 @@ def test_with_capacity_appends():
     assert gs2.count() == 5
     # Original unchanged
     assert gs.count() == 2
+
+
+def test_append_generation_entry():
+    """append returns a new GenerationStream with one extra entry."""
+    base = GenerationStream([Generation(100.0, date(2030, 1, 1))])
+    extra = Generation(200.0, date(2031, 1, 1))
+    result = base.append(extra)
+    assert isinstance(result, GenerationStream)
+    assert result.entries == [base[0], extra]
+    assert base.count() == 1
+
+
+def test_extend_generation_stream():
+    """extend appends entries from another stream."""
+    s1 = GenerationStream([Generation(100.0, date(2030, 1, 1))])
+    s2 = GenerationStream([Generation(200.0, date(2031, 1, 1))])
+    result = s1.extend(s2)
+    assert result.count() == 2
+    assert result.entries[1] == s2[0]
+
+
+def test_extend_rejects_other_stream_types():
+    """extend rejects stream subclasses from other domains."""
+    original = GenerationStream([Generation(100.0, date(2030, 1, 1))])
+    cashflow_stream = CashFlowStream.from_recurring(date(2030, 1, 1), 1, 100.0)
+    with pytest.raises(TypeError, match="Cannot combine GenerationStream with CashFlowStream"):
+        original.extend(cashflow_stream)
 
 
 # === filter methods ===
@@ -145,6 +187,62 @@ def test_filter_generic():
     assert recent.count() == 2
 
 
+def test_filter_requires_criteria():
+    """filter() requires either a predicate or keyword filters."""
+    with pytest.raises(ValueError, match="Provide either"):
+        GenerationStream().filter()
+
+
+def test_filter_rejects_predicate_and_keywords():
+    """filter() rejects mixing a predicate with keyword filters."""
+    gs = GenerationStream([Generation(100.0, date(2030, 1, 1), source="a")])
+    with pytest.raises(ValueError, match="Cannot pass both"):
+        gs.filter(lambda entry: entry.amount_mwh > 0, source="a")
+
+
+def test_apply_generation_stream():
+    """apply transforms entries and preserves stream type."""
+    gs = GenerationStream([Generation(100.0, date(2030, 1, 1), source="a")])
+    result = gs.apply(
+        lambda g: Generation(g.amount_mwh * 2, g.date, g.source, g.carrier, g.label)
+    )
+    assert isinstance(result, GenerationStream)
+    assert result[0].amount_mwh == 200.0
+    assert gs[0].amount_mwh == 100.0
+
+
+def test_apply_streamwise_generation_stream():
+    """apply_streamwise transforms the entire GenerationStream at once."""
+    gs = GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 3)
+    result = gs.apply_streamwise(lambda stream: stream[1:])
+    assert isinstance(result, GenerationStream)
+    assert result.count() == 2
+    assert [entry.date.year for entry in result] == [2031, 2032]
+
+
+def test_filter_apply_generation_stream():
+    """filter_apply can both transform and drop generation entries."""
+    gs = GenerationStream([
+        Generation(100.0, date(2030, 1, 1)),
+        Generation(0.0, date(2031, 1, 1)),
+    ])
+    result = gs.filter_apply(
+        lambda g: Generation(g.amount_mwh * 1.5, g.date, g.source, g.carrier, g.label)
+        if g.amount_mwh > 0
+        else None
+    )
+    assert result.count() == 1
+    assert result[0].amount_mwh == 150.0
+
+
+def test_date_range_generation_stream():
+    """date_range filters generation entries by inclusive bounds."""
+    gs = GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 4)
+    result = gs.date_range(start=date(2031, 1, 1), end=date(2032, 1, 1))
+    assert result.count() == 2
+    assert [entry.date for entry in result] == [date(2031, 1, 1), date(2032, 1, 1)]
+
+
 # === grouping ===
 
 
@@ -178,6 +276,32 @@ def test_group_by_period():
     assert len(groups) == 3
 
 
+def test_sort_generation_stream_default():
+    """sort() defaults to date ascending."""
+    gs = GenerationStream([
+        Generation(100.0, date(2032, 1, 1)),
+        Generation(100.0, date(2030, 1, 1)),
+        Generation(100.0, date(2031, 1, 1)),
+    ])
+    result = gs.sort()
+    assert [entry.date for entry in result] == [
+        date(2030, 1, 1),
+        date(2031, 1, 1),
+        date(2032, 1, 1),
+    ]
+
+
+def test_sort_generation_stream_by_attr():
+    """sort(attr=...) sorts by a named Generation attribute."""
+    gs = GenerationStream([
+        Generation(300.0, date(2030, 1, 1), source="c"),
+        Generation(100.0, date(2031, 1, 1), source="a"),
+        Generation(200.0, date(2032, 1, 1), source="b"),
+    ])
+    result = gs.sort(attr="amount_mwh", descending=True)
+    assert [entry.amount_mwh for entry in result] == [300.0, 200.0, 100.0]
+
+
 # === aggregation ===
 
 
@@ -193,6 +317,54 @@ def test_count():
     """Count of entries."""
     gs = GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 5)
     assert gs.count() == 5
+
+
+def test_len_dunder():
+    """``len(stream)`` returns the number of generation entries."""
+    gs = GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 5)
+    assert len(gs) == 5
+    assert len(GenerationStream()) == 0
+
+
+def test_iter_dunder():
+    """Iterating a GenerationStream yields entries in order."""
+    entries = [
+        Generation(1000.0, date(2030, 1, 1)),
+        Generation(1100.0, date(2031, 1, 1)),
+    ]
+    gs = GenerationStream(entries)
+    assert list(gs) == entries
+
+
+def test_getitem_int_dunder():
+    """Integer indexing returns a single Generation entry."""
+    entries = [
+        Generation(1000.0, date(2030, 1, 1)),
+        Generation(1100.0, date(2031, 1, 1)),
+        Generation(1200.0, date(2032, 1, 1)),
+    ]
+    gs = GenerationStream(entries)
+    assert gs[0] == entries[0]
+    assert gs[2] == entries[2]
+
+
+def test_getitem_slice_dunder():
+    """Slice indexing returns a GenerationStream with the selected entries."""
+    entries = [
+        Generation(1000.0, date(2030, 1, 1)),
+        Generation(1100.0, date(2031, 1, 1)),
+        Generation(1200.0, date(2032, 1, 1)),
+    ]
+    gs = GenerationStream(entries)
+    result = gs[1:]
+    assert isinstance(result, GenerationStream)
+    assert result.entries == entries[1:]
+
+
+def test_truthiness_follows_length():
+    """Empty generation streams are falsy and non-empty streams are truthy."""
+    assert bool(GenerationStream([Generation(1000.0, date(2030, 1, 1))])) is True
+    assert bool(GenerationStream()) is False
 
 
 def test_sum_empty():
@@ -238,10 +410,10 @@ def test_to_revenue_basic():
     ])
     cfs = gs.to_revenue(price_per_mwh=50.0)
     assert cfs.count() == 2
-    assert abs(cfs.flows[0].amount - 50_000.0) < 1e-8
-    assert cfs.flows[0].is_cash is True
-    assert cfs.flows[0].has_tag(CashFlowTags.REVENUE)
-    assert cfs.flows[0].has_tag(CashFlowTags.TAXABLE)
+    assert abs(cfs.entries[0].amount - 50_000.0) < 1e-8
+    assert cfs.entries[0].is_cash is True
+    assert cfs.entries[0].has_tag(CashFlowTags.REVENUE)
+    assert cfs.entries[0].has_tag(CashFlowTags.TAXABLE)
 
 
 def test_to_revenue_escalation():
@@ -252,9 +424,9 @@ def test_to_revenue_escalation():
         Generation(1000.0, date(2032, 1, 1)),
     ])
     cfs = gs.to_revenue(price_per_mwh=50.0, escalation=0.10)
-    assert abs(cfs.flows[0].amount - 50_000.0) < 1e-8
-    assert abs(cfs.flows[1].amount - 55_000.0) < 1e-8
-    assert abs(cfs.flows[2].amount - 60_500.0) < 1e-6
+    assert abs(cfs.entries[0].amount - 50_000.0) < 1e-8
+    assert abs(cfs.entries[1].amount - 55_000.0) < 1e-8
+    assert abs(cfs.entries[2].amount - 60_500.0) < 1e-6
 
 
 def test_to_revenue_empty():
@@ -271,8 +443,8 @@ def test_to_cost_basic():
     gs = GenerationStream([Generation(1000.0, date(2030, 1, 1))])
     cfs = gs.to_cost(rate_per_mwh=5.0)
     assert cfs.count() == 1
-    assert abs(cfs.flows[0].amount - (-5_000.0)) < 1e-8
-    assert cfs.flows[0].has_tag(CashFlowTags.EXPENSE)
+    assert abs(cfs.entries[0].amount - (-5_000.0)) < 1e-8
+    assert cfs.entries[0].has_tag(CashFlowTags.EXPENSE)
 
 
 def test_to_cost_escalation():
@@ -282,8 +454,8 @@ def test_to_cost_escalation():
         Generation(1000.0, date(2031, 1, 1)),
     ])
     cfs = gs.to_cost(rate_per_mwh=10.0, escalation=0.05)
-    assert abs(cfs.flows[0].amount - (-10_000.0)) < 1e-8
-    assert abs(cfs.flows[1].amount - (-10_500.0)) < 1e-6
+    assert abs(cfs.entries[0].amount - (-10_000.0)) < 1e-8
+    assert abs(cfs.entries[1].amount - (-10_500.0)) < 1e-6
 
 
 # === to_ptc ===
@@ -300,7 +472,7 @@ def test_to_ptc_basic():
     cfs = gs.to_ptc(rate_per_mwh=27.5, years=2)
     # Only years 2030, 2031 (< 2032)
     assert cfs.count() == 2
-    assert abs(cfs.flows[0].amount - 27_500.0) < 1e-8
+    assert abs(cfs.entries[0].amount - 27_500.0) < 1e-8
 
 
 def test_to_ptc_escalation():
@@ -310,8 +482,8 @@ def test_to_ptc_escalation():
         Generation(1000.0, date(2031, 1, 1)),
     ])
     cfs = gs.to_ptc(rate_per_mwh=10.0, years=5, escalation=0.02)
-    assert abs(cfs.flows[0].amount - 10_000.0) < 1e-8
-    assert abs(cfs.flows[1].amount - 10_200.0) < 1e-6
+    assert abs(cfs.entries[0].amount - 10_000.0) < 1e-8
+    assert abs(cfs.entries[1].amount - 10_200.0) < 1e-6
 
 
 def test_to_ptc_empty():
@@ -375,3 +547,43 @@ def test_generation_group_len():
         GenerationStream.from_capacity(50, 0.8, date(2030, 1, 1), 1, source="b"),
     )
     assert len(gs.group_by(source=True)) == 2
+
+
+def test_generation_group_apply_to_groups():
+    """apply_to_groups transforms selected grouped streams."""
+    gs = GenerationStream.from_streams(
+        GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 1, source="a"),
+        GenerationStream.from_capacity(50, 0.8, date(2030, 1, 1), 1, source="b"),
+    )
+    grouped = gs.group_by(source=True)
+    result = grouped.apply_to_groups(
+        lambda s: s.apply(
+            lambda g: Generation(g.amount_mwh * 2, g.date, g.source, g.carrier, g.label)
+        ),
+        keys="a",
+    )
+    assert result["a"].sum() == grouped["a"].sum() * 2
+    assert result["b"].sum() == grouped["b"].sum()
+
+
+def test_generation_group_filter_groups():
+    """filter_groups keeps only groups matching the predicate."""
+    gs = GenerationStream.from_streams(
+        GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 2, source="a"),
+        GenerationStream.from_capacity(50, 0.8, date(2030, 1, 1), 1, source="b"),
+    )
+    grouped = gs.group_by(source=True)
+    result = grouped.filter_groups(lambda key, stream: stream.count() > 1)
+    assert list(result.keys()) == ["a"]
+
+
+def test_generation_group_ungroup():
+    """ungroup flattens grouped generation streams back to one stream."""
+    gs = GenerationStream.from_streams(
+        GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 2, source="a"),
+        GenerationStream.from_capacity(50, 0.8, date(2030, 1, 1), 1, source="b"),
+    )
+    grouped = gs.group_by(source=True)
+    result = grouped.ungroup()
+    assert isinstance(result, GenerationStream)
+    assert result.count() == gs.count()

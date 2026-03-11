@@ -21,8 +21,8 @@ class TestITC:
         capex = CashFlowStream([_capex(-10_000_000, date(2028, 6, 1))])
         result = itc(capex, rate=0.30, placed_in_service=date(2030, 1, 1))
 
-        assert len(result.flows) == 1
-        assert result.flows[0].amount == pytest.approx(3_000_000)
+        assert len(result.entries) == 1
+        assert result.entries[0].amount == pytest.approx(3_000_000)
 
     def test_itc_multi_year_capex(self):
         """Construction spanning 3 years → total basis sums correctly."""
@@ -33,19 +33,19 @@ class TestITC:
         ])
         result = itc(capex, rate=0.30, placed_in_service=date(2030, 1, 1))
 
-        assert len(result.flows) == 1
-        assert result.flows[0].amount == pytest.approx(3_000_000)  # 10M × 0.30
+        assert len(result.entries) == 1
+        assert result.entries[0].amount == pytest.approx(3_000_000)  # 10M × 0.30
 
     def test_itc_empty_stream(self):
         """Empty capex stream → empty result."""
         result = itc(CashFlowStream(), rate=0.30, placed_in_service=date(2030, 1, 1))
-        assert len(result.flows) == 0
+        assert len(result.entries) == 0
 
     def test_itc_zero_rate(self):
         """0% rate → empty result."""
         capex = CashFlowStream([_capex(-10_000_000, date(2028, 6, 1))])
         result = itc(capex, rate=0.0, placed_in_service=date(2030, 1, 1))
-        assert len(result.flows) == 0
+        assert len(result.entries) == 0
 
     def test_itc_placed_in_service_date(self):
         """Credit cashflow date matches placed_in_service."""
@@ -53,7 +53,7 @@ class TestITC:
         placed = date(2030, 3, 15)
         result = itc(capex, rate=0.30, placed_in_service=placed)
 
-        assert result.flows[0].date == placed
+        assert result.entries[0].date == placed
 
     def test_itc_custom_label_and_tags(self):
         """label and tags are forwarded to the resulting cashflow."""
@@ -67,22 +67,22 @@ class TestITC:
             tags=custom_tags,
         )
 
-        assert result.flows[0].label == "Section 48E ITC"
-        assert result.flows[0].tags == custom_tags
+        assert result.entries[0].label == "Section 48E ITC"
+        assert result.entries[0].tags == custom_tags
 
     def test_itc_is_cash_true(self):
         """ITC credit cashflow must have is_cash=True."""
         capex = CashFlowStream([_capex(-10_000_000, date(2028, 6, 1))])
         result = itc(capex, rate=0.30, placed_in_service=date(2030, 1, 1))
 
-        assert result.flows[0].is_cash is True
+        assert result.entries[0].is_cash is True
 
     def test_itc_default_tags_revenue(self):
         """Default tags include REVENUE."""
         capex = CashFlowStream([_capex(-10_000_000, date(2028, 6, 1))])
         result = itc(capex, rate=0.30, placed_in_service=date(2030, 1, 1))
 
-        assert CashFlowTags.REVENUE in result.flows[0].tags
+        assert CashFlowTags.REVENUE in result.entries[0].tags
 
 
 class TestITCAdjustedBasis:
@@ -135,7 +135,7 @@ class TestIntegration:
         depr = macrs_schedule(basis, placed, property_class=15)
 
         # Credit is positive
-        assert credit.flows[0].amount == pytest.approx(30_000_000)
+        assert credit.entries[0].amount == pytest.approx(30_000_000)
 
         # Adjusted basis < original basis
         assert basis < 100_000_000
@@ -143,7 +143,7 @@ class TestIntegration:
 
         # MACRS rates for 15-year property sum to ~1.0, so depreciation sum ≈ basis
         # Depreciation flows are negative (expense), so take abs
-        depr_total = abs(sum(cf.amount for cf in depr.flows))
+        depr_total = abs(sum(cf.amount for cf in depr.entries))
         assert depr_total == pytest.approx(basis, rel=1e-3)
 
     def test_itc_npv(self):

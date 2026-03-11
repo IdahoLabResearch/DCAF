@@ -73,9 +73,9 @@ def test_default_profile_matches_explicit_flat():
         profile="flat",
     )
 
-    assert [cf.date for cf in implicit.flows] == [cf.date for cf in explicit.flows]
-    assert [cf.amount for cf in implicit.flows] == pytest.approx(
-        [cf.amount for cf in explicit.flows]
+    assert [cf.date for cf in implicit.entries] == [cf.date for cf in explicit.entries]
+    assert [cf.amount for cf in implicit.entries] == pytest.approx(
+        [cf.amount for cf in explicit.entries]
     )
 
 
@@ -240,7 +240,7 @@ def test_linear_schedule_total_spend():
         date(2026, 1, 1),
         profile="linear",
     )
-    total = sum(cf.amount for cf in stream.flows)
+    total = sum(cf.amount for cf in stream.entries)
     assert abs(total - (-1_000_000)) < 1.0
 
 
@@ -250,7 +250,7 @@ def test_flat_schedule_roughly_equal_periods():
         date(2025, 1, 1),
         date(2026, 1, 1),
     )
-    amounts = [abs(cf.amount) for cf in stream.flows]
+    amounts = [abs(cf.amount) for cf in stream.entries]
     avg = sum(amounts) / len(amounts)
     for amount in amounts:
         assert abs(amount - avg) / avg < 0.15
@@ -264,7 +264,7 @@ def test_all_flows_tagged_capex_expense_no_debt():
         profile="linear",
     )
 
-    for cf in stream.flows:
+    for cf in stream.entries:
         assert cf.has_tag(CashFlowTags.CAPEX)
         assert cf.has_tag(CashFlowTags.EXPENSE)
         assert cf.label == "Construction Spend"
@@ -279,7 +279,7 @@ def test_all_flows_negative():
         profile="linear",
     )
 
-    for cf in stream.flows:
+    for cf in stream.entries:
         assert cf.amount < 0
 
 
@@ -291,7 +291,7 @@ def test_construction_spend_flows_booked_at_period_end():
         profile="linear",
     )
 
-    spend_flows = [cf for cf in stream.flows if cf.label == "Construction Spend"]
+    spend_flows = [cf for cf in stream.entries if cf.label == "Construction Spend"]
     assert [cf.date for cf in spend_flows] == [
         date(2025, 2, 1),
         date(2025, 3, 1),
@@ -307,7 +307,7 @@ def test_construction_spend_final_stub_flow_booked_at_stub_end():
         profile="linear",
     )
 
-    spend_flows = [cf for cf in stream.flows if cf.label == "Construction Spend"]
+    spend_flows = [cf for cf in stream.entries if cf.label == "Construction Spend"]
     assert [cf.date for cf in spend_flows] == [
         date(2025, 2, 15),
         date(2025, 3, 15),
@@ -323,7 +323,7 @@ def test_month_end_monthly_schedule_stays_anchored_to_start_date():
         profile="linear",
     )
 
-    spend_flows = [cf for cf in stream.flows if cf.label == "Construction Spend"]
+    spend_flows = [cf for cf in stream.entries if cf.label == "Construction Spend"]
     assert [cf.date for cf in spend_flows] == [
         date(2025, 2, 28),
         date(2025, 3, 31),
@@ -341,7 +341,7 @@ def test_late_month_quarterly_schedule_stays_anchored_to_start_date():
         profile="linear",
     )
 
-    spend_flows = [cf for cf in stream.flows if cf.label == "Construction Spend"]
+    spend_flows = [cf for cf in stream.entries if cf.label == "Construction Spend"]
     assert [cf.date for cf in spend_flows] == [
         date(2025, 11, 30),
         date(2026, 2, 28),
@@ -358,7 +358,7 @@ def test_custom_profile_total_spend():
         profile=profile,
     )
 
-    total = sum(cf.amount for cf in stream.flows)
+    total = sum(cf.amount for cf in stream.entries)
     assert abs(total - (-1_000_000)) < 1.0
 
 
@@ -388,8 +388,8 @@ def test_escalation_increases_total():
         escalation_rate=0.05,
     )
 
-    base_total = abs(sum(cf.amount for cf in base.flows))
-    escalated_total = abs(sum(cf.amount for cf in escalated.flows))
+    base_total = abs(sum(cf.amount for cf in base.entries))
+    escalated_total = abs(sum(cf.amount for cf in escalated.entries))
     assert escalated_total > base_total
 
 
@@ -402,10 +402,10 @@ def test_debt_financing_does_not_change_total_capex_outflow():
         financing=ConstructionFinancing.debt(0.7),
     )
 
-    total = sum(cf.amount for cf in stream.flows)
+    total = sum(cf.amount for cf in stream.entries)
     assert abs(total - (-1_000_000)) < 1.0
-    assert all(cf.label != "Debt Draw" for cf in stream.flows)
-    assert all(cf.label != "Equity Draw" for cf in stream.flows)
+    assert all(cf.label != "Debt Draw" for cf in stream.entries)
+    assert all(cf.label != "Equity Draw" for cf in stream.entries)
 
 
 def test_debt_financing_keeps_full_capex_tagged_as_expense():
@@ -418,15 +418,15 @@ def test_debt_financing_keeps_full_capex_tagged_as_expense():
     )
 
     expense_total = sum(
-        cf.amount for cf in stream.flows if cf.has_tag(CashFlowTags.EXPENSE)
+        cf.amount for cf in stream.entries if cf.has_tag(CashFlowTags.EXPENSE)
     )
     capex_total = sum(
-        cf.amount for cf in stream.flows if cf.has_tag(CashFlowTags.CAPEX)
+        cf.amount for cf in stream.entries if cf.has_tag(CashFlowTags.CAPEX)
     )
 
     assert abs(expense_total - (-1000)) < 1.0
     assert abs(capex_total - (-1000)) < 1.0
-    for cf in stream.flows:
+    for cf in stream.entries:
         assert cf.label == "Construction Spend"
         assert cf.has_tag(CashFlowTags.CAPEX)
         assert cf.has_tag(CashFlowTags.EXPENSE)
@@ -446,7 +446,7 @@ def test_capitalized_interest_is_not_cash():
         ),
     )
 
-    capitalized_interest = [cf for cf in stream.flows if cf.label == "Capitalized Interest"]
+    capitalized_interest = [cf for cf in stream.entries if cf.label == "Capitalized Interest"]
     assert len(capitalized_interest) > 0
     for cf in capitalized_interest:
         assert cf.is_cash is False
@@ -467,7 +467,7 @@ def test_paid_interest_is_cash():
         ),
     )
 
-    paid_interest = [cf for cf in stream.flows if cf.label == "Interest Payment"]
+    paid_interest = [cf for cf in stream.entries if cf.label == "Interest Payment"]
     assert len(paid_interest) > 0
     for cf in paid_interest:
         assert cf.is_cash is True
@@ -495,7 +495,7 @@ def test_interest_flows_booked_at_period_end(treatment, label):
         ),
     )
 
-    interest_flows = [cf for cf in stream.flows if cf.label == label]
+    interest_flows = [cf for cf in stream.entries if cf.label == label]
     assert [cf.date for cf in interest_flows] == [
         date(2025, 3, 1),
         date(2025, 4, 1),
@@ -522,8 +522,8 @@ def test_interest_excludes_current_period_draws(treatment, label):
         ),
     )
 
-    spend_flows = [cf for cf in stream.flows if cf.label == "Construction Spend"]
-    interest_flows = [cf for cf in stream.flows if cf.label == label]
+    spend_flows = [cf for cf in stream.entries if cf.label == "Construction Spend"]
+    interest_flows = [cf for cf in stream.entries if cf.label == label]
 
     assert len(interest_flows) == 2
 
@@ -545,8 +545,8 @@ def test_paid_interest_third_period_uses_only_prior_draws():
         ),
     )
 
-    spend_flows = [cf for cf in stream.flows if cf.label == "Construction Spend"]
-    interest_flows = [cf for cf in stream.flows if cf.label == "Interest Payment"]
+    spend_flows = [cf for cf in stream.entries if cf.label == "Construction Spend"]
+    interest_flows = [cf for cf in stream.entries if cf.label == "Interest Payment"]
 
     third_period_years = timedelta_fractional_years(date(2025, 3, 1), date(2025, 4, 1))
     expected_third_interest = (
@@ -568,7 +568,7 @@ def test_capitalized_interest_accumulates():
         ),
     )
 
-    interest_flows = [cf for cf in stream.flows if cf.label == "Capitalized Interest"]
+    interest_flows = [cf for cf in stream.entries if cf.label == "Capitalized Interest"]
     amounts = [abs(cf.amount) for cf in interest_flows]
     assert amounts[-1] > amounts[0]
 
@@ -598,10 +598,10 @@ def test_paid_interest_does_not_accumulate_on_balance():
     )
 
     paid_total = abs(
-        sum(cf.amount for cf in paid_stream.flows if cf.label == "Interest Payment")
+        sum(cf.amount for cf in paid_stream.entries if cf.label == "Interest Payment")
     )
     capitalized_total = abs(
-        sum(cf.amount for cf in capitalized_stream.flows if cf.label == "Capitalized Interest")
+        sum(cf.amount for cf in capitalized_stream.entries if cf.label == "Capitalized Interest")
     )
 
     assert capitalized_total > paid_total
@@ -616,6 +616,6 @@ def test_quarterly_period():
         profile="linear",
     )
 
-    assert len(stream.flows) == 4
-    total = sum(cf.amount for cf in stream.flows)
+    assert len(stream.entries) == 4
+    total = sum(cf.amount for cf in stream.entries)
     assert abs(total - (-1_000_000)) < 1.0

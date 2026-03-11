@@ -52,7 +52,7 @@ def itc(
         >>> credit[0].amount  # 10,000,000 * 0.30 = 3,000,000
         3000000.0
     """
-    if not capex_stream.flows or rate == 0.0:
+    if not capex_stream.entries or rate == 0.0:
         return CashFlowStream()
 
     total_basis = abs(capex_stream.sum())
@@ -97,7 +97,7 @@ def itc_adjusted_basis(capex_stream: CashFlowStream, rate: float) -> float:
         >>> itc_adjusted_basis(capex, rate=0.30)  # 100M * (1 - 0.15) = 85M
         85000000.0
     """
-    if not capex_stream.flows:
+    if not capex_stream.entries:
         return 0.0
 
     total_basis = abs(capex_stream.sum())

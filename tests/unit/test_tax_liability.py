@@ -2,8 +2,6 @@
 
 from datetime import date
 
-import pytest
-
 from dcaf.cashflows import CashFlow, CashFlowStream, CashFlowTags
 from dcaf.tax_liability import compute_taxable_income, tax_liability
 
@@ -38,11 +36,11 @@ class TestComputeTaxableIncome:
 
         result = compute_taxable_income(revenue, deductions)
 
-        assert len(result.flows) == 1
-        assert result.flows[0].amount == 80_000  # 100,000 - 20,000
-        assert result.flows[0].date == date(2025, 12, 31)  # Period end
-        assert result.flows[0].is_cash is False  # Accrual concept
-        assert result.flows[0].tags == frozenset()  # No tags
+        assert len(result.entries) == 1
+        assert result.entries[0].amount == 80_000  # 100,000 - 20,000
+        assert result.entries[0].date == date(2025, 12, 31)  # Period end
+        assert result.entries[0].is_cash is False  # Accrual concept
+        assert result.entries[0].tags == frozenset()  # No tags
 
     def test_multiple_periods(self):
         """Test grouping by year when flows span multiple periods."""
@@ -81,15 +79,15 @@ class TestComputeTaxableIncome:
 
         result = compute_taxable_income(revenue, deductions)
 
-        assert len(result.flows) == 2
+        assert len(result.entries) == 2
         # Sort by date for consistent ordering
         result = result.sort(lambda cf: cf.date)
 
-        assert result.flows[0].amount == 80_000  # 2025: 100,000 - 20,000
-        assert result.flows[0].date == date(2025, 12, 31)
+        assert result.entries[0].amount == 80_000  # 2025: 100,000 - 20,000
+        assert result.entries[0].date == date(2025, 12, 31)
 
-        assert result.flows[1].amount == 120_000  # 2026: 150,000 - 30,000
-        assert result.flows[1].date == date(2026, 12, 31)
+        assert result.entries[1].amount == 120_000  # 2026: 150,000 - 30,000
+        assert result.entries[1].date == date(2026, 12, 31)
 
     def test_negative_taxable_income_loss(self):
         """Test that negative taxable income (losses) are preserved."""
@@ -116,9 +114,9 @@ class TestComputeTaxableIncome:
 
         result = compute_taxable_income(revenue, deductions)
 
-        assert len(result.flows) == 1
-        assert result.flows[0].amount == -50_000  # 50,000 - 100,000 = -50,000 (loss)
-        assert result.flows[0].is_cash is False
+        assert len(result.entries) == 1
+        assert result.entries[0].amount == -50_000  # 50,000 - 100,000 = -50,000 (loss)
+        assert result.entries[0].is_cash is False
 
     def test_empty_streams(self):
         """Test that empty streams return empty result."""
@@ -127,7 +125,7 @@ class TestComputeTaxableIncome:
 
         result = compute_taxable_income(revenue, deductions)
 
-        assert len(result.flows) == 0
+        assert len(result.entries) == 0
 
     def test_only_revenue(self):
         """Test with only revenue, no deductions."""
@@ -145,8 +143,8 @@ class TestComputeTaxableIncome:
 
         result = compute_taxable_income(revenue, deductions)
 
-        assert len(result.flows) == 1
-        assert result.flows[0].amount == 100_000
+        assert len(result.entries) == 1
+        assert result.entries[0].amount == 100_000
 
     def test_only_deductions(self):
         """Test with only deductions, no revenue."""
@@ -164,8 +162,8 @@ class TestComputeTaxableIncome:
 
         result = compute_taxable_income(revenue, deductions)
 
-        assert len(result.flows) == 1
-        assert result.flows[0].amount == -50_000  # Loss
+        assert len(result.entries) == 1
+        assert result.entries[0].amount == -50_000  # Loss
 
     def test_multiple_revenue_and_deduction_sources(self):
         """Test combining multiple revenue and deduction sources in same period."""
@@ -204,8 +202,8 @@ class TestComputeTaxableIncome:
 
         result = compute_taxable_income(revenue, deductions)
 
-        assert len(result.flows) == 1
-        assert result.flows[0].amount == 120_000  # 100k + 50k - 20k - 10k
+        assert len(result.entries) == 1
+        assert result.entries[0].amount == 120_000  # 100k + 50k - 20k - 10k
 
     def test_custom_label(self):
         """Test custom label template."""
@@ -223,7 +221,7 @@ class TestComputeTaxableIncome:
 
         result = compute_taxable_income(revenue, deductions, label="Custom Taxable Income")
 
-        assert result.flows[0].label == "Custom Taxable Income"
+        assert result.entries[0].label == "Custom Taxable Income"
 
     def test_sums_all_flows_in_streams(self):
         """Test that all flows in both streams are summed (callers are trusted to pass correct streams)."""
@@ -262,9 +260,9 @@ class TestComputeTaxableIncome:
 
         result = compute_taxable_income(revenue, deductions)
 
-        assert len(result.flows) == 1
+        assert len(result.entries) == 1
         # All flows in both streams are summed: 100k + 50k + (-20k) + (-10k) = 120k
-        assert result.flows[0].amount == 120_000
+        assert result.entries[0].amount == 120_000
 
 
 class TestTaxLiability:
@@ -285,11 +283,11 @@ class TestTaxLiability:
 
         result = tax_liability(taxable_income, tax_rate=0.21)
 
-        assert len(result.flows) == 1
-        assert result.flows[0].amount == -21_000  # Negative = outflow
-        assert result.flows[0].date == date(2025, 1, 1)
-        assert result.flows[0].is_cash is True  # Cash payment
-        assert CashFlowTags.EXPENSE in result.flows[0].tags
+        assert len(result.entries) == 1
+        assert result.entries[0].amount == -21_000  # Negative = outflow
+        assert result.entries[0].date == date(2025, 1, 1)
+        assert result.entries[0].is_cash is True  # Cash payment
+        assert CashFlowTags.EXPENSE in result.entries[0].tags
 
     def test_amounts_are_negative(self):
         """Test that tax amounts are negative (outflows)."""
@@ -306,7 +304,7 @@ class TestTaxLiability:
 
         result = tax_liability(taxable_income, tax_rate=0.21)
 
-        assert result.flows[0].amount < 0
+        assert result.entries[0].amount < 0
 
     def test_only_positive_income_generates_tax(self):
         """Test that negative taxable income (losses) don't generate tax liability."""
@@ -336,14 +334,14 @@ class TestTaxLiability:
         result = tax_liability(taxable_income, tax_rate=0.21)
 
         # Should only have 2 tax flows (2025 and 2027)
-        assert len(result.flows) == 2
+        assert len(result.entries) == 2
         result = result.sort(lambda cf: cf.date)
 
-        assert result.flows[0].amount == -21_000  # 2025
-        assert result.flows[0].date == date(2025, 1, 1)
+        assert result.entries[0].amount == -21_000  # 2025
+        assert result.entries[0].date == date(2025, 1, 1)
 
-        assert result.flows[1].amount == -15_750  # 2027
-        assert result.flows[1].date == date(2027, 1, 1)
+        assert result.entries[1].amount == -15_750  # 2027
+        assert result.entries[1].date == date(2027, 1, 1)
 
     def test_zero_tax_rate(self):
         """Test that zero tax rate returns zero amounts."""
@@ -360,8 +358,8 @@ class TestTaxLiability:
 
         result = tax_liability(taxable_income, tax_rate=0.0)
 
-        assert len(result.flows) == 1
-        assert result.flows[0].amount == 0.0
+        assert len(result.entries) == 1
+        assert result.entries[0].amount == 0.0
 
     def test_empty_stream(self):
         """Test that empty streams return empty result."""
@@ -369,7 +367,7 @@ class TestTaxLiability:
 
         result = tax_liability(taxable_income, tax_rate=0.21)
 
-        assert len(result.flows) == 0
+        assert len(result.entries) == 0
 
     def test_custom_label(self):
         """Test custom label template."""
@@ -386,7 +384,7 @@ class TestTaxLiability:
 
         result = tax_liability(taxable_income, tax_rate=0.21, label="Federal Tax")
 
-        assert result.flows[0].label == "Federal Tax"
+        assert result.entries[0].label == "Federal Tax"
 
     def test_custom_tags(self):
         """Test custom tags applied correctly."""
@@ -404,7 +402,7 @@ class TestTaxLiability:
         custom_tags = frozenset({CashFlowTags.EXPENSE, CashFlowTags.OPEX})
         result = tax_liability(taxable_income, tax_rate=0.21, tags=custom_tags)
 
-        assert result.flows[0].tags == custom_tags
+        assert result.entries[0].tags == custom_tags
 
     def test_default_tags(self):
         """Test default tags are EXPENSE."""
@@ -421,7 +419,7 @@ class TestTaxLiability:
 
         result = tax_liability(taxable_income, tax_rate=0.21)
 
-        assert result.flows[0].tags == frozenset({CashFlowTags.EXPENSE})
+        assert result.entries[0].tags == frozenset({CashFlowTags.EXPENSE})
 
     def test_is_cash_true(self):
         """Test that all tax liability flows have is_cash=True."""
@@ -444,7 +442,7 @@ class TestTaxLiability:
 
         result = tax_liability(taxable_income, tax_rate=0.21)
 
-        assert all(cf.is_cash for cf in result.flows)
+        assert all(cf.is_cash for cf in result.entries)
 
     def test_combined_tax_rate(self):
         """Test combined federal + state tax rate."""
@@ -462,7 +460,7 @@ class TestTaxLiability:
         # 21% federal + 5% state = 26% combined
         result = tax_liability(taxable_income, tax_rate=0.26)
 
-        assert result.flows[0].amount == -26_000
+        assert result.entries[0].amount == -26_000
 
 
 class TestIntegration:
@@ -510,11 +508,11 @@ class TestIntegration:
 
         # Compute taxable income: 100k - 30k - 20k = 50k
         taxable_income = compute_taxable_income(revenue, deductions)
-        assert taxable_income.flows[0].amount == 50_000
+        assert taxable_income.entries[0].amount == 50_000
 
         # Calculate tax: 50k * 21% = 10.5k
         taxes = tax_liability(taxable_income, tax_rate=0.21)
-        assert taxes.flows[0].amount == -10_500
+        assert taxes.entries[0].amount == -10_500
 
         # Build project cashflows (exclude depreciation since it's not cash)
         project_cashflows = CashFlowStream.from_streams(revenue, deductions, taxes)
@@ -568,14 +566,14 @@ class TestIntegration:
         # 2025: 50k - 100k = -50k (loss)
         # 2026: 150k - 50k = 100k (profit)
 
-        assert len(taxable_income.flows) == 2
+        assert len(taxable_income.entries) == 2
         taxable_income_sorted = taxable_income.sort(lambda cf: cf.date)
-        assert taxable_income_sorted.flows[0].amount == -50_000  # 2025 loss
-        assert taxable_income_sorted.flows[1].amount == 100_000  # 2026 profit
+        assert taxable_income_sorted.entries[0].amount == -50_000  # 2025 loss
+        assert taxable_income_sorted.entries[1].amount == 100_000  # 2026 profit
 
         taxes = tax_liability(taxable_income, tax_rate=0.21)
 
         # Should only have tax for 2026
-        assert len(taxes.flows) == 1
-        assert taxes.flows[0].amount == -21_000
-        assert taxes.flows[0].date == date(2026, 12, 31)
+        assert len(taxes.entries) == 1
+        assert taxes.entries[0].amount == -21_000
+        assert taxes.entries[0].date == date(2026, 12, 31)
