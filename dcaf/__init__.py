@@ -26,6 +26,7 @@ from dcaf.generation import (
     GenerationStream,
 )
 from dcaf.opex import fixed_opex
+from dcaf.tax_incentives import itc, itc_adjusted_basis
 from dcaf.tax_liability import compute_taxable_income, tax_liability
 from dcaf.types import MACRSConvention, MACRSPropertyClass
 
@@ -47,6 +48,8 @@ __all__ = [
     "MACRSPropertyClass",
     "compute_taxable_income",
     "fixed_opex",
+    "itc",
+    "itc_adjusted_basis",
     "macrs_schedule",
     "tax_liability",
 ]
