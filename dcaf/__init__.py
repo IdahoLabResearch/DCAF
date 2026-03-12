@@ -27,6 +27,13 @@ from dcaf.depreciation import (
     MACRS_RATES,
     macrs_schedule,
 )
+from dcaf.escalation import (
+    CompositeEscalation,
+    ConstantRateEscalation,
+    EscalationBuilder,
+    EscalationSegment,
+    IndexSeriesEscalation,
+)
 from dcaf.generation import (
     Generation,
     GenerationGroup,
@@ -61,14 +68,19 @@ __all__ = [
     "ConstructionFinancing",
     "ConstructionSpendBuilder",
     "ConstructionSpendConfig",
+    "CompositeEscalation",
+    "ConstantRateEscalation",
     "SpendProfile",
     "construction_spend_schedule",
     "DayCountConvention",
+    "EscalationBuilder",
+    "EscalationSegment",
     "BELL_CURVE",
     "FLAT_CURVE",
     "Generation",
     "GenerationGroup",
     "GenerationStream",
+    "IndexSeriesEscalation",
     "InterestTreatment",
     "LINEAR_CURVE",
     "MACRS_MID_QUARTER_RATES",

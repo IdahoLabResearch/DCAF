@@ -85,6 +85,43 @@ def compound_factor(rate: float, periods: float) -> float:
     return (1.0 + rate) ** periods
 
 
+def elapsed_months(start_date: date, end_date: date) -> float:
+    """Return the fractional number of calendar months between two dates."""
+    if end_date < start_date:
+        return -elapsed_months(end_date, start_date)
+
+    whole_months = (end_date.year - start_date.year) * 12 + (end_date.month - start_date.month)
+    anchor = start_date + relativedelta(months=whole_months)
+    if anchor > end_date:
+        whole_months -= 1
+        anchor = start_date + relativedelta(months=whole_months)
+
+    next_anchor = anchor + relativedelta(months=1)
+    partial_month = (end_date - anchor).days / (next_anchor - anchor).days if end_date > anchor else 0.0
+    return whole_months + partial_month
+
+
+def elapsed_periods(
+    start_date: date,
+    end_date: date,
+    period: Period,
+    convention: DayCountConvention = "actual/365",
+) -> float:
+    """Return the fractional number of periods between two dates."""
+    normalized_period = _normalize_period(period)
+    match normalized_period:
+        case "year":
+            return timedelta_fractional_years(start_date, end_date, convention)
+        case "quarter":
+            return elapsed_months(start_date, end_date) / 3.0
+        case "month":
+            return elapsed_months(start_date, end_date)
+        case "day":
+            return float((end_date - start_date).days)
+        case _:
+            assert_never(normalized_period)
+
+
 @cache
 def hours_per_period(period: Period) -> float:
     """Return the number of hours in a period."""
