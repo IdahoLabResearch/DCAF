@@ -24,13 +24,16 @@ from dcaf.cashflows import (
     CashFlowStream,
     CashFlowTags,
 )
-from dcaf.escalation import ConstantRateEscalation
+from dcaf.escalation import (
+    ConstantRateEscalation,
+    EscalationPolicy,
+    _constant_discount_policy,
+    _resolve_escalation_policy_override,
+)
 from dcaf.types import DayCountConvention, Period, SupportsLessThan
 from dcaf.utils import (
-    compound_factor,
     hours_per_period,
     time_delta_per_period,
-    timedelta_fractional_years,
 )
 
 
@@ -66,8 +69,18 @@ def _generation_escalation(
     escalation: float,
     escalation_period: Period,
     amount_reference_date: date | None,
-) -> ConstantRateEscalation:
+    escalation_policy: EscalationPolicy | None,
+) -> EscalationPolicy:
     """Normalize generation escalation kwargs into a date-based policy."""
+    policy_override = _resolve_escalation_policy_override(
+        escalation=escalation,
+        escalation_period=escalation_period,
+        amount_reference_date=amount_reference_date,
+        escalation_policy=escalation_policy,
+        default_escalation_period="year",
+    )
+    if policy_override is not None:
+        return policy_override
     reference_date = min(entry.date for entry in entries) if amount_reference_date is None else amount_reference_date
     return ConstantRateEscalation(
         reference_date=reference_date,
@@ -994,10 +1007,14 @@ class GenerationStream(BaseStream[Generation]):
         >>> stream.discounted_sum(rate=0.08, valuation_date=date(2030, 1, 1)) > 0
         True
         """
+        discount_policy = _constant_discount_policy(
+            valuation_date=valuation_date,
+            rate=rate,
+            convention=convention,
+        )
         total = 0.0
         for entry in self.entries:
-            years = timedelta_fractional_years(valuation_date, entry.date, convention)
-            total += entry.amount_mwh / compound_factor(rate, years)
+            total += entry.amount_mwh / discount_policy.factor(entry.date)
         return total
 
     def to_revenue(
@@ -1009,6 +1026,7 @@ class GenerationStream(BaseStream[Generation]):
         *,
         escalation_period: Period = "year",
         amount_reference_date: date | None = None,
+        escalation_policy: EscalationPolicy | None = None,
     ) -> CashFlowStream:
         """
         Convert generation entries to revenue cashflows.
@@ -1028,6 +1046,10 @@ class GenerationStream(BaseStream[Generation]):
         amount_reference_date : date, optional
             Date at which ``price_per_mwh`` is known. Defaults to the earliest
             generation entry date.
+        escalation_policy : EscalationPolicy, optional
+            Advanced override for custom escalation behavior. When provided, it
+            must not be combined with ``escalation``, ``escalation_period``, or
+            ``amount_reference_date``.
         label : str, optional
             Label template.
         tags : frozenset[CashFlowTags], optional
@@ -1050,6 +1072,7 @@ class GenerationStream(BaseStream[Generation]):
             escalation=escalation,
             escalation_period=escalation_period,
             amount_reference_date=amount_reference_date,
+            escalation_policy=escalation_policy,
         )
         entries: list[CashFlow] = []
         for i, entry in enumerate(self.entries):
@@ -1077,6 +1100,7 @@ class GenerationStream(BaseStream[Generation]):
         *,
         escalation_period: Period = "year",
         amount_reference_date: date | None = None,
+        escalation_policy: EscalationPolicy | None = None,
     ) -> CashFlowStream:
         """
         Convert generation entries to variable cost cashflows (negative amounts).
@@ -1095,6 +1119,10 @@ class GenerationStream(BaseStream[Generation]):
         amount_reference_date : date, optional
             Date at which ``rate_per_mwh`` is known. Defaults to the earliest
             generation entry date.
+        escalation_policy : EscalationPolicy, optional
+            Advanced override for custom escalation behavior. When provided, it
+            must not be combined with ``escalation``, ``escalation_period``, or
+            ``amount_reference_date``.
         label : str, optional
             Label template.
         tags : frozenset[CashFlowTags], optional
@@ -1117,6 +1145,7 @@ class GenerationStream(BaseStream[Generation]):
             escalation=escalation,
             escalation_period=escalation_period,
             amount_reference_date=amount_reference_date,
+            escalation_policy=escalation_policy,
         )
         entries: list[CashFlow] = []
         for i, entry in enumerate(self.entries):
@@ -1143,6 +1172,7 @@ class GenerationStream(BaseStream[Generation]):
         *,
         escalation_period: Period = "year",
         amount_reference_date: date | None = None,
+        escalation_policy: EscalationPolicy | None = None,
     ) -> CashFlowStream:
         """
         Convert generation entries to Production Tax Credit cashflows.
@@ -1166,6 +1196,10 @@ class GenerationStream(BaseStream[Generation]):
         amount_reference_date : date, optional
             Date at which ``rate_per_mwh`` is known. Defaults to the earliest
             generation entry date.
+        escalation_policy : EscalationPolicy, optional
+            Advanced override for custom escalation behavior. When provided, it
+            must not be combined with ``escalation``, ``escalation_period``, or
+            ``amount_reference_date``.
         label : str, optional
             Label template.
         tags : frozenset[CashFlowTags], optional
@@ -1191,6 +1225,7 @@ class GenerationStream(BaseStream[Generation]):
             escalation=escalation,
             escalation_period=escalation_period,
             amount_reference_date=amount_reference_date,
+            escalation_policy=escalation_policy,
         )
         entries: list[CashFlow] = []
         n = 0

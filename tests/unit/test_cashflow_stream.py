@@ -2,6 +2,7 @@ from datetime import date
 import pytest
 
 from dcaf import CashFlow, CashFlowGroup, CashFlowStream, CashFlowTags, GenerationStream
+from dcaf.escalation import ConstantRateEscalation, EscalationBuilder, IndexSeriesEscalation
 
 
 def _annual_factor(start: date, end: date, rate: float) -> float:
@@ -147,6 +148,75 @@ def test_from_recurring_supports_earlier_amount_reference_date():
     for i, flow in enumerate(cf_stream.entries):
         assert flow.date == expected_dates[i]
         assert flow.amount == pytest.approx(expected_amounts[i])
+
+
+def test_from_recurring_supports_escalation_policy_parity_with_constant_rate():
+    policy = ConstantRateEscalation(reference_date=date(2026, 1, 1), rate=0.12)
+    simple = CashFlowStream.from_recurring(
+        start=date(2026, 7, 1),
+        periods=2,
+        amount=100.0,
+        frequency="month",
+        escalation=0.12,
+        amount_reference_date=date(2026, 1, 1),
+    )
+    advanced = CashFlowStream.from_recurring(
+        start=date(2026, 7, 1),
+        periods=2,
+        amount=100.0,
+        frequency="month",
+        escalation_policy=policy,
+    )
+
+    assert [flow.date for flow in advanced.entries] == [flow.date for flow in simple.entries]
+    assert [flow.amount for flow in advanced.entries] == pytest.approx(
+        [flow.amount for flow in simple.entries]
+    )
+
+
+def test_from_recurring_supports_index_series_escalation_policy():
+    policy = IndexSeriesEscalation(
+        reference_date=date(2026, 1, 1),
+        points=(
+            (date(2026, 1, 1), 100.0),
+            (date(2026, 2, 1), 103.0),
+            (date(2026, 3, 1), 106.09),
+        ),
+    )
+    cf_stream = CashFlowStream.from_recurring(
+        start=date(2026, 1, 15),
+        periods=3,
+        amount=100.0,
+        frequency="month",
+        escalation_policy=policy,
+    )
+
+    assert [flow.amount for flow in cf_stream.entries] == pytest.approx([100.0, 103.0, 106.09])
+
+
+def test_from_recurring_rejects_mixed_simple_and_policy_inputs():
+    policy = ConstantRateEscalation(reference_date=date(2026, 1, 1), rate=0.02)
+
+    with pytest.raises(ValueError, match="cannot be combined"):
+        CashFlowStream.from_recurring(
+            start=date(2026, 1, 1),
+            periods=2,
+            amount=100.0,
+            escalation=0.02,
+            escalation_policy=policy,
+        )
+
+
+def test_from_recurring_rejects_escalation_builder_override():
+    builder = EscalationBuilder(reference_date=date(2026, 1, 1)).constant_rate(0.02)
+
+    with pytest.raises(TypeError, match="call \\.build\\(\\) first"):
+        CashFlowStream.from_recurring(
+            start=date(2026, 1, 1),
+            periods=2,
+            amount=100.0,
+            escalation_policy=builder,
+        )
 
 
 def test_from_streams():
@@ -445,6 +515,21 @@ def test_npv_default_convention(_create_cf_stream):
     assert npv_default == npv_explicit
 
 
+def test_npv_uses_constant_rate_escalation_for_discounting(_create_cf_stream):
+    """NPV matches evaluation through the shared constant-rate policy."""
+    cf_stream = _create_cf_stream[0]
+    valuation_date = date(2026, 1, 31)
+    policy = ConstantRateEscalation(valuation_date, rate=0.1, day_count_convention="actual/365")
+
+    expected = sum(
+        flow.amount / policy.factor(flow.date)
+        for flow in cf_stream.entries
+        if flow.is_cash
+    )
+
+    assert cf_stream.npv(0.1, valuation_date) == pytest.approx(expected)
+
+
 def test_npv_no_cashflows():
     """Tests the CashFlowStream.npv method with a stream that has no cashflows."""
     cf_stream = CashFlowStream([])
@@ -521,6 +606,28 @@ def test_with_recurring_forwards_new_escalation_kwargs():
     assert result.entries[0].amount == 100.0
     assert result.entries[1].amount == pytest.approx(50.0 * (1.01**2))
     assert result.entries[2].amount == pytest.approx(50.0 * (1.01**3))
+
+
+def test_with_recurring_forwards_escalation_policy():
+    base = CashFlowStream([CashFlow(100.0, date(2026, 1, 1))])
+    policy = IndexSeriesEscalation(
+        reference_date=date(2026, 1, 1),
+        points=(
+            (date(2026, 1, 1), 100.0),
+            (date(2026, 2, 1), 102.0),
+            (date(2026, 3, 1), 105.0),
+        ),
+    )
+    result = base.with_recurring(
+        start=date(2026, 1, 15),
+        periods=3,
+        amount=50.0,
+        frequency="month",
+        escalation_policy=policy,
+    )
+
+    assert result.entries[0].amount == 100.0
+    assert [flow.amount for flow in result.entries[1:]] == pytest.approx([50.0, 51.0, 52.5])
 
 
 # ---- append tests ----

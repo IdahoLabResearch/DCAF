@@ -8,6 +8,7 @@ For variable OPEX, use ``GenerationStream.to_cost()`` directly.
 from datetime import date
 
 from .cashflows import CashFlowStream, CashFlowTags
+from .escalation import EscalationPolicy
 from .types import Period
 
 def fixed_opex(
@@ -23,6 +24,7 @@ def fixed_opex(
     *,
     escalation_period: Period = "year",
     amount_reference_date: date | None = None,
+    escalation_policy: EscalationPolicy | None = None,
 ) -> CashFlowStream:
     """
     Create a stream of recurring fixed operating expense cashflows.
@@ -50,6 +52,10 @@ def fixed_opex(
     amount_reference_date : date, optional
         Date at which ``amount`` is known. Escalation is evaluated from this
         date to each payment date. Defaults to ``start``.
+    escalation_policy : EscalationPolicy, optional
+        Advanced override for custom escalation behavior. When provided, it
+        must not be combined with ``escalation``, ``escalation_period``, or
+        ``amount_reference_date``.
     label : str
         Label template; ``{n}`` is replaced with the 1-based period index.
         Default is ``"Fixed OPEX {n}"``.
@@ -77,6 +83,7 @@ def fixed_opex(
         escalation=escalation,
         escalation_period=escalation_period,
         amount_reference_date=amount_reference_date,
+        escalation_policy=escalation_policy,
         label=label,
         tags=tags,
     )

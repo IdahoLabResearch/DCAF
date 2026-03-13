@@ -7,7 +7,12 @@ from datetime import date, timedelta
 from typing import Self
 
 from dcaf.cashflows import CashFlow, CashFlowStream, CashFlowTags
-from dcaf.escalation import ConstantRateEscalation
+from dcaf.escalation import (
+    ConstantRateEscalation,
+    EscalationPolicy,
+    _coerce_escalation_policy,
+    _resolve_escalation_policy_override,
+)
 from dcaf.spend_curves import get_spend_curve
 from dcaf.types import (
     InterestTreatment,
@@ -21,6 +26,11 @@ from dcaf.types import (
 )
 from dcaf.utils import time_delta_per_period, timedelta_fractional_years
 
+# This _UNSET sentinel object helps use implement a 3-option handling for modifications
+# to builder class arguments:
+#   1. A value is provided -> use that value
+#   2. `None` is provided -> reset to the default value
+#   3. `_UNSET` is provided -> do nothing
 _UNSET = object()
 
 
@@ -336,7 +346,7 @@ class _ScheduledSpend:
     spend_amount: float
 
 
-def _construction_escalation(config: ConstructionSpendConfig) -> ConstantRateEscalation:
+def _construction_simple_escalation(config: ConstructionSpendConfig) -> ConstantRateEscalation:
     """Normalize construction escalation config into a date-based policy."""
     return ConstantRateEscalation(
         reference_date=config.start_date if config.amount_reference_date is None else config.amount_reference_date,
@@ -386,7 +396,7 @@ def _scheduled_spend_amount(
     config: ConstructionSpendConfig,
     current: date,
     period_end: date,
-    escalation_policy: ConstantRateEscalation,
+    escalation_policy: EscalationPolicy,
 ) -> float:
     """Compute escalated spend allocated to a single period."""
     total_days = (config.end_date - config.start_date).days
@@ -402,10 +412,13 @@ def _scheduled_spend_amount(
     return config.total_cost * spend_fraction * escalation_factor
 
 
-def _scheduled_spends(config: ConstructionSpendConfig) -> list[_ScheduledSpend]:
+def _scheduled_spends(
+    config: ConstructionSpendConfig,
+    escalation_policy: EscalationPolicy | None = None,
+) -> list[_ScheduledSpend]:
     """Expand a validated config into per-period scheduled spend entries."""
     periods = _iter_period_boundaries(config.start_date, config.end_date, config.period)
-    escalation_policy = _construction_escalation(config)
+    effective_policy = _construction_simple_escalation(config) if escalation_policy is None else escalation_policy
     spends: list[_ScheduledSpend] = []
 
     for current, period_end in periods:
@@ -414,7 +427,7 @@ def _scheduled_spends(config: ConstructionSpendConfig) -> list[_ScheduledSpend]:
                 start_date=current,
                 end_date=period_end,
                 booking_date=period_end,
-                spend_amount=_scheduled_spend_amount(config, current, period_end, escalation_policy),
+                spend_amount=_scheduled_spend_amount(config, current, period_end, effective_policy),
             )
         )
 
@@ -457,12 +470,15 @@ def _construction_interest_cashflow(
     )
 
 
-def _build_cashflows(config: ConstructionSpendConfig) -> list[CashFlow]:
+def _build_cashflows(
+    config: ConstructionSpendConfig,
+    escalation_policy: EscalationPolicy | None = None,
+) -> list[CashFlow]:
     """Build raw construction spend and interest cashflows from a config."""
     entries: list[CashFlow] = []
     debt_balance = 0.0
 
-    for spend in _scheduled_spends(config):
+    for spend in _scheduled_spends(config, escalation_policy=escalation_policy):
         entries.append(_construction_spend_cashflow(spend))
 
         if config.financing.debt_fraction == 0.0:
@@ -566,6 +582,7 @@ class ConstructionSpendBuilder:
             escalation_period=escalation_period,
             amount_reference_date=amount_reference_date,
         )
+        self._escalation_policy: EscalationPolicy | None = None
 
     @classmethod
     def from_config(cls, config: ConstructionSpendConfig) -> Self:
@@ -592,6 +609,22 @@ class ConstructionSpendBuilder:
         """
         builder = cls.__new__(cls)
         builder._config = config
+        builder._escalation_policy = None
+        return builder
+
+    def _copy(
+        self,
+        *,
+        config: ConstructionSpendConfig | None = None,
+        escalation_policy: EscalationPolicy | object = _UNSET,
+    ) -> Self:
+        """Return a new builder preserving or overriding private state."""
+        builder = self.__class__.__new__(self.__class__)
+        builder._config = self._config if config is None else config
+        if escalation_policy is _UNSET:
+            builder._escalation_policy = self._escalation_policy
+        else:
+            builder._escalation_policy = escalation_policy
         return builder
 
     @property
@@ -636,7 +669,7 @@ class ConstructionSpendBuilder:
         >>> updated.config.profile.name
         'bell'
         """
-        return self.from_config(dc_replace(self._config, profile=_normalize_profile(profile)))
+        return self._copy(config=dc_replace(self._config, profile=_normalize_profile(profile)))
 
     def curve(self, name: SpendScheduleName) -> Self:
         """Set a named spend profile.
@@ -717,8 +750,8 @@ class ConstructionSpendBuilder:
         >>> updated.config.financing.debt_fraction
         0.75
         """
-        return self.from_config(
-            dc_replace(
+        return self._copy(
+            config=dc_replace(
                 self._config,
                 financing=ConstructionFinancing.debt(
                     debt_fraction,
@@ -726,6 +759,50 @@ class ConstructionSpendBuilder:
                     treatment=treatment,
                 ),
             )
+        )
+
+    def escalation_policy(self, policy: EscalationPolicy | None) -> Self:
+        """Set or clear an advanced construction escalation policy override.
+
+        Parameters
+        ----------
+        policy : EscalationPolicy or None
+            Built escalation policy to apply at each period midpoint. Pass
+            ``None`` to clear any existing override and return to simple
+            keyword-based escalation settings.
+
+        Returns
+        -------
+        ConstructionSpendBuilder
+            New builder with the advanced escalation override applied.
+
+        Examples
+        --------
+        >>> from datetime import date
+        >>> from dcaf.construction import ConstructionSpendBuilder
+        >>> from dcaf.escalation import ConstantRateEscalation
+        >>> builder = ConstructionSpendBuilder(
+        ...     1_000_000,
+        ...     date(2025, 1, 1),
+        ...     date(2026, 1, 1),
+        ...     period="year",
+        ... )
+        >>> base = builder.build()
+        >>> escalated = builder.escalation_policy(
+        ...     ConstantRateEscalation(date(2025, 1, 1), rate=0.03)
+        ... ).build()
+        >>> abs(escalated[0].amount) > abs(base[0].amount)
+        True
+        """
+        cleared_config = dc_replace(
+            self._config,
+            escalation=0.0,
+            escalation_period="year",
+            amount_reference_date=None,
+        )
+        return self._copy(
+            config=cleared_config,
+            escalation_policy=_coerce_escalation_policy(policy),
         )
 
     def escalation(
@@ -767,7 +844,10 @@ class ConstructionSpendBuilder:
             changes["escalation_period"] = escalation_period
         if amount_reference_date is not _UNSET:
             changes["amount_reference_date"] = amount_reference_date
-        return self.from_config(dc_replace(self._config, **changes))
+        return self._copy(
+            config=dc_replace(self._config, **changes),
+            escalation_policy=None,
+        )
 
     def build(self) -> CashFlowStream:
         """Build and return the construction spend ``CashFlowStream``.
@@ -790,7 +870,7 @@ class ConstructionSpendBuilder:
         >>> stream[0].label
         'Construction Spend'
         """
-        return CashFlowStream(_build_cashflows(self._config))
+        return CashFlowStream(_build_cashflows(self._config, escalation_policy=self._escalation_policy))
 
 
 def construction_spend_schedule(
@@ -804,6 +884,7 @@ def construction_spend_schedule(
     escalation: float = 0.0,
     escalation_period: Period = "year",
     amount_reference_date: date | None = None,
+    escalation_policy: EscalationPolicy | None = None,
 ) -> CashFlowStream:
     """Build a construction spend schedule directly.
 
@@ -834,6 +915,10 @@ def construction_spend_schedule(
     amount_reference_date : date, optional
         Date at which ``total_cost`` is known. Escalation is evaluated from this
         date to each spend-period midpoint. Defaults to ``start_date``.
+    escalation_policy : EscalationPolicy, optional
+        Advanced override for custom escalation behavior. When provided, it
+        must not be combined with ``escalation``, ``escalation_period``, or
+        ``amount_reference_date``.
 
     Returns
     -------
@@ -869,7 +954,14 @@ def construction_spend_schedule(
     >>> any(flow.label == "Capitalized Interest" for flow in financed.entries)
     True
     """
-    return ConstructionSpendBuilder(
+    policy_override = _resolve_escalation_policy_override(
+        escalation=escalation,
+        escalation_period=escalation_period,
+        amount_reference_date=amount_reference_date,
+        escalation_policy=escalation_policy,
+        default_escalation_period="year",
+    )
+    builder = ConstructionSpendBuilder(
         total_cost=total_cost,
         start_date=start_date,
         end_date=end_date,
@@ -879,4 +971,7 @@ def construction_spend_schedule(
         escalation=escalation,
         escalation_period=escalation_period,
         amount_reference_date=amount_reference_date,
-    ).build()
+    )
+    if policy_override is not None:
+        builder = builder.escalation_policy(policy_override)
+    return builder.build()

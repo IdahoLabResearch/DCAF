@@ -5,6 +5,7 @@ from datetime import date
 import pytest
 
 from dcaf import CashFlowTags
+from dcaf.escalation import IndexSeriesEscalation
 from dcaf.opex import fixed_opex
 
 
@@ -75,6 +76,26 @@ def test_new_escalation_kwargs_are_forwarded():
     ]
     for i, flow in enumerate(stream.entries):
         assert flow.amount == pytest.approx(expected_amounts[i])
+
+
+def test_escalation_policy_is_forwarded():
+    policy = IndexSeriesEscalation(
+        reference_date=date(2025, 1, 1),
+        points=(
+            (date(2025, 1, 1), 100.0),
+            (date(2025, 2, 1), 102.0),
+            (date(2025, 3, 1), 104.04),
+        ),
+    )
+    stream = fixed_opex(
+        amount=10_000,
+        start=date(2025, 1, 15),
+        periods=3,
+        frequency="month",
+        escalation_policy=policy,
+    )
+
+    assert [flow.amount for flow in stream.entries] == pytest.approx([-10_000.0, -10_200.0, -10_404.0])
 
 
 def test_non_default_frequency():

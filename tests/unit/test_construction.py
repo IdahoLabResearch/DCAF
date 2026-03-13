@@ -15,6 +15,8 @@ from dcaf import (
     FLAT_CURVE,
     LINEAR_CURVE,
     RAMPED_CURVE,
+    EscalationBuilder,
+    IndexSeriesEscalation,
     SpendProfile,
     TRIANGLE_CURVE,
     construction_spend_schedule,
@@ -115,6 +117,50 @@ def test_builder_escalation_preserves_existing_kwargs():
     assert updated.config.escalation == 0.02
     assert updated.config.escalation_period.value == "month"
     assert updated.config.amount_reference_date == date(2024, 1, 1)
+
+
+def test_builder_escalation_policy_resets_simple_config_and_applies_override():
+    policy = IndexSeriesEscalation(
+        reference_date=date(2025, 1, 1),
+        points=((date(2025, 1, 1), 100.0), (date(2026, 1, 1), 110.0)),
+    )
+    builder = (
+        ConstructionSpendBuilder(1_000_000, date(2025, 7, 1), date(2026, 7, 1), period="year")
+        .escalation(0.03, amount_reference_date=date(2025, 1, 1))
+        .escalation_policy(policy)
+    )
+
+    assert builder.config.escalation == 0.0
+    assert builder.config.escalation_period.value == "year"
+    assert builder.config.amount_reference_date is None
+
+    midpoint = _midpoint_date(date(2025, 7, 1), date(2026, 7, 1))
+    stream = builder.build()
+    assert stream.entries[0].amount == pytest.approx(-1_000_000 * policy.factor(midpoint))
+
+
+def test_builder_escalation_after_policy_returns_to_simple_behavior():
+    policy = IndexSeriesEscalation(
+        reference_date=date(2025, 1, 1),
+        points=((date(2025, 1, 1), 100.0), (date(2026, 1, 1), 110.0)),
+    )
+    builder = (
+        ConstructionSpendBuilder(1_000_000, date(2025, 7, 1), date(2026, 7, 1), period="year")
+        .escalation_policy(policy)
+        .escalation(0.05)
+    )
+
+    midpoint = _midpoint_date(date(2025, 7, 1), date(2026, 7, 1))
+    expected_amount = -1_000_000 * _annual_factor(date(2025, 7, 1), midpoint, 0.05)
+    stream = builder.build()
+    assert stream.entries[0].amount == pytest.approx(expected_amount)
+
+
+def test_builder_escalation_policy_rejects_unbuilt_builder():
+    with pytest.raises(TypeError, match="call \\.build\\(\\) first"):
+        ConstructionSpendBuilder(1_000_000, date(2025, 1, 1), date(2026, 1, 1)).escalation_policy(
+            EscalationBuilder(reference_date=date(2025, 1, 1)).constant_rate(0.02)
+        )
 
 
 def test_profile_selection_is_single_source_of_truth():
@@ -473,6 +519,39 @@ def test_construction_supports_earlier_amount_reference_date():
     midpoint = _midpoint_date(start_date, end_date)
     expected_amount = -1_000_000 * _annual_factor(reference_date, midpoint, 0.12)
     assert stream.entries[0].amount == pytest.approx(expected_amount)
+
+
+def test_construction_supports_escalation_policy():
+    start_date = date(2025, 7, 1)
+    end_date = date(2026, 7, 1)
+    policy = IndexSeriesEscalation(
+        reference_date=date(2025, 1, 1),
+        points=((date(2025, 1, 1), 100.0), (date(2026, 1, 1), 110.0)),
+    )
+    stream = construction_spend_schedule(
+        1_000_000,
+        start_date,
+        end_date,
+        period="year",
+        profile="flat",
+        escalation_policy=policy,
+    )
+
+    midpoint = _midpoint_date(start_date, end_date)
+    assert stream.entries[0].amount == pytest.approx(-1_000_000 * policy.factor(midpoint))
+
+
+def test_construction_rejects_mixed_simple_and_policy_inputs():
+    policy = ConstantRateEscalation(reference_date=date(2025, 1, 1), rate=0.02)
+
+    with pytest.raises(ValueError, match="cannot be combined"):
+        construction_spend_schedule(
+            1_000_000,
+            date(2025, 1, 1),
+            date(2026, 1, 1),
+            escalation=0.02,
+            escalation_policy=policy,
+        )
 
 
 def test_debt_financing_does_not_change_total_capex_outflow():

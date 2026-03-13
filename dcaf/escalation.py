@@ -12,16 +12,16 @@ from __future__ import annotations
 from bisect import bisect_right
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Literal, Protocol
+from typing import Literal, Protocol, cast, runtime_checkable
 
-from dcaf.types import DayCountConvention, Period
+from dcaf.types import DayCountConvention, Period, parse_period
 from dcaf.utils import compound_factor, elapsed_periods
 
 type IndexPoint = tuple[date, float]
 type IndexSeries = tuple[IndexPoint, ...]
 type IndexInterpolation = Literal["step"]
 
-
+@runtime_checkable
 class EscalationPolicy(Protocol):
     """Protocol for date-based escalation policies.
 
@@ -63,6 +63,72 @@ class EscalationPolicy(Protocol):
             ``reference_date`` to its escalated value at ``target_date``.
         """
         ...
+
+
+def _coerce_escalation_policy(escalation_policy: object | None) -> EscalationPolicy | None:
+    """Validate and return a user-supplied escalation policy override
+
+    NOTE: takes generic `object` type instead of specifying an `EscalationPolicy` object because
+    this function's purpose is runtime validation. At runtime, especially for private functions,
+    type hints don't actually mean much. The user could've passed in anything the want. Now we
+    have to make sure what they passed in was valid.
+    """
+    if escalation_policy is None:
+        return None
+
+    # This sets a clear boundary: give us a fully configured escalation policy to work with, not
+    # a partially-configured builder object
+    if isinstance(escalation_policy, EscalationBuilder):
+        raise TypeError("escalation_policy does not accept EscalationBuilder; call .build() first")
+
+    if not isinstance(escalation_policy, EscalationPolicy):
+        raise TypeError("escalation_policy must provide reference_date and factor(target_date)")
+
+    # NOTE: `typing.cast` is only for static typing; the runtime conformance check is above.
+    return cast(EscalationPolicy, escalation_policy)
+
+
+def _resolve_escalation_policy_override(
+    *,
+    escalation: float,
+    escalation_period: Period,
+    amount_reference_date: date | None,
+    escalation_policy: object | None,
+    default_escalation_period: Period = "year",
+) -> EscalationPolicy | None:
+    """Normalize the optional advanced policy input for public APIs."""
+    policy = _coerce_escalation_policy(escalation_policy)
+    if policy is None:
+        return None
+
+    # Enforcing mutual exclusivity for the simple float/date API and providing an
+    # escalation_policy value
+    if (
+        escalation != 0.0
+        or parse_period(str(escalation_period)) is not parse_period(str(default_escalation_period))
+        or amount_reference_date is not None
+    ):
+        raise ValueError(
+            "escalation_policy cannot be combined with escalation, escalation_period, "
+            "or amount_reference_date"
+        )
+
+    return policy
+
+
+def _constant_discount_policy(
+    *,
+    valuation_date: date,
+    rate: float,
+    convention: DayCountConvention = "actual/365",
+) -> "ConstantRateEscalation":
+    """Build the internal constant-rate policy used for discounting."""
+    return ConstantRateEscalation(
+        reference_date=valuation_date,
+        rate=rate,
+        period="year",
+        day_count_convention=convention,
+    )
 
 #===================================================================
 # ESCALATION POLICY IMPLEMENTATIONS

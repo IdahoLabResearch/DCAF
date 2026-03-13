@@ -21,19 +21,34 @@ from typing import (
 )
 
 from dcaf._streams import BaseGroup, BaseStream
-from dcaf.escalation import ConstantRateEscalation
+from dcaf.escalation import (
+    ConstantRateEscalation,
+    EscalationPolicy,
+    _constant_discount_policy,
+    _resolve_escalation_policy_override,
+)
 from dcaf.types import DayCountConvention, Period, SupportsLessThan
-from dcaf.utils import compound_factor, time_delta_per_period, timedelta_fractional_years
+from dcaf.utils import time_delta_per_period
 
 
 def _recurring_escalation(
     *,
     start: date,
     escalation: float,
-    escalation_period: Period,
-    amount_reference_date: date | None,
-) -> ConstantRateEscalation:
+        escalation_period: Period,
+        amount_reference_date: date | None,
+        escalation_policy: EscalationPolicy | None,
+) -> EscalationPolicy:
     """Normalize recurring cashflow escalation kwargs into a date-based policy."""
+    policy_override = _resolve_escalation_policy_override(
+        escalation=escalation,
+        escalation_period=escalation_period,
+        amount_reference_date=amount_reference_date,
+        escalation_policy=escalation_policy,
+        default_escalation_period="year",
+    )
+    if policy_override is not None:
+        return policy_override
     return ConstantRateEscalation(
         reference_date=start if amount_reference_date is None else amount_reference_date,
         rate=escalation,
@@ -543,6 +558,7 @@ class CashFlowStream(BaseStream[CashFlow]):
         *,
         escalation_period: Period = "year",
         amount_reference_date: date | None = None,
+        escalation_policy: EscalationPolicy | None = None,
     ) -> "CashFlowStream":
         """
         Generate recurring cashflows with optional escalation.
@@ -581,6 +597,10 @@ class CashFlowStream(BaseStream[CashFlow]):
         amount_reference_date : date, optional
             Date at which ``amount`` is known. Escalation is evaluated from this
             date to each payment date. Defaults to ``start``.
+        escalation_policy : EscalationPolicy, optional
+            Advanced override for custom escalation behavior. When provided, it
+            must not be combined with ``escalation``, ``escalation_period``, or
+            ``amount_reference_date``.
         label : str, optional
             Label for the cashflows. Can include {n} placeholder for period number
             (1-indexed). Default is "Recurring Payment".
@@ -607,6 +627,7 @@ class CashFlowStream(BaseStream[CashFlow]):
             escalation=escalation,
             escalation_period=escalation_period,
             amount_reference_date=amount_reference_date,
+            escalation_policy=escalation_policy,
         )
         entries = []
         for i in range(periods):
@@ -742,6 +763,7 @@ class CashFlowStream(BaseStream[CashFlow]):
         *,
         escalation_period: Period = "year",
         amount_reference_date: date | None = None,
+        escalation_policy: EscalationPolicy | None = None,
     ) -> "CashFlowStream":
         """
         Chain ``from_recurring`` onto the current stream.
@@ -762,6 +784,7 @@ class CashFlowStream(BaseStream[CashFlow]):
             escalation=escalation,
             escalation_period=escalation_period,
             amount_reference_date=amount_reference_date,
+            escalation_policy=escalation_policy,
             label=label,
             is_cash=is_cash,
             tags=tags,
@@ -1435,17 +1458,15 @@ class CashFlowStream(BaseStream[CashFlow]):
           compounds the value forward to the valuation date.
         - Returns 0.0 for empty streams or streams with no cash flows.
         """
+        discount_policy = _constant_discount_policy(
+            valuation_date=valuation_date,
+            rate=rate,
+            convention=convention,
+        )
         total = 0.0
         for flow in self.entries:
             if not flow.is_cash:
                 continue
-            years = timedelta_fractional_years(valuation_date, flow.date, convention)
-
-            # Discount or compound the cashflow to the valuation date
-            # Formula: PV = CF / (1 + r)^t
-            # If t > 0 (future): discounts back to present
-            # If t < 0 (past): compounds forward to present (dividing by (1+r)^negative)
-            # If t = 0 (same date): no adjustment needed
-            total += flow.amount / compound_factor(rate, years)
+            total += flow.amount / discount_policy.factor(flow.date)
 
         return total

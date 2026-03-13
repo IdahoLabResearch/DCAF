@@ -5,6 +5,7 @@ from datetime import date
 import pytest
 
 from dcaf import CashFlowStream, CashFlowTags, Generation, GenerationGroup, GenerationStream
+from dcaf.escalation import ConstantRateEscalation, IndexSeriesEscalation
 
 
 def _annual_factor(start: date, end: date, rate: float) -> float:
@@ -403,6 +404,21 @@ def test_discounted_sum_zero_rate():
     assert abs(gs.discounted_sum(0.0, date(2030, 1, 1)) - gs.sum()) < 1e-6
 
 
+def test_discounted_sum_uses_constant_rate_escalation_for_discounting():
+    """Discounted sum matches evaluation through the shared constant-rate policy."""
+    valuation_date = date(2030, 1, 1)
+    gs = GenerationStream([
+        Generation(1000.0, date(2029, 1, 1)),
+        Generation(1000.0, date(2030, 1, 1)),
+        Generation(1000.0, date(2031, 1, 1)),
+    ])
+    policy = ConstantRateEscalation(valuation_date, rate=0.10, day_count_convention="actual/365")
+
+    expected = sum(entry.amount_mwh / policy.factor(entry.date) for entry in gs.entries)
+
+    assert gs.discounted_sum(rate=0.10, valuation_date=valuation_date) == pytest.approx(expected)
+
+
 # === to_revenue ===
 
 
@@ -452,6 +468,26 @@ def test_to_revenue_escalation_uses_entry_dates():
         assert flow.amount == pytest.approx(expected_amounts[i])
 
 
+def test_to_revenue_supports_escalation_policy_parity_with_constant_rate():
+    gs = GenerationStream([
+        Generation(1000.0, date(2030, 7, 1)),
+        Generation(1000.0, date(2031, 7, 1)),
+    ])
+    simple = gs.to_revenue(
+        price_per_mwh=50.0,
+        escalation=0.10,
+        amount_reference_date=date(2030, 1, 1),
+    )
+    advanced = gs.to_revenue(
+        price_per_mwh=50.0,
+        escalation_policy=ConstantRateEscalation(date(2030, 1, 1), rate=0.10),
+    )
+
+    assert [flow.amount for flow in advanced.entries] == pytest.approx(
+        [flow.amount for flow in simple.entries]
+    )
+
+
 def test_to_revenue_empty():
     """Empty generation produces empty cashflow stream."""
     cfs = GenerationStream().to_revenue(price_per_mwh=50.0)
@@ -492,6 +528,25 @@ def test_to_cost_supports_explicit_nonannual_escalation_period():
     expected_amounts = [-10_000.0, -10_200.0, -10_404.0]
     for i, flow in enumerate(cfs.entries):
         assert flow.amount == pytest.approx(expected_amounts[i])
+
+
+def test_to_cost_supports_index_series_escalation_policy():
+    gs = GenerationStream([
+        Generation(1000.0, date(2030, 1, 15)),
+        Generation(1000.0, date(2030, 2, 15)),
+        Generation(1000.0, date(2030, 3, 15)),
+    ])
+    policy = IndexSeriesEscalation(
+        reference_date=date(2030, 1, 1),
+        points=(
+            (date(2030, 1, 1), 100.0),
+            (date(2030, 2, 1), 103.0),
+            (date(2030, 3, 1), 106.09),
+        ),
+    )
+    cfs = gs.to_cost(rate_per_mwh=10.0, escalation_policy=policy)
+
+    assert [flow.amount for flow in cfs.entries] == pytest.approx([-10_000.0, -10_300.0, -10_609.0])
 
 
 # === to_ptc ===
@@ -543,6 +598,19 @@ def test_to_ptc_supports_earlier_amount_reference_date():
     for i, flow in enumerate(cfs.entries):
         assert flow.date == expected_dates[i]
         assert flow.amount == pytest.approx(expected_amounts[i])
+
+
+def test_to_ptc_rejects_mixed_simple_and_policy_inputs():
+    gs = GenerationStream([Generation(1000.0, date(2030, 1, 1))])
+    policy = ConstantRateEscalation(reference_date=date(2030, 1, 1), rate=0.02)
+
+    with pytest.raises(ValueError, match="cannot be combined"):
+        gs.to_ptc(
+            rate_per_mwh=10.0,
+            years=5,
+            escalation=0.02,
+            escalation_policy=policy,
+        )
 
 
 def test_to_ptc_empty():
