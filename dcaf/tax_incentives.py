@@ -1,17 +1,158 @@
-"""IRA tax incentive functions (Section 48E ITC).
+"""Tax incentive functions for generation and capital investment.
 
-This module provides functions for computing Investment Tax Credits (ITC) under the
-Inflation Reduction Act. It follows the DCAF pattern of simple, composable generator
-functions that work with CashFlowStream objects.
+This module provides composable functions for computing production and investment
+tax incentives from DCAF stream objects.
 
 Functions:
-    itc: Compute ITC credit cashflow from a CAPEX stream
+    ptc: Compute Production Tax Credit (PTC) cashflows from a generation stream
+    itc: Compute Investment Tax Credit (ITC) credit cashflow from a CAPEX stream
     itc_adjusted_basis: Compute adjusted depreciable basis after ITC (IRS 50% basis-reduction rule)
 """
 
 from datetime import date
 
 from dcaf.cashflows import CashFlow, CashFlowStream, CashFlowTags
+from dcaf.escalation import EscalationPolicy
+from dcaf.generation import GenerationStream, _generation_escalation
+from dcaf.types import Period
+
+
+def ptc(
+    generation_stream: GenerationStream,
+    rate_per_mwh: float,
+    years: int,
+    escalation: float = 0.0,
+    label: str = "PTC {n}",
+    tags: frozenset[CashFlowTags] = frozenset({CashFlowTags.REVENUE}),
+    *,
+    escalation_period: Period = "year",
+    amount_reference_date: date | None = None,
+    escalation_policy: EscalationPolicy | None = None,
+) -> CashFlowStream:
+    """
+    Compute Production Tax Credit cashflows from a generation stream.
+
+    This function converts eligible generation entries into positive credit
+    cashflows using a per-MWh PTC rate. Eligibility is limited to entries
+    dated within the first ``years`` calendar years beginning with the earliest
+    generation entry date in ``generation_stream``.
+
+    The PTC rate may be escalated over time using the same escalation policy
+    conventions used elsewhere in the generation-to-cashflow bridge. A simple
+    scalar ``escalation`` may be provided for constant compounding, or an
+    explicit ``escalation_policy`` may be supplied for custom escalation
+    behavior.
+
+    Parameters
+    ----------
+    generation_stream : GenerationStream
+        Stream of generation entries to evaluate for PTC eligibility.
+    rate_per_mwh : float
+        Base Production Tax Credit rate in dollars per MWh.
+    years : int
+        Number of years of PTC eligibility, measured from the earliest entry
+        date in ``generation_stream``. Entries with ``entry.date.year`` greater
+        than or equal to ``first_entry_year + years`` are excluded.
+    escalation : float, optional
+        Compound escalation rate for the PTC value, interpreted over
+        ``escalation_period``. With the default ``escalation_period="year"``,
+        this is an annual escalation rate. Default is ``0.0``.
+    label : str, optional
+        Label template applied to each generated credit cashflow. If ``"{n}"``
+        is present, it is replaced with the 1-based count of eligible PTC
+        entries. Default is ``"PTC {n}"``.
+    tags : frozenset[CashFlowTags], optional
+        Tags applied to each generated credit cashflow. Default is
+        ``frozenset({CashFlowTags.REVENUE})``.
+    escalation_period : Period, optional
+        Compounding period associated with ``escalation``. Default is
+        ``"year"``.
+    amount_reference_date : date, optional
+        Date at which ``rate_per_mwh`` is known. If omitted, the earliest
+        generation entry date is used as the escalation reference point.
+    escalation_policy : EscalationPolicy, optional
+        Advanced override for custom escalation behavior. When provided, it
+        must not be combined with ``escalation``, ``escalation_period``, or
+        ``amount_reference_date``.
+
+    Returns
+    -------
+    CashFlowStream
+        Cashflow stream containing positive PTC credit cashflows for eligible
+        generation entries only. Returns an empty stream if
+        ``generation_stream`` is empty.
+
+    Raises
+    ------
+    ValueError
+        If ``escalation_policy`` is combined with simple escalation inputs that
+        are intended to be mutually exclusive.
+
+    Examples
+    --------
+    Basic PTC conversion over a 10-year eligibility window:
+
+    >>> from datetime import date
+    >>> from dcaf import GenerationStream, ptc
+    >>> generation = GenerationStream.from_capacity(1000, 0.92, date(2025, 1, 1), 20)
+    >>> credits = ptc(generation, rate_per_mwh=27.5, years=10)
+    >>> credits.count()
+    10
+
+    Apply annual escalation to the PTC value:
+
+    >>> credits = ptc(generation, rate_per_mwh=27.5, years=10, escalation=0.02)
+    >>> credits.entries[1].amount > credits.entries[0].amount
+    True
+
+    Use an earlier reference date for escalation:
+
+    >>> from dcaf import Generation
+    >>> generation = GenerationStream([
+    ...     Generation(1000.0, date(2030, 7, 1)),
+    ...     Generation(1000.0, date(2030, 8, 1)),
+    ... ])
+    >>> credits = ptc(
+    ...     generation,
+    ...     rate_per_mwh=10.0,
+    ...     years=5,
+    ... )
+    >>> credits.count()
+    2
+    >>> credits.sum()
+    20000.0
+    """
+    if not generation_stream.entries:
+        return CashFlowStream()
+
+    first_entry_date = min(entry.date for entry in generation_stream.entries)
+    cutoff_year = first_entry_date.year + years
+    policy = _generation_escalation(
+        entries=generation_stream.entries,
+        escalation=escalation,
+        escalation_period=escalation_period,
+        amount_reference_date=amount_reference_date,
+        escalation_policy=escalation_policy,
+    )
+
+    entries: list[CashFlow] = []
+    n = 0
+    for entry in generation_stream.entries:
+        if entry.date.year >= cutoff_year:
+            continue
+        n += 1
+        ptc_rate = rate_per_mwh * policy.factor(entry.date)
+        flow_label = label.format(n=n) if "{n}" in label else label
+        entries.append(
+            CashFlow(
+                amount=entry.amount_mwh * ptc_rate,
+                date=entry.date,
+                label=flow_label,
+                is_cash=True,
+                tags=tags,
+            )
+        )
+    return CashFlowStream(entries)
 
 
 def itc(

@@ -1,4 +1,4 @@
-"""Tests for IRA tax incentive functions (ITC)."""
+"""Tests for tax incentive functions."""
 
 from datetime import date
 
@@ -6,7 +6,13 @@ import pytest
 
 from dcaf.cashflows import CashFlow, CashFlowStream, CashFlowTags
 from dcaf.depreciation import macrs_schedule
-from dcaf.tax_incentives import itc, itc_adjusted_basis
+from dcaf.escalation import ConstantRateEscalation
+from dcaf.generation import Generation, GenerationStream
+from dcaf.tax_incentives import itc, itc_adjusted_basis, ptc
+
+
+def _annual_factor(start: date, end: date, rate: float) -> float:
+    return (1.0 + rate) ** ((end - start).days / 365.0)
 
 
 def _capex(amount: float, dt: date, label: str = "CAPEX") -> CashFlow:
@@ -83,6 +89,75 @@ class TestITC:
         result = itc(capex, rate=0.30, placed_in_service=date(2030, 1, 1))
 
         assert CashFlowTags.REVENUE in result.entries[0].tags
+
+
+class TestPTC:
+    """Tests for ptc()."""
+
+    def test_basic_ptc(self):
+        """PTC applies only within the eligibility window."""
+        generation = GenerationStream([
+            Generation(1000.0, date(2030, 1, 1)),
+            Generation(1000.0, date(2031, 1, 1)),
+            Generation(1000.0, date(2032, 1, 1)),
+            Generation(1000.0, date(2033, 1, 1)),
+        ])
+        result = ptc(generation, rate_per_mwh=27.5, years=2)
+
+        assert result.count() == 2
+        assert result.entries[0].amount == pytest.approx(27_500.0)
+
+    def test_ptc_escalation(self):
+        """PTC rate escalates."""
+        generation = GenerationStream([
+            Generation(1000.0, date(2030, 1, 1)),
+            Generation(1000.0, date(2031, 1, 1)),
+        ])
+        result = ptc(generation, rate_per_mwh=10.0, years=5, escalation=0.02)
+
+        assert result.entries[0].amount == pytest.approx(10_000.0)
+        assert result.entries[1].amount == pytest.approx(10_200.0)
+
+    def test_ptc_supports_earlier_amount_reference_date(self):
+        """PTC rates can be escalated from an earlier known-value date."""
+        reference_date = date(2030, 1, 1)
+        generation = GenerationStream([
+            Generation(1000.0, date(2030, 7, 1)),
+            Generation(1000.0, date(2030, 8, 1)),
+        ])
+        result = ptc(
+            generation,
+            rate_per_mwh=10.0,
+            years=5,
+            escalation=0.12,
+            amount_reference_date=reference_date,
+        )
+        expected_dates = [date(2030, 7, 1), date(2030, 8, 1)]
+        expected_amounts = [
+            1000.0 * 10.0 * _annual_factor(reference_date, flow_date, 0.12)
+            for flow_date in expected_dates
+        ]
+
+        for i, flow in enumerate(result.entries):
+            assert flow.date == expected_dates[i]
+            assert flow.amount == pytest.approx(expected_amounts[i])
+
+    def test_ptc_rejects_mixed_simple_and_policy_inputs(self):
+        generation = GenerationStream([Generation(1000.0, date(2030, 1, 1))])
+        policy = ConstantRateEscalation(reference_date=date(2030, 1, 1), rate=0.02)
+
+        with pytest.raises(ValueError, match="cannot be combined"):
+            ptc(
+                generation,
+                rate_per_mwh=10.0,
+                years=5,
+                escalation=0.02,
+                escalation_policy=policy,
+            )
+
+    def test_ptc_empty(self):
+        """Empty generation produces empty PTC stream."""
+        assert ptc(GenerationStream(), rate_per_mwh=27.5, years=10).count() == 0
 
 
 class TestITCAdjustedBasis:

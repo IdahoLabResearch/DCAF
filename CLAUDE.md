@@ -37,7 +37,7 @@ uv run ruff format dcaf/
 The public API is re-exported from `dcaf/__init__.py`. Business logic is organized across modules in `dcaf/core/`:
 
 - **`cashflows.py`** — Core cashflow abstractions (CashFlow, CashFlowStream, CashFlowGroup, CashFlowTags)
-- **`generation.py`** — Physical energy generation tracking (Generation, GenerationStream, GenerationGroup) with conversion to cashflows via `to_revenue()`, `to_cost()`, `to_ptc()`
+- **`generation.py`** — Physical energy generation tracking (Generation, GenerationStream, GenerationGroup) with conversion to cashflows via `to_revenue()` and `to_cost()`
 - **`depreciation.py`** — MACRS depreciation schedules (`macrs_schedule()`, IRS rate tables for half-year and mid-quarter conventions)
 - **`types.py`** — Shared type aliases (`Period`, `DayCountConvention`, `MACRSPropertyClass`, `MACRSConvention`, `SupportsLessThan`)
 - **`utils.py`** — Shared utilities (`period_start`, `timedelta_fractional_years`, `compound_factor`, `hours_per_period`, `time_delta_per_period`)
@@ -49,7 +49,7 @@ The public API is re-exported from `dcaf/__init__.py`. Business logic is organiz
 - **`CashFlowGroup[KeyType]`** — Generic dict-like container mapping keys to `CashFlowStream`s. Produced by `group_by()`, `group_by_tag()`, `group_by_period()`. Supports `aggregate()`, `apply_to_groups()`, and `ungroup()`.
 - **`CashFlowTags`** — Enum for categorization: REVENUE, EXPENSE, TAXABLE, TAX_DEDUCTIBLE, CAPEX, OPEX, DEPRECIATION.
 - **`Generation`** — Frozen dataclass for a single generation data point with `amount_mwh`, `date`, `source`, `carrier`, and `label`.
-- **`GenerationStream`** — Container for `Generation` objects mirroring the CashFlowStream pattern. Supports `from_capacity()` factory, `filter()`, `group_by()`, `sum()`, `discounted_sum()`, and conversion methods (`to_revenue()`, `to_cost()`, `to_ptc()`) that produce `CashFlowStream` objects.
+- **`GenerationStream`** — Container for `Generation` objects mirroring the CashFlowStream pattern. Supports `from_capacity()` factory, `filter()`, `group_by()`, `sum()`, `discounted_sum()`, and conversion methods (`to_revenue()`, `to_cost()`) that produce `CashFlowStream` objects.
 - **`GenerationGroup[KeyType]`** — Generic dict-like container mapping keys to `GenerationStream`s. Supports grouping by `source`, `carrier`, or `period`.
 
 ### Key Design Patterns
@@ -59,7 +59,7 @@ The public API is re-exported from `dcaf/__init__.py`. Business logic is organiz
 - **Exhaustive matching**: Uses `match/case` with `assert_never()` instead of catch-all exceptions.
 - **Modern Python 3.13+**: PEP 695 type aliases (`type X = ...`), generic syntax on methods (`group_by[KeyType]`), `Literal` types for constrained parameters.
 - **Day count conventions**: NPV calculations use configurable `DayCountConvention` (currently `"actual/365"`), centralized in `utils.timedelta_fractional_years()`.
-- **Generation-to-cashflow bridge**: `GenerationStream` converts physical quantities (MWh) to financial cashflows, supporting price escalation and PTC modeling.
+- **Generation-to-cashflow bridge**: `GenerationStream` converts physical quantities (MWh) to financial cashflows, while tax incentives like PTC are modeled in `tax_incentives.py`.
 
 ## Code Style
 
@@ -67,3 +67,10 @@ The public API is re-exported from `dcaf/__init__.py`. Business logic is organiz
 - Line length: 100 characters
 - Ruff for linting/formatting, mypy for type checking
 - Comprehensive type hints throughout, including generics and protocols
+
+## Documentation
+
+- Public-facing functionality must have thorough NumPy-style docstrings.
+- Public docstrings should cover purpose, parameters, returns, raised exceptions when relevant, and include examples.
+- Private functionality must have concise descriptive docstrings explaining what the code does and any important design decisions affecting its implementation or library use.
+- When refactoring or adding APIs, update docstrings as part of the change rather than as a follow-up.
