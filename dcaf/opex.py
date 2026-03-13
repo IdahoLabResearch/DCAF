@@ -20,6 +20,9 @@ def fixed_opex(
     tags: frozenset[CashFlowTags] = frozenset(
         {CashFlowTags.EXPENSE, CashFlowTags.OPEX, CashFlowTags.TAX_DEDUCTIBLE}
     ),
+    *,
+    escalation_period: Period = "year",
+    amount_reference_date: date | None = None,
 ) -> CashFlowStream:
     """
     Create a stream of recurring fixed operating expense cashflows.
@@ -36,7 +39,17 @@ def fixed_opex(
         Payment frequency. One of ``"day"``, ``"month"``, ``"quarter"``, ``"year"``.
         Default is ``"year"``.
     escalation : float
-        Per-period compound escalation rate (e.g. ``0.025`` for 2.5%). Default is ``0.0``.
+        Compound escalation rate, interpreted over ``escalation_period``.
+        With the default ``escalation_period="year"``, ``0.025`` means 2.5%
+        year-on-year growth. Pass a different ``escalation_period`` to model
+        rates quoted per month, quarter, or day. Default is ``0.0``.
+    escalation_period : Period
+        Compounding period associated with ``escalation``. Default is ``"year"``.
+        Pass a non-annual value such as ``"month"`` to model escalation rates
+        quoted per month, quarter, or day.
+    amount_reference_date : date, optional
+        Date at which ``amount`` is known. Escalation is evaluated from this
+        date to each payment date. Defaults to ``start``.
     label : str
         Label template; ``{n}`` is replaced with the 1-based period index.
         Default is ``"Fixed OPEX {n}"``.
@@ -62,6 +75,8 @@ def fixed_opex(
         periods=periods,
         frequency=frequency,
         escalation=escalation,
+        escalation_period=escalation_period,
+        amount_reference_date=amount_reference_date,
         label=label,
         tags=tags,
     )

@@ -1,7 +1,7 @@
 """Tests for construction spend schedule APIs and helpers."""
 
 import inspect
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
@@ -9,6 +9,7 @@ from dcaf import (
     BELL_CURVE,
     CashFlowStream,
     CashFlowTags,
+    ConstantRateEscalation,
     ConstructionFinancing,
     ConstructionSpendBuilder,
     FLAT_CURVE,
@@ -20,6 +21,14 @@ from dcaf import (
 )
 from dcaf.construction import ConstructionSpendConfig, _validate_schedule
 from dcaf.utils import timedelta_fractional_years
+
+
+def _annual_factor(start: date, end: date, rate: float) -> float:
+    return (1.0 + rate) ** ((end - start).days / 365.0)
+
+
+def _midpoint_date(start: date, end: date) -> date:
+    return start + timedelta(days=((end - start).days // 2))
 
 
 @pytest.mark.parametrize(
@@ -87,8 +96,25 @@ def test_builder_is_immutable():
     )
     escalated = base.escalation(0.05)
 
-    assert base.config.escalation_rate == 0.0
-    assert escalated.config.escalation_rate == 0.05
+    assert base.config.escalation == 0.0
+    assert escalated.config.escalation == 0.05
+
+
+def test_builder_escalation_preserves_existing_kwargs():
+    base = ConstructionSpendBuilder(
+        1_000_000,
+        date(2025, 1, 1),
+        date(2026, 1, 1),
+    ).escalation(
+        0.01,
+        escalation_period="month",
+        amount_reference_date=date(2024, 1, 1),
+    )
+    updated = base.escalation(0.02)
+
+    assert updated.config.escalation == 0.02
+    assert updated.config.escalation_period.value == "month"
+    assert updated.config.amount_reference_date == date(2024, 1, 1)
 
 
 def test_profile_selection_is_single_source_of_truth():
@@ -385,12 +411,68 @@ def test_escalation_increases_total():
         date(2025, 1, 1),
         date(2027, 1, 1),
         profile="linear",
-        escalation_rate=0.05,
+        escalation=0.05,
     )
 
     base_total = abs(sum(cf.amount for cf in base.entries))
     escalated_total = abs(sum(cf.amount for cf in escalated.entries))
     assert escalated_total > base_total
+
+
+def test_construction_escalation_uses_period_midpoint():
+    start_date = date(2025, 1, 1)
+    end_date = date(2026, 1, 1)
+    stream = construction_spend_schedule(
+        1_000_000,
+        start_date,
+        end_date,
+        period="year",
+        profile="flat",
+        escalation=0.05,
+    )
+
+    midpoint = _midpoint_date(start_date, end_date)
+    expected_amount = -1_000_000 * _annual_factor(start_date, midpoint, 0.05)
+    assert len(stream.entries) == 1
+    assert stream.entries[0].amount == pytest.approx(expected_amount)
+
+
+def test_construction_supports_explicit_nonannual_escalation_period():
+    start_date = date(2025, 1, 1)
+    end_date = date(2026, 1, 1)
+    stream = construction_spend_schedule(
+        1_000_000,
+        start_date,
+        end_date,
+        period="year",
+        profile="flat",
+        escalation=0.01,
+        escalation_period="month",
+    )
+
+    midpoint = _midpoint_date(start_date, end_date)
+    policy = ConstantRateEscalation(start_date, rate=0.01, period="month")
+    expected_amount = -1_000_000 * policy.factor(midpoint)
+    assert stream.entries[0].amount == pytest.approx(expected_amount)
+
+
+def test_construction_supports_earlier_amount_reference_date():
+    start_date = date(2025, 7, 1)
+    end_date = date(2026, 7, 1)
+    reference_date = date(2025, 1, 1)
+    stream = construction_spend_schedule(
+        1_000_000,
+        start_date,
+        end_date,
+        period="year",
+        profile="flat",
+        escalation=0.12,
+        amount_reference_date=reference_date,
+    )
+
+    midpoint = _midpoint_date(start_date, end_date)
+    expected_amount = -1_000_000 * _annual_factor(reference_date, midpoint, 0.12)
+    assert stream.entries[0].amount == pytest.approx(expected_amount)
 
 
 def test_debt_financing_does_not_change_total_capex_outflow():

@@ -7,6 +7,10 @@ import pytest
 from dcaf import CashFlowStream, CashFlowTags, Generation, GenerationGroup, GenerationStream
 
 
+def _annual_factor(start: date, end: date, rate: float) -> float:
+    return (1.0 + rate) ** ((end - start).days / 365.0)
+
+
 # === Generation dataclass ===
 
 
@@ -429,6 +433,25 @@ def test_to_revenue_escalation():
     assert abs(cfs.entries[2].amount - 60_500.0) < 1e-6
 
 
+def test_to_revenue_escalation_uses_entry_dates():
+    """Revenue escalation uses exact entry dates rather than integer year steps."""
+    reference_date = date(2030, 6, 1)
+    gs = GenerationStream([
+        Generation(1000.0, reference_date),
+        Generation(1000.0, date(2031, 1, 1)),
+        Generation(1000.0, date(2031, 6, 1)),
+    ])
+    cfs = gs.to_revenue(price_per_mwh=50.0, escalation=0.10)
+    expected_dates = [reference_date, date(2031, 1, 1), date(2031, 6, 1)]
+    expected_amounts = [
+        1000.0 * 50.0 * _annual_factor(reference_date, flow_date, 0.10)
+        for flow_date in expected_dates
+    ]
+    for i, flow in enumerate(cfs.entries):
+        assert flow.date == expected_dates[i]
+        assert flow.amount == pytest.approx(expected_amounts[i])
+
+
 def test_to_revenue_empty():
     """Empty generation produces empty cashflow stream."""
     cfs = GenerationStream().to_revenue(price_per_mwh=50.0)
@@ -458,6 +481,19 @@ def test_to_cost_escalation():
     assert abs(cfs.entries[1].amount - (-10_500.0)) < 1e-6
 
 
+def test_to_cost_supports_explicit_nonannual_escalation_period():
+    """Cost escalation period can be specified independently of entry cadence."""
+    gs = GenerationStream([
+        Generation(1000.0, date(2030, 1, 1)),
+        Generation(1000.0, date(2030, 2, 1)),
+        Generation(1000.0, date(2030, 3, 1)),
+    ])
+    cfs = gs.to_cost(rate_per_mwh=10.0, escalation=0.02, escalation_period="month")
+    expected_amounts = [-10_000.0, -10_200.0, -10_404.0]
+    for i, flow in enumerate(cfs.entries):
+        assert flow.amount == pytest.approx(expected_amounts[i])
+
+
 # === to_ptc ===
 
 
@@ -484,6 +520,29 @@ def test_to_ptc_escalation():
     cfs = gs.to_ptc(rate_per_mwh=10.0, years=5, escalation=0.02)
     assert abs(cfs.entries[0].amount - 10_000.0) < 1e-8
     assert abs(cfs.entries[1].amount - 10_200.0) < 1e-6
+
+
+def test_to_ptc_supports_earlier_amount_reference_date():
+    """PTC rates can be escalated from an earlier known-value date."""
+    reference_date = date(2030, 1, 1)
+    gs = GenerationStream([
+        Generation(1000.0, date(2030, 7, 1)),
+        Generation(1000.0, date(2030, 8, 1)),
+    ])
+    cfs = gs.to_ptc(
+        rate_per_mwh=10.0,
+        years=5,
+        escalation=0.12,
+        amount_reference_date=reference_date,
+    )
+    expected_dates = [date(2030, 7, 1), date(2030, 8, 1)]
+    expected_amounts = [
+        1000.0 * 10.0 * _annual_factor(reference_date, flow_date, 0.12)
+        for flow_date in expected_dates
+    ]
+    for i, flow in enumerate(cfs.entries):
+        assert flow.date == expected_dates[i]
+        assert flow.amount == pytest.approx(expected_amounts[i])
 
 
 def test_to_ptc_empty():

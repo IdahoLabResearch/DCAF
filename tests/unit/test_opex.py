@@ -8,6 +8,10 @@ from dcaf import CashFlowTags
 from dcaf.opex import fixed_opex
 
 
+def _annual_factor(start: date, end: date, rate: float) -> float:
+    return (1.0 + rate) ** ((end - start).days / 365.0)
+
+
 def test_basic_call():
     """fixed_opex returns the correct number of negative flows at the base amount."""
     stream = fixed_opex(amount=100_000, start=date(2025, 1, 1), periods=5)
@@ -34,6 +38,43 @@ def test_escalation_compounds_correctly():
     assert stream.entries[0].amount == pytest.approx(-100_000)
     assert stream.entries[1].amount == pytest.approx(-102_000)
     assert stream.entries[2].amount == pytest.approx(-104_040)
+
+
+def test_annual_escalation_is_date_based_for_monthly_opex():
+    """Bare escalation remains annual even when OPEX recurs monthly."""
+    start = date(2025, 1, 1)
+    stream = fixed_opex(
+        amount=12_000,
+        start=start,
+        periods=3,
+        frequency="month",
+        escalation=0.12,
+    )
+    expected_dates = [date(2025, 1, 1), date(2025, 2, 1), date(2025, 3, 1)]
+    expected_amounts = [-12_000 * _annual_factor(start, flow_date, 0.12) for flow_date in expected_dates]
+    for i, flow in enumerate(stream.entries):
+        assert flow.date == expected_dates[i]
+        assert flow.amount == pytest.approx(expected_amounts[i])
+
+
+def test_new_escalation_kwargs_are_forwarded():
+    """fixed_opex forwards explicit escalation kwargs to recurring generation."""
+    stream = fixed_opex(
+        amount=10_000,
+        start=date(2025, 3, 1),
+        periods=3,
+        frequency="month",
+        escalation=0.01,
+        escalation_period="month",
+        amount_reference_date=date(2025, 1, 1),
+    )
+    expected_amounts = [
+        -10_000 * (1.01**2),
+        -10_000 * (1.01**3),
+        -10_000 * (1.01**4),
+    ]
+    for i, flow in enumerate(stream.entries):
+        assert flow.amount == pytest.approx(expected_amounts[i])
 
 
 def test_non_default_frequency():

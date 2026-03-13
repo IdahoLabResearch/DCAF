@@ -4,6 +4,10 @@ import pytest
 from dcaf import CashFlow, CashFlowGroup, CashFlowStream, CashFlowTags, GenerationStream
 
 
+def _annual_factor(start: date, end: date, rate: float) -> float:
+    return (1.0 + rate) ** ((end - start).days / 365.0)
+
+
 @pytest.fixture()
 def _create_cf_stream():
     """
@@ -65,11 +69,8 @@ def test_from_recurring_bad_frequency():
         )
 
 
-def test_from_recurring_1():
-    """
-    Tests the CashFlowStream.from_recurring method with monthly frequency,
-    escalation, and custom values for label, is_cash and tags.
-    """
+def test_from_recurring_annual_escalation_is_date_based():
+    """Annual escalation is evaluated against payment dates, not recurrence count."""
     cf_stream = CashFlowStream.from_recurring(
         start=date(2026, 3, 5),
         periods=3,
@@ -81,20 +82,19 @@ def test_from_recurring_1():
         tags=frozenset([CashFlowTags.TAXABLE]),
     )
     expected_dates = [date(2026, 3, 5), date(2026, 4, 5), date(2026, 5, 5)]
-    expected_amounts = [-200.0, -220.0, -242.0]
+    expected_amounts = [
+        -200.0 * _annual_factor(expected_dates[0], flow_date, 0.1) for flow_date in expected_dates
+    ]
     for i, flow in enumerate(cf_stream.entries):
         assert flow.date == expected_dates[i]
-        assert abs(flow.amount - expected_amounts[i]) < abs(1e-8 * flow.amount)
+        assert flow.amount == pytest.approx(expected_amounts[i])
         assert flow.label == "test recurring cf"
         assert flow.is_cash is False
         assert flow.tags == frozenset([CashFlowTags.TAXABLE])
 
 
-def test_from_recurring_2():
-    """
-    Tests the CashFlowStream.from_recurring method with quarterly frequency,
-    escalation, and a label that utilizes the {n} option.
-    """
+def test_from_recurring_supports_explicit_nonannual_escalation_period():
+    """Non-annual escalation periods can be specified independently of frequency."""
     cf_stream = CashFlowStream.from_recurring(
         start=date(2030, 9, 4),
         periods=3,
@@ -102,13 +102,51 @@ def test_from_recurring_2():
         frequency="quarter",
         escalation=0.2,
         label="quarter #{n}",
+        escalation_period="quarter",
     )
     expected_dates = [date(2030, 9, 4), date(2030, 12, 4), date(2031, 3, 4)]
     expected_amounts = [10_000.0, 12_000.0, 14_400.0]
     for i, flow in enumerate(cf_stream.entries):
         assert flow.date == expected_dates[i]
-        assert abs(flow.amount - expected_amounts[i]) < abs(1e-8 * flow.amount)
+        assert flow.amount == pytest.approx(expected_amounts[i])
         assert flow.label == f"quarter #{i + 1}"
+
+
+def test_from_recurring_annual_escalation_supports_daily_frequency():
+    """Daily recurring streams still treat bare escalation as annual by default."""
+    start = date(2026, 1, 1)
+    cf_stream = CashFlowStream.from_recurring(
+        start=start,
+        periods=3,
+        amount=100.0,
+        frequency="day",
+        escalation=0.1,
+    )
+    expected_dates = [date(2026, 1, 1), date(2026, 1, 2), date(2026, 1, 3)]
+    expected_amounts = [100.0 * _annual_factor(start, flow_date, 0.1) for flow_date in expected_dates]
+    for i, flow in enumerate(cf_stream.entries):
+        assert flow.date == expected_dates[i]
+        assert flow.amount == pytest.approx(expected_amounts[i])
+
+
+def test_from_recurring_supports_earlier_amount_reference_date():
+    """Recurring amounts can be escalated from an earlier known-value date."""
+    reference_date = date(2026, 1, 1)
+    cf_stream = CashFlowStream.from_recurring(
+        start=date(2026, 7, 1),
+        periods=2,
+        amount=100.0,
+        frequency="month",
+        escalation=0.12,
+        amount_reference_date=reference_date,
+    )
+    expected_dates = [date(2026, 7, 1), date(2026, 8, 1)]
+    expected_amounts = [
+        100.0 * _annual_factor(reference_date, flow_date, 0.12) for flow_date in expected_dates
+    ]
+    for i, flow in enumerate(cf_stream.entries):
+        assert flow.date == expected_dates[i]
+        assert flow.amount == pytest.approx(expected_amounts[i])
 
 
 def test_from_streams():
@@ -466,6 +504,23 @@ def test_with_recurring_immutability():
     original = CashFlowStream([CashFlow(100.0, date(2026, 1, 1))])
     _ = original.with_recurring(start=date(2026, 6, 1), periods=3, amount=50.0)
     assert len(original.entries) == 1
+
+
+def test_with_recurring_forwards_new_escalation_kwargs():
+    """with_recurring forwards explicit escalation kwargs to from_recurring."""
+    base = CashFlowStream([CashFlow(100.0, date(2026, 1, 1))])
+    result = base.with_recurring(
+        start=date(2026, 3, 1),
+        periods=2,
+        amount=50.0,
+        frequency="month",
+        escalation=0.01,
+        escalation_period="month",
+        amount_reference_date=date(2026, 1, 1),
+    )
+    assert result.entries[0].amount == 100.0
+    assert result.entries[1].amount == pytest.approx(50.0 * (1.01**2))
+    assert result.entries[2].amount == pytest.approx(50.0 * (1.01**3))
 
 
 # ---- append tests ----

@@ -24,7 +24,7 @@ from dcaf.cashflows import (
     CashFlowStream,
     CashFlowTags,
 )
-
+from dcaf.escalation import ConstantRateEscalation
 from dcaf.types import DayCountConvention, Period, SupportsLessThan
 from dcaf.utils import (
     compound_factor,
@@ -58,6 +58,22 @@ class Generation:
     source: str = ""
     carrier: str = "electricity"
     label: str = ""
+
+
+def _generation_escalation(
+    *,
+    entries: list[Generation],
+    escalation: float,
+    escalation_period: Period,
+    amount_reference_date: date | None,
+) -> ConstantRateEscalation:
+    """Normalize generation escalation kwargs into a date-based policy."""
+    reference_date = min(entry.date for entry in entries) if amount_reference_date is None else amount_reference_date
+    return ConstantRateEscalation(
+        reference_date=reference_date,
+        rate=escalation,
+        period=escalation_period,
+    )
 
 
 @dataclass
@@ -990,6 +1006,9 @@ class GenerationStream(BaseStream[Generation]):
         escalation: float = 0.0,
         label: str = "Generation Revenue {n}",
         tags: frozenset[CashFlowTags] = frozenset({CashFlowTags.REVENUE, CashFlowTags.TAXABLE}),
+        *,
+        escalation_period: Period = "year",
+        amount_reference_date: date | None = None,
     ) -> CashFlowStream:
         """
         Convert generation entries to revenue cashflows.
@@ -999,7 +1018,16 @@ class GenerationStream(BaseStream[Generation]):
         price_per_mwh : float
             Base price per MWh.
         escalation : float, optional
-            Annual compound escalation rate for the price.
+            Compound escalation rate for the price, interpreted over
+            ``escalation_period``. With the default
+            ``escalation_period="year"``, ``0.02`` means 2% year-on-year
+            escalation.
+        escalation_period : Period, optional
+            Compounding period associated with ``escalation``. Default is
+            ``"year"``.
+        amount_reference_date : date, optional
+            Date at which ``price_per_mwh`` is known. Defaults to the earliest
+            generation entry date.
         label : str, optional
             Label template.
         tags : frozenset[CashFlowTags], optional
@@ -1017,11 +1045,15 @@ class GenerationStream(BaseStream[Generation]):
         """
         if not self.entries:
             return CashFlowStream()
-        base_year = min(e.date.year for e in self.entries)
+        escalation_policy = _generation_escalation(
+            entries=self.entries,
+            escalation=escalation,
+            escalation_period=escalation_period,
+            amount_reference_date=amount_reference_date,
+        )
         entries: list[CashFlow] = []
         for i, entry in enumerate(self.entries):
-            years_elapsed = entry.date.year - base_year
-            price = price_per_mwh * compound_factor(escalation, years_elapsed)
+            price = price_per_mwh * escalation_policy.factor(entry.date)
             flow_label = label.format(n=i + 1) if "{n}" in label else label
             entries.append(
                 CashFlow(
@@ -1042,6 +1074,9 @@ class GenerationStream(BaseStream[Generation]):
         tags: frozenset[CashFlowTags] = frozenset(
             {CashFlowTags.EXPENSE, CashFlowTags.OPEX, CashFlowTags.TAX_DEDUCTIBLE}
         ),
+        *,
+        escalation_period: Period = "year",
+        amount_reference_date: date | None = None,
     ) -> CashFlowStream:
         """
         Convert generation entries to variable cost cashflows (negative amounts).
@@ -1051,7 +1086,15 @@ class GenerationStream(BaseStream[Generation]):
         rate_per_mwh : float
             Base cost rate per MWh (positive number; flows will be negative).
         escalation : float, optional
-            Annual compound escalation rate.
+            Compound escalation rate, interpreted over ``escalation_period``.
+            With the default ``escalation_period="year"``, this is an annual
+            escalation rate.
+        escalation_period : Period, optional
+            Compounding period associated with ``escalation``. Default is
+            ``"year"``.
+        amount_reference_date : date, optional
+            Date at which ``rate_per_mwh`` is known. Defaults to the earliest
+            generation entry date.
         label : str, optional
             Label template.
         tags : frozenset[CashFlowTags], optional
@@ -1069,11 +1112,15 @@ class GenerationStream(BaseStream[Generation]):
         """
         if not self.entries:
             return CashFlowStream()
-        base_year = min(e.date.year for e in self.entries)
+        escalation_policy = _generation_escalation(
+            entries=self.entries,
+            escalation=escalation,
+            escalation_period=escalation_period,
+            amount_reference_date=amount_reference_date,
+        )
         entries: list[CashFlow] = []
         for i, entry in enumerate(self.entries):
-            years_elapsed = entry.date.year - base_year
-            cost = rate_per_mwh * compound_factor(escalation, years_elapsed)
+            cost = rate_per_mwh * escalation_policy.factor(entry.date)
             flow_label = label.format(n=i + 1) if "{n}" in label else label
             entries.append(
                 CashFlow(
@@ -1093,6 +1140,9 @@ class GenerationStream(BaseStream[Generation]):
         escalation: float = 0.0,
         label: str = "PTC {n}",
         tags: frozenset[CashFlowTags] = frozenset({CashFlowTags.REVENUE}),
+        *,
+        escalation_period: Period = "year",
+        amount_reference_date: date | None = None,
     ) -> CashFlowStream:
         """
         Convert generation entries to Production Tax Credit cashflows.
@@ -1107,7 +1157,15 @@ class GenerationStream(BaseStream[Generation]):
         years : int
             Number of years of PTC eligibility.
         escalation : float, optional
-            Annual escalation of the PTC rate.
+            Compound escalation rate for the PTC value, interpreted over
+            ``escalation_period``. With the default
+            ``escalation_period="year"``, this is an annual escalation rate.
+        escalation_period : Period, optional
+            Compounding period associated with ``escalation``. Default is
+            ``"year"``.
+        amount_reference_date : date, optional
+            Date at which ``rate_per_mwh`` is known. Defaults to the earliest
+            generation entry date.
         label : str, optional
             Label template.
         tags : frozenset[CashFlowTags], optional
@@ -1125,16 +1183,22 @@ class GenerationStream(BaseStream[Generation]):
         """
         if not self.entries:
             return CashFlowStream()
-        base_year = min(e.date.year for e in self.entries)
+        first_entry_date = min(e.date for e in self.entries)
+        base_year = first_entry_date.year
         cutoff_year = base_year + years
+        escalation_policy = _generation_escalation(
+            entries=self.entries,
+            escalation=escalation,
+            escalation_period=escalation_period,
+            amount_reference_date=amount_reference_date,
+        )
         entries: list[CashFlow] = []
         n = 0
         for entry in self.entries:
             if entry.date.year >= cutoff_year:
                 continue
             n += 1
-            years_elapsed = entry.date.year - base_year
-            ptc_rate = rate_per_mwh * compound_factor(escalation, years_elapsed)
+            ptc_rate = rate_per_mwh * escalation_policy.factor(entry.date)
             flow_label = label.format(n=n) if "{n}" in label else label
             entries.append(
                 CashFlow(

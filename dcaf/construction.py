@@ -7,6 +7,7 @@ from datetime import date, timedelta
 from typing import Self
 
 from dcaf.cashflows import CashFlow, CashFlowStream, CashFlowTags
+from dcaf.escalation import ConstantRateEscalation
 from dcaf.spend_curves import get_spend_curve
 from dcaf.types import (
     InterestTreatment,
@@ -18,7 +19,9 @@ from dcaf.types import (
     parse_interest_treatment,
     parse_period,
 )
-from dcaf.utils import compound_factor, time_delta_per_period, timedelta_fractional_years
+from dcaf.utils import time_delta_per_period, timedelta_fractional_years
+
+_UNSET = object()
 
 
 def _validate_schedule(schedule: SpendSchedule) -> None:
@@ -268,9 +271,17 @@ class ConstructionSpendConfig:
     financing : ConstructionFinancing or None, optional
         Debt and construction-interest assumptions. Passing ``None`` uses
         unlevered construction with no interest.
-    escalation_rate : float, optional
-        Annual escalation rate compounded to the midpoint of each period.
+    escalation : float, optional
+        Compound escalation rate, interpreted over ``escalation_period`` and
+        evaluated at each period midpoint. With the default
+        ``escalation_period="year"``, this is an annual escalation rate.
         Default is ``0.0``.
+    escalation_period : Period, optional
+        Compounding period associated with ``escalation``. Default is
+        ``"year"``.
+    amount_reference_date : date, optional
+        Date at which ``total_cost`` is known. Escalation is evaluated from this
+        date to each spend-period midpoint. Defaults to ``start_date``.
 
     Notes
     -----
@@ -297,7 +308,9 @@ class ConstructionSpendConfig:
     period: Period | _PeriodEnum = "month"
     profile: SpendProfile = field(default_factory=lambda: SpendProfile.curve("flat"))
     financing: ConstructionFinancing = field(default_factory=ConstructionFinancing)
-    escalation_rate: float = 0.0
+    escalation: float = 0.0
+    escalation_period: Period | _PeriodEnum = "year"
+    amount_reference_date: date | None = None
 
     def __post_init__(self) -> None:
         if self.total_cost <= 0:
@@ -310,6 +323,7 @@ class ConstructionSpendConfig:
         object.__setattr__(self, "period", parse_period(str(self.period)))
         object.__setattr__(self, "profile", _normalize_profile(self.profile))
         object.__setattr__(self, "financing", _normalize_financing(self.financing))
+        object.__setattr__(self, "escalation_period", parse_period(str(self.escalation_period)))
 
 
 @dataclass(frozen=True)
@@ -320,6 +334,15 @@ class _ScheduledSpend:
     end_date: date
     booking_date: date
     spend_amount: float
+
+
+def _construction_escalation(config: ConstructionSpendConfig) -> ConstantRateEscalation:
+    """Normalize construction escalation config into a date-based policy."""
+    return ConstantRateEscalation(
+        reference_date=config.start_date if config.amount_reference_date is None else config.amount_reference_date,
+        rate=config.escalation,
+        period=config.escalation_period,
+    )
 
 
 def _normalize_profile(profile: ConstructionProfileInput) -> SpendProfile:
@@ -363,6 +386,7 @@ def _scheduled_spend_amount(
     config: ConstructionSpendConfig,
     current: date,
     period_end: date,
+    escalation_policy: ConstantRateEscalation,
 ) -> float:
     """Compute escalated spend allocated to a single period."""
     total_days = (config.end_date - config.start_date).days
@@ -374,14 +398,14 @@ def _scheduled_spend_amount(
         (current - config.start_date).days + (period_end - config.start_date).days
     ) // 2
     mid_date = config.start_date + timedelta(days=mid_days)
-    years_elapsed = timedelta_fractional_years(config.start_date, mid_date)
-    escalation_factor = compound_factor(config.escalation_rate, years_elapsed)
+    escalation_factor = escalation_policy.factor(mid_date)
     return config.total_cost * spend_fraction * escalation_factor
 
 
 def _scheduled_spends(config: ConstructionSpendConfig) -> list[_ScheduledSpend]:
     """Expand a validated config into per-period scheduled spend entries."""
     periods = _iter_period_boundaries(config.start_date, config.end_date, config.period)
+    escalation_policy = _construction_escalation(config)
     spends: list[_ScheduledSpend] = []
 
     for current, period_end in periods:
@@ -390,7 +414,7 @@ def _scheduled_spends(config: ConstructionSpendConfig) -> list[_ScheduledSpend]:
                 start_date=current,
                 end_date=period_end,
                 booking_date=period_end,
-                spend_amount=_scheduled_spend_amount(config, current, period_end),
+                spend_amount=_scheduled_spend_amount(config, current, period_end, escalation_policy),
             )
         )
 
@@ -487,8 +511,16 @@ class ConstructionSpendBuilder:
     financing : ConstructionFinancing or None, optional
         Debt and construction-interest assumptions. Default is unlevered
         construction.
-    escalation_rate : float, optional
-        Annual escalation rate. Default is ``0.0``.
+    escalation : float, optional
+        Compound escalation rate, interpreted over ``escalation_period``.
+        With the default ``escalation_period="year"``, this is an annual
+        escalation rate. Default is ``0.0``.
+    escalation_period : Period, optional
+        Compounding period associated with ``escalation``. Default is
+        ``"year"``.
+    amount_reference_date : date, optional
+        Date at which ``total_cost`` is known. Escalation is evaluated from this
+        date to each spend-period midpoint. Defaults to ``start_date``.
 
     Notes
     -----
@@ -519,7 +551,9 @@ class ConstructionSpendBuilder:
         *,
         profile: ConstructionProfileInput = "flat",
         financing: ConstructionFinancing | None = None,
-        escalation_rate: float = 0.0,
+        escalation: float = 0.0,
+        escalation_period: Period = "year",
+        amount_reference_date: date | None = None,
     ) -> None:
         self._config = ConstructionSpendConfig(
             total_cost=total_cost,
@@ -528,7 +562,9 @@ class ConstructionSpendBuilder:
             period=period,
             profile=profile,
             financing=financing,
-            escalation_rate=escalation_rate,
+            escalation=escalation,
+            escalation_period=escalation_period,
+            amount_reference_date=amount_reference_date,
         )
 
     @classmethod
@@ -692,13 +728,26 @@ class ConstructionSpendBuilder:
             )
         )
 
-    def escalation(self, rate: float) -> Self:
-        """Set the annual cost escalation rate.
+    def escalation(
+        self,
+        rate: float,
+        *,
+        escalation_period: Period | None = None,
+        amount_reference_date: date | object = _UNSET,
+    ) -> Self:
+        """Set the construction cost escalation assumptions.
 
         Parameters
         ----------
         rate : float
-            Annual escalation rate applied to each period midpoint.
+            Compound escalation rate applied to each period midpoint.
+        escalation_period : Period, optional
+            Compounding period associated with ``rate``. When omitted, the
+            existing builder setting is preserved.
+        amount_reference_date : date, optional
+            Date at which ``total_cost`` is known. When omitted, the existing
+            builder setting is preserved. Pass ``None`` to reset back to
+            ``start_date`` semantics.
 
         Returns
         -------
@@ -710,10 +759,15 @@ class ConstructionSpendBuilder:
         >>> from datetime import date
         >>> from dcaf.construction import ConstructionSpendBuilder
         >>> builder = ConstructionSpendBuilder(1_000_000, date(2025, 1, 1), date(2026, 1, 1))
-        >>> builder.escalation(0.03).config.escalation_rate
+        >>> builder.escalation(0.03).config.escalation
         0.03
         """
-        return self.from_config(dc_replace(self._config, escalation_rate=rate))
+        changes: dict[str, object] = {"escalation": rate}
+        if escalation_period is not None:
+            changes["escalation_period"] = escalation_period
+        if amount_reference_date is not _UNSET:
+            changes["amount_reference_date"] = amount_reference_date
+        return self.from_config(dc_replace(self._config, **changes))
 
     def build(self) -> CashFlowStream:
         """Build and return the construction spend ``CashFlowStream``.
@@ -747,7 +801,9 @@ def construction_spend_schedule(
     *,
     profile: ConstructionProfileInput = "flat",
     financing: ConstructionFinancing | None = None,
-    escalation_rate: float = 0.0,
+    escalation: float = 0.0,
+    escalation_period: Period = "year",
+    amount_reference_date: date | None = None,
 ) -> CashFlowStream:
     """Build a construction spend schedule directly.
 
@@ -767,8 +823,17 @@ def construction_spend_schedule(
     financing : ConstructionFinancing or None, optional
         Debt and construction-interest assumptions. Default is unlevered
         construction.
-    escalation_rate : float, optional
-        Annual escalation rate applied to each period midpoint. Default is ``0.0``.
+    escalation : float, optional
+        Compound escalation rate, interpreted over ``escalation_period`` and
+        evaluated at each period midpoint. With the default
+        ``escalation_period="year"``, this is an annual escalation rate.
+        Default is ``0.0``.
+    escalation_period : Period, optional
+        Compounding period associated with ``escalation``. Default is
+        ``"year"``.
+    amount_reference_date : date, optional
+        Date at which ``total_cost`` is known. Escalation is evaluated from this
+        date to each spend-period midpoint. Defaults to ``start_date``.
 
     Returns
     -------
@@ -811,5 +876,7 @@ def construction_spend_schedule(
         period=period,
         profile=profile,
         financing=financing,
-        escalation_rate=escalation_rate,
+        escalation=escalation,
+        escalation_period=escalation_period,
+        amount_reference_date=amount_reference_date,
     ).build()

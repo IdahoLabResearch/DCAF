@@ -21,8 +21,24 @@ from typing import (
 )
 
 from dcaf._streams import BaseGroup, BaseStream
+from dcaf.escalation import ConstantRateEscalation
 from dcaf.types import DayCountConvention, Period, SupportsLessThan
 from dcaf.utils import compound_factor, time_delta_per_period, timedelta_fractional_years
+
+
+def _recurring_escalation(
+    *,
+    start: date,
+    escalation: float,
+    escalation_period: Period,
+    amount_reference_date: date | None,
+) -> ConstantRateEscalation:
+    """Normalize recurring cashflow escalation kwargs into a date-based policy."""
+    return ConstantRateEscalation(
+        reference_date=start if amount_reference_date is None else amount_reference_date,
+        rate=escalation,
+        period=escalation_period,
+    )
 
 
 class CashFlowTags(Enum):
@@ -524,6 +540,9 @@ class CashFlowStream(BaseStream[CashFlow]):
         label: str = "Recurring Payment",
         is_cash: bool = True,
         tags: frozenset[CashFlowTags] = frozenset(),
+        *,
+        escalation_period: Period = "year",
+        amount_reference_date: date | None = None,
     ) -> "CashFlowStream":
         """
         Generate recurring cashflows with optional escalation.
@@ -540,8 +559,9 @@ class CashFlowStream(BaseStream[CashFlow]):
             Number of periods (e.g., years if frequency='year', months if
             frequency='month').
         amount : float
-            Base amount for the first period. Can be positive (inflows) or negative
-            (outflows). Subsequent periods will be escalated if escalation > 0.
+            Base amount known at ``amount_reference_date``. Can be positive
+            (inflows) or negative (outflows). If ``amount_reference_date`` is not
+            provided, the amount is assumed to be known on ``start``.
         frequency : Period, optional
             Frequency of the cashflows. Default is "year".
             - "year": One cashflow per year
@@ -549,9 +569,18 @@ class CashFlowStream(BaseStream[CashFlow]):
             - "month": Twelve cashflows per year
             - "day": One cashflow per day
         escalation : float, optional
-            Per-period compound escalation rate as a decimal (e.g., 0.025
-            for 2.5% growth per period). Default is 0 (no escalation).
-            Formula: amount_n = amount_0 * (1 + escalation)^n
+            Compound escalation rate as a decimal, interpreted over
+            ``escalation_period``. With the default
+            ``escalation_period="year"``, ``0.025`` means 2.5% year-on-year
+            growth. Pass a different ``escalation_period`` to model rates
+            quoted per month, quarter, or day. Default is 0 (no escalation).
+        escalation_period : Period, optional
+            Compounding period associated with ``escalation``. Default is
+            ``"year"``. Pass a non-annual value such as ``"month"`` to model
+            escalation rates quoted per month, quarter, or day.
+        amount_reference_date : date, optional
+            Date at which ``amount`` is known. Escalation is evaluated from this
+            date to each payment date. Defaults to ``start``.
         label : str, optional
             Label for the cashflows. Can include {n} placeholder for period number
             (1-indexed). Default is "Recurring Payment".
@@ -567,15 +596,22 @@ class CashFlowStream(BaseStream[CashFlow]):
 
         Notes
         -----
-        - Escalation is compounded, not simple interest
-        - Date arithmetic handles month-end edge cases (e.g., Jan 31 + 1 month = Feb 28/29)
-        - For annual escalation with monthly frequency, use (1 + annual_rate)^(1/12) - 1
+        - Escalation is compounded, not simple interest.
+        - Payment dates are generated from ``start`` and ``frequency``; escalation
+          is then evaluated at each payment date using the configured reference date.
+        - Date arithmetic handles month-end edge cases (e.g., Jan 31 + 1 month = Feb 28/29).
         """
         delta = time_delta_per_period(frequency)
+        escalation_policy = _recurring_escalation(
+            start=start,
+            escalation=escalation,
+            escalation_period=escalation_period,
+            amount_reference_date=amount_reference_date,
+        )
         entries = []
         for i in range(periods):
-            escalated_amount = amount * compound_factor(escalation, i)
             flow_date = start + delta * i
+            escalated_amount = amount * escalation_policy.factor(flow_date)
             flow_label = label.format(n=i + 1) if "{n}" in label else label
             entries.append(
                 CashFlow(
@@ -703,6 +739,9 @@ class CashFlowStream(BaseStream[CashFlow]):
         label: str = "Recurring Payment",
         is_cash: bool = True,
         tags: frozenset[CashFlowTags] = frozenset(),
+        *,
+        escalation_period: Period = "year",
+        amount_reference_date: date | None = None,
     ) -> "CashFlowStream":
         """
         Chain ``from_recurring`` onto the current stream.
@@ -721,6 +760,8 @@ class CashFlowStream(BaseStream[CashFlow]):
             amount=amount,
             frequency=frequency,
             escalation=escalation,
+            escalation_period=escalation_period,
+            amount_reference_date=amount_reference_date,
             label=label,
             is_cash=is_cash,
             tags=tags,
