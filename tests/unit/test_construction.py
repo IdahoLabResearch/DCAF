@@ -294,6 +294,16 @@ def test_build_rejects_unknown_interest_treatment():
         )
 
 
+def test_construction_financing_normalizes_servicing_period():
+    financing = ConstructionFinancing.debt(
+        0.8,
+        interest_rate=0.06,
+        servicing_period="year",
+    )
+
+    assert financing.servicing_period.value == "year"
+
+
 def test_direct_api_returns_cashflow_stream():
     stream = construction_spend_schedule(
         1000,
@@ -766,6 +776,53 @@ def test_paid_interest_does_not_accumulate_on_balance():
     )
 
     assert capitalized_total > paid_total
+
+
+def test_annual_interest_servicing_uses_prior_year_balance_for_monthly_spend():
+    stream = construction_spend_schedule(
+        24_000,
+        date(2025, 1, 1),
+        date(2027, 1, 1),
+        period="month",
+        profile="flat",
+        financing=ConstructionFinancing.debt(
+            1.0,
+            interest_rate=0.12,
+            treatment="pay",
+            servicing_period="year",
+        ),
+    )
+
+    spend_flows = [cf for cf in stream.entries if cf.label == "Construction Spend"]
+    interest_flows = [cf for cf in stream.entries if cf.label == "Interest Payment"]
+
+    assert len(interest_flows) == 1
+    assert interest_flows[0].date == date(2027, 1, 1)
+
+    opening_balance = -sum(cf.amount for cf in spend_flows if cf.date <= date(2026, 1, 1))
+    expected_interest = -opening_balance * 0.12
+    assert interest_flows[0].amount == pytest.approx(expected_interest)
+
+
+def test_annual_capitalized_interest_rolls_forward_between_service_periods():
+    stream = construction_spend_schedule(
+        36_000,
+        date(2025, 1, 1),
+        date(2028, 1, 1),
+        period="month",
+        profile="flat",
+        financing=ConstructionFinancing.debt(
+            1.0,
+            interest_rate=0.10,
+            treatment="capitalize",
+            servicing_period="year",
+        ),
+    )
+
+    interest_flows = [cf for cf in stream.entries if cf.label == "Capitalized Interest"]
+
+    assert [cf.date for cf in interest_flows] == [date(2027, 1, 1), date(2028, 1, 1)]
+    assert abs(interest_flows[1].amount) > abs(interest_flows[0].amount)
 
 
 def test_quarterly_period():

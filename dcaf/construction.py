@@ -187,6 +187,11 @@ class ConstructionFinancing:
     interest_treatment : {"capitalize", "pay"}, optional
         Whether accrued interest is capitalized into project cost or paid in cash
         during construction. Default is ``"capitalize"``.
+    servicing_period : Period or None, optional
+        Interval at which construction-period debt interest is accrued and booked.
+        When ``None``, interest follows the construction spend ``period``. Set
+        this explicitly to model annual debt servicing against a finer
+        construction timeline.
 
     Notes
     -----
@@ -199,7 +204,12 @@ class ConstructionFinancing:
 
     >>> from dcaf.construction import ConstructionFinancing
     >>> ConstructionFinancing()
-    ConstructionFinancing(debt_fraction=0.0, interest_rate=None, interest_treatment=<...>)
+    ConstructionFinancing(
+        debt_fraction=0.0,
+        interest_rate=None,
+        interest_treatment=<...>,
+        servicing_period=None,
+    )
 
     Debt-funded construction with paid interest:
 
@@ -211,6 +221,7 @@ class ConstructionFinancing:
     debt_fraction: float = 0.0
     interest_rate: float | None = None
     interest_treatment: InterestTreatment | _InterestTreatmentEnum = "capitalize"
+    servicing_period: Period | _PeriodEnum | None = None
 
     def __post_init__(self) -> None:
         if not (0.0 <= self.debt_fraction <= 1.0):
@@ -222,6 +233,12 @@ class ConstructionFinancing:
             "interest_treatment",
             parse_interest_treatment(str(self.interest_treatment)),
         )
+        if self.servicing_period is not None:
+            object.__setattr__(
+                self,
+                "servicing_period",
+                parse_period(str(self.servicing_period)),
+            )
 
     @classmethod
     def debt(
@@ -230,6 +247,7 @@ class ConstructionFinancing:
         *,
         interest_rate: float | None = None,
         treatment: InterestTreatment = "capitalize",
+        servicing_period: Period | None = None,
     ) -> Self:
         """Return debt financing settings for construction.
 
@@ -241,6 +259,9 @@ class ConstructionFinancing:
             Annual construction-period interest rate. Default is ``None``.
         treatment : {"capitalize", "pay"}, optional
             Interest treatment to apply when ``interest_rate`` is provided.
+        servicing_period : Period or None, optional
+            Interval at which construction-period debt interest is serviced.
+            When omitted, debt servicing follows the construction spend period.
 
         Returns
         -------
@@ -258,6 +279,7 @@ class ConstructionFinancing:
             debt_fraction=debt_fraction,
             interest_rate=interest_rate,
             interest_treatment=treatment,
+            servicing_period=servicing_period,
         )
 
 
@@ -470,41 +492,55 @@ def _construction_interest_cashflow(
     )
 
 
+def _debt_servicing_period(config: ConstructionSpendConfig) -> _PeriodEnum:
+    """Return the effective servicing interval for construction debt interest."""
+    servicing_period = config.financing.servicing_period
+    if servicing_period is None:
+        return config.period
+    return servicing_period
+
+
 def _build_cashflows(
     config: ConstructionSpendConfig,
     escalation_policy: EscalationPolicy | None = None,
 ) -> list[CashFlow]:
     """Build raw construction spend and interest cashflows from a config."""
-    entries: list[CashFlow] = []
+    scheduled_spends = _scheduled_spends(config, escalation_policy=escalation_policy)
+    entries = [_construction_spend_cashflow(spend) for spend in scheduled_spends]
+
+    if config.financing.debt_fraction == 0.0 or config.financing.interest_rate is None:
+        return entries
+
     debt_balance = 0.0
+    scheduled_draws = [
+        (spend.booking_date, spend.spend_amount * config.financing.debt_fraction)
+        for spend in scheduled_spends
+    ]
+    draw_index = 0
 
-    for spend in _scheduled_spends(config, escalation_policy=escalation_policy):
-        entries.append(_construction_spend_cashflow(spend))
+    for service_start, service_end in _iter_period_boundaries(
+        config.start_date,
+        config.end_date,
+        _debt_servicing_period(config),
+    ):
+        period_years = timedelta_fractional_years(service_start, service_end)
+        interest = debt_balance * config.financing.interest_rate * period_years
+        interest_flow = _construction_interest_cashflow(
+            interest,
+            service_end,
+            config.financing.interest_treatment,
+        )
+        if interest_flow is not None:
+            entries.append(interest_flow)
 
-        if config.financing.debt_fraction == 0.0:
-            continue
+        while draw_index < len(scheduled_draws) and scheduled_draws[draw_index][0] <= service_end:
+            debt_balance += scheduled_draws[draw_index][1]
+            draw_index += 1
 
-        draw_amount = spend.spend_amount * config.financing.debt_fraction
-        interest = 0.0
-
-        if config.financing.interest_rate is not None:
-            period_years = timedelta_fractional_years(spend.start_date, spend.end_date)
-            interest = debt_balance * config.financing.interest_rate * period_years
-            interest_flow = _construction_interest_cashflow(
-                interest,
-                spend.booking_date,
-                config.financing.interest_treatment,
-            )
-            if interest_flow is not None:
-                entries.append(interest_flow)
-
-        debt_balance += draw_amount
-        if (
-            config.financing.interest_rate is not None
-            and config.financing.interest_treatment is _InterestTreatmentEnum.CAPITALIZE
-        ):
+        if config.financing.interest_treatment is _InterestTreatmentEnum.CAPITALIZE:
             debt_balance += interest
 
+    entries.sort(key=lambda flow: (flow.date, 0 if flow.label == "Construction Spend" else 1))
     return entries
 
 
@@ -724,6 +760,7 @@ class ConstructionSpendBuilder:
         *,
         interest_rate: float | None = None,
         treatment: InterestTreatment = "capitalize",
+        servicing_period: Period | None = None,
     ) -> Self:
         """Set debt funding and construction-period interest behavior.
 
@@ -735,6 +772,9 @@ class ConstructionSpendBuilder:
             Annual construction-period interest rate. Default is ``None``.
         treatment : {"capitalize", "pay"}, optional
             Interest treatment to apply when ``interest_rate`` is supplied.
+        servicing_period : Period or None, optional
+            Interval at which construction-period debt interest is serviced.
+            When omitted, debt servicing follows the construction spend period.
 
         Returns
         -------
@@ -757,6 +797,7 @@ class ConstructionSpendBuilder:
                     debt_fraction,
                     interest_rate=interest_rate,
                     treatment=treatment,
+                    servicing_period=servicing_period,
                 ),
             )
         )

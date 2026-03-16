@@ -347,6 +347,23 @@ def test_annual_date_spacing():
     assert dates == [date(2026, 6, 15), date(2027, 6, 15), date(2028, 6, 15)]
 
 
+def test_annual_amortization_interest_uses_prior_year_end_balance():
+    """Annual schedules accrue interest from the opening balance of each year."""
+    schedule = AmortizationSchedule.build(
+        principal=100_000.0,
+        annual_rate=0.10,
+        term=3,
+        start_date=date(2026, 1, 1),
+        frequency="year",
+    )
+
+    assert schedule.interest.entries[0].amount == pytest.approx(-10_000.0)
+
+    opening_balance_year_2 = 100_000.0 + schedule.principal.entries[0].amount
+    expected_year_2_interest = -opening_balance_year_2 * 0.10
+    assert schedule.interest.entries[1].amount == pytest.approx(expected_year_2_interest)
+
+
 # === Zero rate ===
 
 
@@ -388,3 +405,14 @@ def test_all_flows_are_cash(monthly_schedule: AmortizationSchedule):
     """All amortization flows are cash flows."""
     for stream in (monthly_schedule.total, monthly_schedule.interest, monthly_schedule.principal):
         assert all(f.is_cash for f in stream.entries)
+
+
+def test_invalid_frequency_is_rejected():
+    with pytest.raises(ValueError, match="Unknown period"):
+        AmortizationSchedule.build(
+            principal=10_000.0,
+            annual_rate=0.05,
+            term=6,
+            start_date=date(2026, 1, 1),
+            frequency="week",  # type: ignore[arg-type]
+        )

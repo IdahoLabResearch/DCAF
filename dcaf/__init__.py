@@ -53,6 +53,7 @@ from dcaf.types import (
     InterestTreatment,
     MACRSConvention,
     MACRSPropertyClass,
+    Period,
     SpendSchedule,
     SpendScheduleName,
 )
@@ -97,5 +98,6 @@ __all__ = [
     "itc_adjusted_basis",
     "macrs_schedule",
     "ptc",
+    "Period",
     "tax_liability",
 ]

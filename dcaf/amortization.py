@@ -20,7 +20,7 @@ from datetime import date
 from typing import Self, assert_never, overload
 
 from dcaf.cashflows import CashFlow, CashFlowStream, CashFlowTags
-from dcaf.types import Period
+from dcaf.types import Period, _PeriodEnum, parse_period
 from dcaf.utils import time_delta_per_period
 
 
@@ -30,7 +30,7 @@ class _PeriodConfig:
     pays_principal: bool
 
 
-def _payment_periods_per_year(frequency: Period) -> int:
+def _payment_periods_per_year(frequency: Period | _PeriodEnum) -> int:
     """Return the number of payment periods per year for a given frequency.
 
     Parameters
@@ -43,17 +43,18 @@ def _payment_periods_per_year(frequency: Period) -> int:
     int
         Number of payment periods per year.
     """
-    match frequency:
-        case "day":
+    normalized_frequency = parse_period(str(frequency))
+    match normalized_frequency:
+        case _PeriodEnum.DAY:
             return 365
-        case "month":
+        case _PeriodEnum.MONTH:
             return 12
-        case "quarter":
+        case _PeriodEnum.QUARTER:
             return 4
-        case "year":
+        case _PeriodEnum.YEAR:
             return 1
         case _:
-            assert_never(frequency)
+            assert_never(normalized_frequency)
 
 
 @dataclass
@@ -229,7 +230,7 @@ class AmortizationBuilder:
         self._annual_rate = annual_rate
         self._term = term
         self._start_date = start_date
-        self._frequency: Period = frequency
+        self._frequency: _PeriodEnum = parse_period(str(frequency))
         self._label = label
         self._interest_label = interest_label
         self._principal_label = principal_label
@@ -351,7 +352,7 @@ class AmortizationBuilder:
         set[int]
             Zero-based indices of periods whose payment dates fall within the range.
         """
-        delta = time_delta_per_period(self._frequency)
+        delta = time_delta_per_period(self._frequency.value)
         indices: list[int] = []
         for i in range(self._term):
             payment_date = self._start_date + delta * i
@@ -538,7 +539,7 @@ class AmortizationBuilder:
         """
         ppy = _payment_periods_per_year(self._frequency)
         default_config = _PeriodConfig(periodic_rate=self._annual_rate / ppy, pays_principal=True)
-        delta = time_delta_per_period(self._frequency)
+        delta = time_delta_per_period(self._frequency.value)
 
         balance = self._principal
         total_flows: list[CashFlow] = []
