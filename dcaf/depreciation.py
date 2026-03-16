@@ -1,121 +1,182 @@
 """
-MACRS depreciation schedules for tax modeling.
+Depreciation schedule utilities for tax modeling.
 
-Provides IRS MACRS rate tables and a factory function for generating
-depreciation CashFlowStream objects.
+Provides IRS MACRS rate tables, an Excel-style variable declining balance
+calculator, and factory functions for generating depreciation
+``CashFlowStream`` objects.
 """
 
+from collections.abc import Iterator
 from datetime import date
+from math import isfinite
 from typing import assert_never
 
+from dcaf._macrs_tables import MACRS_MID_QUARTER_RATES, MACRS_RATES
 from dcaf.cashflows import CashFlow, CashFlowStream, CashFlowTags
-from dcaf.types import MACRSConvention, MACRSPropertyClass
+from dcaf.types import MACRSConvention, MACRSPropertyClass, Period
+from dcaf.utils import time_delta_per_period
 
 
-# Tables A-1 through A-5 from the provided PDF, encoded as decimals.
-# Values preserve the table precision (e.g., 7.219% -> 0.07219; 6.563% -> 0.06563).
-# Source: https://www.irs.gov/pub/irs-pdf/p946.pdf
-
-MACRS_RATES: dict[int, tuple[float, ...]] = {
-    # Table A-1 (Half-Year Convention)
-    3: (0.3333, 0.4445, 0.1481, 0.0741),
-    5: (0.2000, 0.3200, 0.1920, 0.1152, 0.1152, 0.0576),
-    7: (0.1429, 0.2449, 0.1749, 0.1249, 0.0893, 0.0892, 0.0893, 0.0446),
-    10: (
-        0.1000, 0.1800, 0.1440, 0.1152, 0.0922, 0.0737,
-        0.0655, 0.0655, 0.0656, 0.0655, 0.0328,
-    ),
-    15: (
-        0.0500, 0.0950, 0.0855, 0.0770, 0.0693, 0.0623, 0.0590, 0.0590,
-        0.0591, 0.0590, 0.0591, 0.0590, 0.0591, 0.0590, 0.0591, 0.0295,
-    ),
-    20: (
-        0.03750, 0.07219, 0.06677, 0.06177, 0.05713, 0.05285, 0.04888,
-        0.04522, 0.04462, 0.04461, 0.04462, 0.04461, 0.04462, 0.04461,
-        0.04462, 0.04461, 0.04462, 0.04461, 0.04462, 0.04461, 0.02231,
-    ),
-}
+# FIXME: This would be useful throughout the library. We should move this somewhere more
+# centralized when addressing other existing label handling issues.
+def _format_label(label: str, period_number: int) -> str:
+    """Apply the shared ``{n}`` label templating convention."""
+    return label.format(n=period_number) if "{n}" in label else label
 
 
-MACRS_MID_QUARTER_RATES: dict[int, dict[int, tuple[float, ...]]] = {
-    # Tables A-2 .. A-5 (Mid-Quarter Convention)
-    3: {
-        1: (0.5833, 0.2778, 0.1235, 0.0154),
-        2: (0.4167, 0.3889, 0.1414, 0.0530),
-        3: (0.2500, 0.5000, 0.1667, 0.0833),
-        4: (0.0833, 0.6111, 0.2037, 0.1019),
-    },
-    5: {
-        1: (0.3500, 0.2600, 0.1560, 0.1101, 0.1101, 0.0138),
-        2: (0.2500, 0.3000, 0.1800, 0.1137, 0.1137, 0.0426),
-        3: (0.1500, 0.3400, 0.2040, 0.1224, 0.1130, 0.0706),
-        4: (0.0500, 0.3800, 0.2280, 0.1368, 0.1094, 0.0958),
-    },
-    7: {
-        1: (0.2500, 0.2143, 0.1531, 0.1093, 0.0875, 0.0874, 0.0875, 0.0109),
-        2: (0.1785, 0.2347, 0.1676, 0.1197, 0.0887, 0.0887, 0.0887, 0.0334),
-        3: (0.1071, 0.2551, 0.1822, 0.1302, 0.0930, 0.0885, 0.0886, 0.0553),
-        4: (0.0357, 0.2755, 0.1968, 0.1406, 0.1004, 0.0873, 0.0873, 0.0764),
-    },
-    10: {
-        1: (
-            0.1750, 0.1650, 0.1320, 0.1056, 0.0845, 0.0676,
-            0.0655, 0.0655, 0.0656, 0.0655, 0.0082,
-        ),
-        2: (
-            0.1250, 0.1750, 0.1400, 0.1120, 0.0896, 0.0717,
-            0.0655, 0.0655, 0.0656, 0.0655, 0.0246,
-        ),
-        3: (
-            0.0750, 0.1850, 0.1480, 0.1184, 0.0947, 0.0758,
-            0.0655, 0.0655, 0.0656, 0.0655, 0.0410,
-        ),
-        4: (
-            0.0250, 0.1950, 0.1560, 0.1248, 0.0998, 0.0799,
-            0.0655, 0.0655, 0.0656, 0.0655, 0.0574,
-        ),
-    },
-    15: {
-        1: (
-            0.0875, 0.0913, 0.0821, 0.0739, 0.0665, 0.0599, 0.0590, 0.0591,
-            0.0590, 0.0591, 0.0590, 0.0591, 0.0590, 0.0591, 0.0590, 0.0074,
-        ),
-        2: (
-            0.0625, 0.0938, 0.0844, 0.0759, 0.0683, 0.0615, 0.0591, 0.0590,
-            0.0591, 0.0590, 0.0591, 0.0590, 0.0591, 0.0590, 0.0591, 0.0221,
-        ),
-        3: (
-            0.0375, 0.0963, 0.0866, 0.0780, 0.0702, 0.0631, 0.0590, 0.0590,
-            0.0591, 0.0590, 0.0591, 0.0590, 0.0591, 0.0590, 0.0591, 0.0369,
-        ),
-        4: (
-            0.0125, 0.0988, 0.0889, 0.0800, 0.0720, 0.0648, 0.0590, 0.0590,
-            0.0591, 0.0590, 0.0591, 0.0590, 0.0591, 0.0590, 0.0591, 0.0517,
-        ),
-    },
-    20: {
-        1: (
-            0.06563, 0.07000, 0.06482, 0.05996, 0.05546, 0.05130, 0.04746,
-            0.04459, 0.04459, 0.04459, 0.04459, 0.04460, 0.04459, 0.04460,
-            0.04459, 0.04460, 0.04459, 0.04460, 0.04459, 0.04460, 0.00565,
-        ),
-        2: (
-            0.04688, 0.07148, 0.06612, 0.06116, 0.05658, 0.05233, 0.04841,
-            0.04478, 0.04463, 0.04463, 0.04463, 0.04463, 0.04463, 0.04463,
-            0.04462, 0.04463, 0.04462, 0.04463, 0.04462, 0.04463, 0.01673,
-        ),
-        3: (
-            0.02813, 0.07289, 0.06742, 0.06237, 0.05769, 0.05336, 0.04936,
-            0.04566, 0.04460, 0.04460, 0.04460, 0.04460, 0.04461, 0.04460,
-            0.04461, 0.04460, 0.04461, 0.04460, 0.04461, 0.04460, 0.02788,
-        ),
-        4: (
-            0.00938, 0.07430, 0.06872, 0.06357, 0.05880, 0.05439, 0.05031,
-            0.04654, 0.04458, 0.04458, 0.04458, 0.04458, 0.04458, 0.04458,
-            0.04458, 0.04458, 0.04458, 0.04458, 0.04458, 0.04459, 0.03901,
-        ),
-    },
-}
+def _validate_vdb_inputs(
+    *,
+    cost: float,
+    salvage: float,
+    life: float,
+    start_period: float,
+    end_period: float,
+    factor: float,
+) -> None:
+    """Validate public VDB inputs using Excel-compatible bounds."""
+    numeric_inputs = {
+        "cost": cost,
+        "salvage": salvage,
+        "life": life,
+        "start_period": start_period,
+        "end_period": end_period,
+        "factor": factor,
+    }
+    for name, value in numeric_inputs.items():
+        if not isfinite(value):
+            raise ValueError(f"{name} must be finite")
+
+    if cost < 0:
+        raise ValueError("cost must be non-negative")
+    if salvage < 0:
+        raise ValueError("salvage must be non-negative")
+    if salvage > cost:
+        raise ValueError("salvage must not exceed cost")
+    if life <= 0:
+        raise ValueError("life must be positive")
+    if start_period < 0:
+        raise ValueError("start_period must be non-negative")
+    if end_period < start_period:
+        raise ValueError("end_period must be greater than or equal to start_period")
+    if factor <= 0:
+        raise ValueError("factor must be positive")
+
+
+def _vdb_segments(
+    *,
+    cost: float,
+    salvage: float,
+    life: float,
+    factor: float,
+    no_switch: bool,
+) -> Iterator[tuple[float, float, float]]:
+    """Yield ``(segment_start, segment_end, depreciation_rate)`` tuples."""
+    remaining_basis = cost
+    elapsed = 0.0
+    switched_to_straight_line = False
+
+    while elapsed < life and remaining_basis > salvage:
+        segment_length = min(1.0, life - elapsed)
+        declining_balance_rate = remaining_basis * factor / life
+        straight_line_rate = (remaining_basis - salvage) / (life - elapsed)
+
+        if not no_switch and not switched_to_straight_line:
+            switched_to_straight_line = straight_line_rate > declining_balance_rate
+
+        rate = (
+            declining_balance_rate
+            if no_switch or not switched_to_straight_line
+            else straight_line_rate
+        )
+        depreciation = max(0.0, min(rate * segment_length, remaining_basis - salvage))
+
+        if depreciation <= 0.0:
+            break
+
+        yield elapsed, elapsed + segment_length, depreciation / segment_length
+        remaining_basis -= depreciation
+        elapsed += segment_length
+
+
+def vdb(
+    cost: float,
+    salvage: float,
+    life: float,
+    start_period: float,
+    end_period: float,
+    factor: float = 2.0,
+    no_switch: bool = False,
+) -> float:
+    """
+    Compute variable declining balance depreciation over an arbitrary period.
+
+    Mirrors Excel's ``VDB`` function: depreciation is computed using a
+    declining-balance factor and, unless ``no_switch`` is true, switches to
+    straight-line when that yields a larger deduction.
+
+    Parameters
+    ----------
+    cost : float
+        Original asset basis.
+    salvage : float
+        Residual value at the end of the asset's life.
+    life : float
+        Asset life measured in depreciation periods.
+    start_period : float
+        Start of the depreciation interval, measured in the same period units
+        as ``life``.
+    end_period : float
+        End of the depreciation interval, measured in the same period units as
+        ``life``.
+    factor : float, optional
+        Declining-balance factor. ``2.0`` corresponds to double-declining
+        balance.
+    no_switch : bool, optional
+        When true, remain on declining balance for the entire life instead of
+        switching to straight-line.
+
+    Returns
+    -------
+    float
+        Depreciation amount for ``[start_period, end_period)``.
+
+    Raises
+    ------
+    ValueError
+        If the inputs are out of bounds.
+
+    Examples
+    --------
+    >>> round(vdb(35000, 7500, 36, 10, 20), 2)
+    8603.8
+    >>> round(vdb(2400, 300, 10, 0, 0.875, factor=1.5), 2)
+    315.0
+    """
+    _validate_vdb_inputs(
+        cost=cost,
+        salvage=salvage,
+        life=life,
+        start_period=start_period,
+        end_period=end_period,
+        factor=factor,
+    )
+
+    if cost == 0 or salvage == cost or end_period == start_period:
+        return 0.0
+
+    depreciation = 0.0
+    for segment_start, segment_end, depreciation_rate in _vdb_segments(
+        cost=cost,
+        salvage=salvage,
+        life=life,
+        factor=factor,
+        no_switch=no_switch,
+    ):
+        overlap = max(0.0, min(end_period, segment_end) - max(start_period, segment_start))
+        depreciation += depreciation_rate * overlap
+
+    return depreciation
+
 
 def macrs_schedule(
     cost_basis: float,
@@ -161,10 +222,8 @@ def macrs_schedule(
             assert_never(convention)
     entries: list[CashFlow] = []
     for i, rate in enumerate(rates):
-        dep_date = date(
-            placed_in_service.year + i, placed_in_service.month, placed_in_service.day
-        )
-        flow_label = label.format(n=i + 1) if "{n}" in label else label
+        dep_date = date(placed_in_service.year + i, placed_in_service.month, placed_in_service.day)
+        flow_label = _format_label(label, i + 1)
         entries.append(
             CashFlow(
                 amount=-cost_basis * rate,
@@ -174,4 +233,115 @@ def macrs_schedule(
                 tags=tags,
             )
         )
+    return CashFlowStream(entries)
+
+
+def vdb_schedule(
+    cost_basis: float,
+    salvage_value: float,
+    placed_in_service: date,
+    life: int,
+    frequency: Period = "year",
+    factor: float = 2.0,
+    switch_to_straight_line: bool = True,
+    label: str = "VDB Depreciation Period {n}",
+    tags: frozenset[CashFlowTags] = frozenset(
+        {CashFlowTags.DEPRECIATION, CashFlowTags.TAX_DEDUCTIBLE}
+    ),
+) -> CashFlowStream:
+    """
+    Generate a variable declining balance depreciation schedule.
+
+    This is a schedule-building facade over :func:`vdb`. ``life`` and
+    ``frequency`` together define the depreciation period unit, matching Excel's
+    requirement that ``life``, ``start_period``, and ``end_period`` share the
+    same unit. For example, a 36-month schedule is represented as
+    ``life=36, frequency="month"``.
+
+    Parameters
+    ----------
+    cost_basis : float
+        Original asset basis. Flows will be negative.
+    salvage_value : float
+        Residual value retained at the end of the asset's life.
+    placed_in_service : date
+        Date the asset is placed in service; first depreciation is on this date.
+    life : int
+        Number of depreciation periods.
+    frequency : Period, optional
+        Depreciation frequency. Default is ``"year"``.
+    factor : float, optional
+        Declining-balance factor. Default is ``2.0``.
+    switch_to_straight_line : bool, optional
+        When true (default), switch from declining balance to straight-line
+        when straight-line produces a larger deduction.
+    label : str, optional
+        Label template. ``{n}`` is replaced with the 1-based period index.
+    tags : frozenset[CashFlowTags], optional
+        Tags for each flow.
+
+    Returns
+    -------
+    CashFlowStream
+        Non-cash depreciation flows, one per depreciation period.
+
+    Raises
+    ------
+    ValueError
+        If ``life`` is not a positive integer or if the depreciation inputs are
+        otherwise invalid.
+
+    Examples
+    --------
+    >>> from datetime import date
+    >>> stream = vdb_schedule(
+    ...     cost_basis=35000,
+    ...     salvage_value=7500,
+    ...     placed_in_service=date(2026, 1, 1),
+    ...     life=36,
+    ...     frequency="month",
+    ... )
+    >>> round(sum(-flow.amount for flow in stream.entries[10:20]), 2)
+    8603.8
+    """
+    if isinstance(life, bool) or not isinstance(life, int) or life <= 0:
+        raise ValueError("life must be a positive integer")
+
+    _validate_vdb_inputs(
+        cost=cost_basis,
+        salvage=salvage_value,
+        life=float(life),
+        start_period=0.0,
+        end_period=float(life),
+        factor=factor,
+    )
+
+    if cost_basis == 0 or salvage_value == cost_basis:
+        return CashFlowStream()
+
+    delta = time_delta_per_period(frequency)
+    current_date = placed_in_service
+    entries: list[CashFlow] = []
+
+    for period_number in range(1, life + 1):
+        depreciation = vdb(
+            cost=cost_basis,
+            salvage=salvage_value,
+            life=float(life),
+            start_period=float(period_number - 1),
+            end_period=float(period_number),
+            factor=factor,
+            no_switch=not switch_to_straight_line,
+        )
+        entries.append(
+            CashFlow(
+                amount=-depreciation,
+                date=current_date,
+                label=_format_label(label, period_number),
+                is_cash=False,
+                tags=tags,
+            )
+        )
+        current_date += delta
+
     return CashFlowStream(entries)

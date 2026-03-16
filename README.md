@@ -16,6 +16,6 @@ financial analysis including:
 - Tax and incentive analysis
   - Production Tax Credits
   - Investment Tax Credits
-  - MACRS depreciation scheduling
+  - MACRS and VDB depreciation scheduling
 - Pro-forma generation for detailed financial projections
 - Comprehensive cost modeling for EPU projects

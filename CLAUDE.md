@@ -38,7 +38,7 @@ The public API is re-exported from `dcaf/__init__.py`. Business logic is organiz
 
 - **`cashflows.py`** — Core cashflow abstractions (CashFlow, CashFlowStream, CashFlowGroup, CashFlowTags)
 - **`generation.py`** — Physical energy generation tracking (Generation, GenerationStream, GenerationGroup) with conversion to cashflows via `to_revenue()` and `to_cost()`
-- **`depreciation.py`** — MACRS depreciation schedules (`macrs_schedule()`, IRS rate tables for half-year and mid-quarter conventions)
+- **`depreciation.py`** — Depreciation schedules (`macrs_schedule()`, `vdb()`, `vdb_schedule()`, IRS rate tables for half-year and mid-quarter conventions)
 - **`types.py`** — Shared type aliases (`Period`, `DayCountConvention`, `MACRSPropertyClass`, `MACRSConvention`, `SupportsLessThan`)
 - **`utils.py`** — Shared utilities (`period_start`, `timedelta_fractional_years`, `compound_factor`, `hours_per_period`, `time_delta_per_period`)
 

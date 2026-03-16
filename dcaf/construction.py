@@ -13,7 +13,7 @@ from dcaf.escalation import (
     _coerce_escalation_policy,
     _resolve_escalation_policy_override,
 )
-from dcaf.spend_curves import get_spend_curve
+from dcaf._spend_curves import get_spend_curve
 from dcaf.types import (
     InterestTreatment,
     Period,

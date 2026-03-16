@@ -5,20 +5,16 @@ from datetime import date, timedelta
 
 import pytest
 
+from dcaf._spend_curves import BELL_CURVE, FLAT_CURVE, LINEAR_CURVE, RAMPED_CURVE, TRIANGLE_CURVE
 from dcaf import (
-    BELL_CURVE,
     CashFlowStream,
     CashFlowTags,
     ConstantRateEscalation,
     ConstructionFinancing,
     ConstructionSpendBuilder,
-    FLAT_CURVE,
-    LINEAR_CURVE,
-    RAMPED_CURVE,
     EscalationBuilder,
     IndexSeriesEscalation,
     SpendProfile,
-    TRIANGLE_CURVE,
     construction_spend_schedule,
 )
 from dcaf.construction import ConstructionSpendConfig, _validate_schedule
