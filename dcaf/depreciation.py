@@ -6,14 +6,14 @@ calculator, and factory functions for generating depreciation
 ``CashFlowStream`` objects.
 """
 
-from collections.abc import Iterator
-from datetime import date
+from collections.abc import Iterator, Sequence
+from datetime import date, timedelta
 from math import isfinite
 from typing import assert_never
 
 from dcaf._macrs_tables import MACRS_MID_QUARTER_RATES, MACRS_RATES
 from dcaf.cashflows import CashFlow, CashFlowStream, CashFlowTags
-from dcaf.types import MACRSConvention, MACRSPropertyClass, Period
+from dcaf.types import MACRSConvention, MACRSPropertyClass, Period, VDBConvention
 from dcaf.utils import time_delta_per_period
 
 
@@ -96,6 +96,112 @@ def _vdb_segments(
         yield elapsed, elapsed + segment_length, depreciation / segment_length
         remaining_basis -= depreciation
         elapsed += segment_length
+
+
+def _vdb_convention_shift(convention: VDBConvention, placed_in_service: date) -> float:
+    """Return the fractional first-period shift for convention-aware schedules."""
+    match convention:
+        case "none" | "best-of-half-year-mid-quarter":
+            raise ValueError(f"Convention shift is undefined for '{convention}'")
+        case "half-year":
+            return 0.5
+        case "mid-quarter":
+            in_service_quarter = ((placed_in_service + timedelta(days=1)).month + 2) // 3
+            return ((in_service_quarter - 0.5) * 2.0) / 8.0
+        case _:
+            assert_never(convention)
+
+
+def _validate_schedule_dates(schedule_dates: Sequence[date]) -> tuple[date, ...]:
+    """Validate and normalize an explicit date grid for schedule generation."""
+    normalized = tuple(schedule_dates)
+    for earlier, later in zip(normalized, normalized[1:], strict=False):
+        if later <= earlier:
+            raise ValueError("schedule_dates must be strictly increasing")
+    return normalized
+
+
+def _build_vdb_candidate_schedule(
+    *,
+    cost_basis: float,
+    salvage_value: float,
+    placed_in_service: date,
+    life: int,
+    dates: Sequence[date],
+    factor: float,
+    switch_to_straight_line: bool,
+    convention: VDBConvention,
+    terminal_catch_up: bool,
+    label: str,
+    tags: frozenset[CashFlowTags],
+) -> CashFlowStream:
+    """Build a single convention-aware VDB candidate schedule."""
+    shift = _vdb_convention_shift(convention, placed_in_service)
+    target_total = cost_basis - salvage_value
+    accumulated = 0.0
+    entries: list[CashFlow] = []
+    period_number = 0
+
+    for current_date in dates:
+        if current_date <= placed_in_service:
+            continue
+        period_number += 1
+
+        if period_number == 1:
+            start_period = 0.0
+            end_period = 1.0 - shift
+        elif terminal_catch_up and period_number == life + 1:
+            depreciation = max(0.0, target_total - accumulated)
+            if depreciation > 0.0:
+                entries.append(
+                    CashFlow(
+                        amount=-depreciation,
+                        date=current_date,
+                        label=_format_label(label, period_number),
+                        is_cash=False,
+                        tags=tags,
+                    )
+                )
+            break
+        else:
+            start_period = float(period_number - 1) - shift
+            end_period = min(float(period_number) - shift, float(life))
+
+        if start_period >= life or end_period <= start_period:
+            continue
+
+        depreciation = vdb(
+            cost=cost_basis,
+            salvage=salvage_value,
+            life=float(life),
+            start_period=start_period,
+            end_period=end_period,
+            factor=factor,
+            no_switch=not switch_to_straight_line,
+        )
+        if depreciation <= 0.0:
+            continue
+
+        accumulated += depreciation
+        entries.append(
+            CashFlow(
+                amount=-depreciation,
+                date=current_date,
+                label=_format_label(label, period_number),
+                is_cash=False,
+                tags=tags,
+            )
+        )
+
+    return CashFlowStream(entries)
+
+
+def _candidate_npv(stream: CashFlowStream, *, valuation_rate: float, valuation_date: date) -> float:
+    """Value a non-cash depreciation stream using the standard cashflow NPV helper."""
+    return stream.apply(lambda cf: cf.replace(is_cash=True)).npv(
+        rate=valuation_rate,
+        valuation_date=valuation_date,
+    )
 
 
 def vdb(
@@ -244,6 +350,11 @@ def vdb_schedule(
     frequency: Period = "year",
     factor: float = 2.0,
     switch_to_straight_line: bool = True,
+    convention: VDBConvention = "none",
+    schedule_dates: Sequence[date] | None = None,
+    valuation_rate: float | None = None,
+    valuation_date: date | None = None,
+    terminal_catch_up: bool = False,
     label: str = "VDB Depreciation Period {n}",
     tags: frozenset[CashFlowTags] = frozenset(
         {CashFlowTags.DEPRECIATION, CashFlowTags.TAX_DEDUCTIBLE}
@@ -275,6 +386,24 @@ def vdb_schedule(
     switch_to_straight_line : bool, optional
         When true (default), switch from declining balance to straight-line
         when straight-line produces a larger deduction.
+    convention : VDBConvention, optional
+        Schedule-construction convention. ``"none"`` preserves the legacy
+        period-by-period schedule. ``"half-year"`` and ``"mid-quarter"``
+        apply convention-aware fractional first periods. ``"best-of-half-year-mid-quarter"``
+        values both candidates and returns the higher-NPV schedule.
+    schedule_dates : Sequence[date] | None, optional
+        Explicit dates for convention-aware schedule entries. When provided,
+        depreciation flows are placed on these dates instead of
+        ``placed_in_service + n * frequency``.
+    valuation_rate : float | None, optional
+        Annual discount rate used when ``convention`` is
+        ``"best-of-half-year-mid-quarter"``.
+    valuation_date : date | None, optional
+        Valuation date used when ``convention`` is
+        ``"best-of-half-year-mid-quarter"``.
+    terminal_catch_up : bool, optional
+        When true, allow an additional terminal period that books any residual
+        depreciation needed to exactly reach ``cost_basis - salvage_value``.
     label : str, optional
         Label template. ``{n}`` is replaced with the 1-based period index.
     tags : frozenset[CashFlowTags], optional
@@ -303,6 +432,25 @@ def vdb_schedule(
     ... )
     >>> round(sum(-flow.amount for flow in stream.entries[10:20]), 2)
     8603.8
+    >>> aligned = vdb_schedule(
+    ...     cost_basis=1000,
+    ...     salvage_value=0,
+    ...     placed_in_service=date(2030, 12, 31),
+    ...     life=5,
+    ...     convention="mid-quarter",
+    ...     schedule_dates=(
+    ...         date(2030, 12, 31),
+    ...         date(2031, 12, 31),
+    ...         date(2032, 12, 31),
+    ...         date(2033, 12, 31),
+    ...         date(2034, 12, 31),
+    ...         date(2035, 12, 31),
+    ...         date(2036, 12, 31),
+    ...     ),
+    ...     terminal_catch_up=True,
+    ... )
+    >>> aligned.entries[0].date
+    date(2031, 12, 31)
     """
     if isinstance(life, bool) or not isinstance(life, int) or life <= 0:
         raise ValueError("life must be a positive integer")
@@ -318,6 +466,90 @@ def vdb_schedule(
 
     if cost_basis == 0 or salvage_value == cost_basis:
         return CashFlowStream()
+
+    if convention == "best-of-half-year-mid-quarter":
+        if valuation_rate is None or valuation_date is None:
+            raise ValueError(
+                "valuation_rate and valuation_date are required for "
+                "best-of-half-year-mid-quarter schedules"
+            )
+    elif valuation_rate is not None or valuation_date is not None:
+        if convention == "none":
+            raise ValueError(
+                "valuation_rate and valuation_date are only supported for "
+                "best-of-half-year-mid-quarter schedules"
+            )
+
+    if schedule_dates is not None:
+        normalized_schedule_dates = _validate_schedule_dates(schedule_dates)
+    else:
+        normalized_schedule_dates = None
+
+    if convention != "none":
+        if normalized_schedule_dates is None:
+            delta = time_delta_per_period(frequency)
+            period_count = life + 1 + (1 if terminal_catch_up else 0)
+            generated_dates: list[date] = []
+            current_date = placed_in_service
+            for _ in range(period_count):
+                generated_dates.append(current_date)
+                current_date += delta
+            candidate_dates: Sequence[date] = tuple(generated_dates)
+        else:
+            candidate_dates = normalized_schedule_dates
+
+        if convention == "best-of-half-year-mid-quarter":
+            half_year = _build_vdb_candidate_schedule(
+                cost_basis=cost_basis,
+                salvage_value=salvage_value,
+                placed_in_service=placed_in_service,
+                life=life,
+                dates=candidate_dates,
+                factor=factor,
+                switch_to_straight_line=switch_to_straight_line,
+                convention="half-year",
+                terminal_catch_up=terminal_catch_up,
+                label=label,
+                tags=tags,
+            )
+            mid_quarter = _build_vdb_candidate_schedule(
+                cost_basis=cost_basis,
+                salvage_value=salvage_value,
+                placed_in_service=placed_in_service,
+                life=life,
+                dates=candidate_dates,
+                factor=factor,
+                switch_to_straight_line=switch_to_straight_line,
+                convention="mid-quarter",
+                terminal_catch_up=terminal_catch_up,
+                label=label,
+                tags=tags,
+            )
+            if _candidate_npv(
+                half_year,
+                valuation_rate=valuation_rate,
+                valuation_date=valuation_date,
+            ) <= _candidate_npv(
+                mid_quarter,
+                valuation_rate=valuation_rate,
+                valuation_date=valuation_date,
+            ):
+                return half_year
+            return mid_quarter
+
+        return _build_vdb_candidate_schedule(
+            cost_basis=cost_basis,
+            salvage_value=salvage_value,
+            placed_in_service=placed_in_service,
+            life=life,
+            dates=candidate_dates,
+            factor=factor,
+            switch_to_straight_line=switch_to_straight_line,
+            convention=convention,
+            terminal_catch_up=terminal_catch_up,
+            label=label,
+            tags=tags,
+        )
 
     delta = time_delta_per_period(frequency)
     current_date = placed_in_service

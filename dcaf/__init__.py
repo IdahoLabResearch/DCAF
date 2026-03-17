@@ -51,6 +51,7 @@ from dcaf.types import (
     Period,
     SpendSchedule,
     SpendScheduleName,
+    VDBConvention,
 )
 
 
@@ -91,5 +92,6 @@ __all__ = [
     "Period",
     "tax_liability",
     "vdb",
+    "VDBConvention",
     "vdb_schedule",
 ]

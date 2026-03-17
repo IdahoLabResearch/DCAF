@@ -154,3 +154,126 @@ def test_vdb_schedule_rejects_non_integer_life():
             placed_in_service=date(2026, 1, 1),
             life=5.0,  # type: ignore[arg-type]
         )
+
+
+def test_vdb_schedule_half_year_convention_can_add_terminal_catch_up():
+    """Convention-aware schedules can add a residual terminal period."""
+    stream = vdb_schedule(
+        cost_basis=1000.0,
+        salvage_value=0.0,
+        placed_in_service=date(2026, 1, 1),
+        life=5,
+        convention="half-year",
+        terminal_catch_up=True,
+    )
+
+    assert stream.count() == 6
+    assert stream.entries[0].date == date(2027, 1, 1)
+    assert -stream.entries[0].amount == pytest.approx(200.0)
+    assert -stream.entries[-1].amount == pytest.approx(54.0)
+    assert sum(entry.amount for entry in stream.entries) == pytest.approx(-1000.0)
+
+
+def test_vdb_schedule_mid_quarter_convention_uses_explicit_date_grid():
+    """Convention-aware schedules should align entries to the supplied date grid."""
+    schedule_dates = (
+        date(2029, 12, 31),
+        date(2030, 12, 31),
+        date(2031, 12, 31),
+        date(2032, 12, 31),
+        date(2033, 12, 31),
+        date(2034, 12, 31),
+        date(2035, 12, 31),
+    )
+    stream = vdb_schedule(
+        cost_basis=1000.0,
+        salvage_value=0.0,
+        placed_in_service=date(2030, 6, 30),
+        life=5,
+        convention="mid-quarter",
+        schedule_dates=schedule_dates,
+        terminal_catch_up=True,
+    )
+
+    assert [entry.date for entry in stream.entries] == list(schedule_dates[1:])
+    assert stream.entries[0].label == "VDB Depreciation Period 1"
+    assert -stream.entries[0].amount == pytest.approx(150.0)
+
+
+def test_vdb_schedule_best_of_convention_requires_valuation_inputs():
+    """Candidate selection needs valuation inputs for the NPV comparison."""
+    with pytest.raises(
+        ValueError,
+        match="valuation_rate and valuation_date are required",
+    ):
+        vdb_schedule(
+            cost_basis=1000.0,
+            salvage_value=0.0,
+            placed_in_service=date(2026, 1, 1),
+            life=5,
+            convention="best-of-half-year-mid-quarter",
+        )
+
+
+def test_vdb_schedule_best_of_convention_matches_workbook_shape():
+    """Best-of mode should select the workbook-like mid-quarter candidate for the fixture case."""
+    schedule_dates = tuple(date(year, 12, 31) for year in range(2030, 2047))
+    stream = vdb_schedule(
+        cost_basis=877824.3662585187,
+        salvage_value=0.0,
+        placed_in_service=date(2030, 12, 31),
+        life=15,
+        factor=1.5,
+        convention="best-of-half-year-mid-quarter",
+        schedule_dates=schedule_dates,
+        valuation_rate=0.10,
+        valuation_date=date(2030, 12, 31),
+        terminal_catch_up=True,
+    )
+
+    expected_amounts = [
+        -76809.63204762038,
+        -80101.47342108983,
+        -72091.32607898084,
+        -64882.19347108276,
+        -58393.97412397449,
+        -52554.576711577036,
+    ]
+
+    assert stream.entries[0].date == date(2031, 12, 31)
+    assert [entry.amount for entry in stream.entries[:6]] == pytest.approx(expected_amounts)
+    assert sum(entry.amount for entry in stream.entries) == pytest.approx(-877824.3662585187)
+
+
+def test_vdb_schedule_best_of_convention_prefers_mid_quarter_candidate():
+    """The selector should pick the higher-value convention candidate, not always half-year."""
+    schedule_dates = tuple(date(year, 12, 31) for year in range(2030, 2047))
+    half_year = vdb_schedule(
+        cost_basis=877824.3662585187,
+        salvage_value=0.0,
+        placed_in_service=date(2030, 12, 31),
+        life=15,
+        factor=1.5,
+        convention="half-year",
+        schedule_dates=schedule_dates,
+        terminal_catch_up=True,
+    )
+    best_of = vdb_schedule(
+        cost_basis=877824.3662585187,
+        salvage_value=0.0,
+        placed_in_service=date(2030, 12, 31),
+        life=15,
+        factor=1.5,
+        convention="best-of-half-year-mid-quarter",
+        schedule_dates=schedule_dates,
+        valuation_rate=0.10,
+        valuation_date=date(2030, 12, 31),
+        terminal_catch_up=True,
+    )
+
+    assert [entry.amount for entry in best_of.entries[:3]] != pytest.approx(
+        [entry.amount for entry in half_year.entries[:3]]
+    )
+    assert [entry.amount for entry in best_of.entries[:3]] == pytest.approx(
+        [-76809.63204762038, -80101.47342108983, -72091.32607898084]
+    )
