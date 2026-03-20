@@ -96,7 +96,7 @@ class Generation:
         >>> # Perform multiple modifications
         >>> old_gen = Generation(300, date(2027, 6, 1))
         >>> new_gen = old_gen.replace(
-        ...     amount = old_gen.amount - 50,
+        ...     amount = old_gen.amount_mwh - 50,
         ...     date = (old_gen.date - relativedelta(months=6)),
         ... )
         >>> # This decreases the generation amount by 50 and moves it forward 6 months
