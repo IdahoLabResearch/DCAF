@@ -205,8 +205,8 @@ def test_filter_rejects_predicate_and_keywords():
         gs.filter(lambda entry: entry.amount_mwh > 0, source="a")
 
 
-def test_apply_generation_stream():
-    """apply transforms entries and preserves stream type."""
+def test_apply_generation_stream_no_condition():
+    """apply transforms all entries with no condition provided and preserves stream type."""
     gs = GenerationStream([Generation(100.0, date(2030, 1, 1), source="a")])
     result = gs.apply(
         lambda g: Generation(g.amount_mwh * 2, g.date, g.source, g.carrier, g.label)
@@ -214,6 +214,24 @@ def test_apply_generation_stream():
     assert isinstance(result, GenerationStream)
     assert result[0].amount_mwh == 200.0
     assert gs[0].amount_mwh == 100.0
+
+
+def test_apply_generation_stream_with_condition():
+    """apply transforms all entries satisfying the condition provided and preserves stream type."""
+    gs = GenerationStream(
+        [
+            Generation(150.0, date(2030, 1, 1), source="a"),
+            Generation(200.0, date(2031, 1, 1), source="b"),
+        ]
+    )
+    result = gs.apply(
+        lambda g: Generation(g.amount_mwh * 2, g.date, g.source, g.carrier, g.label),
+        lambda g: g.source == "a",
+    )
+    assert isinstance(result, GenerationStream)
+    assert result[0].amount_mwh == 300.0
+    assert result[1].amount_mwh == 200.0
+    assert gs[0].amount_mwh == 150.0  # Check that the initial stream is unmodified
 
 
 def test_apply_streamwise_generation_stream():

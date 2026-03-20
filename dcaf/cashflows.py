@@ -791,19 +791,28 @@ class CashFlowStream(BaseStream[CashFlow]):
         )
         return self.extend(recurring)
 
-    def apply(self, fn: Callable[[CashFlow], CashFlow]) -> "CashFlowStream":
+    def apply(
+        self,
+        transform: Callable[[CashFlow], CashFlow],
+        where: Callable[[CashFlow], bool] | None = None,
+    ) -> "CashFlowStream":
         """
-        Apply a function to each cashflow within the CashFlowStream.
+        Apply a functional transformation to each cashflow within the CashFlowStream
+        for which the given (optional) condition is satisfied.
 
         Parameters
         ----------
-        fn : Callable
+        transform : Callable
             A callable that takes a CashFlow object and returns a modified CashFlow object.
+        where : Callable
+            A callable that takes a CashFlow object and returns a bool
+            indicating whether to apply the transformation on that CashFlow.
+            Defaults to applying the transformation to all CashFlows.
 
         Returns
         -------
         CashFlowStream
-            A new CashFlowStream object with the function applied to each cashflow.
+            A new CashFlowStream object with the function applied to the specified cashflows.
 
         Examples
         --------
@@ -817,10 +826,11 @@ class CashFlowStream(BaseStream[CashFlow]):
         ...     cf.amount * 0.9, cf.date, cf.label, cf.is_cash, cf.tags
         ... ))
 
-        >>> # Add a tag to all cashflows
+        >>> # Add a tag to all cashflows with positive amounts
         >>> tagged = stream.apply(lambda cf: CashFlow(
         ...     cf.amount, cf.date, cf.label, cf.is_cash,
-        ...     cf.tags | frozenset({CashFlowTags.REVENUE})
+        ...     cf.tags | frozenset({CashFlowTags.REVENUE}),
+        ...     lambda cf: cf.amount > 0
         ... ))
 
         Notes
@@ -828,7 +838,7 @@ class CashFlowStream(BaseStream[CashFlow]):
         This method returns a new CashFlowStream and does not modify the original.
         For operations on the entire stream (not element-wise), use ``apply_streamwise()``.
         """
-        return super().apply(fn)
+        return super().apply(transform, where)
 
     def apply_streamwise(
         self, fn: Callable[["CashFlowStream"], "CashFlowStream"]
@@ -1052,6 +1062,9 @@ class CashFlowStream(BaseStream[CashFlow]):
             return CashFlowGroup(self._grouped_streams(groups))
 
         if tag:
+            # NOTE: In the current version (as of 3/20/26), grouping by tag does not create a group
+            # for untagged cashflows. This means that, in a workflow where a stream is grouped, then
+            # ungrouped, any cashflows without tags will be omitted in the group and final stream.
             tag_groups: defaultdict[CashFlowTags, list[CashFlow]] = defaultdict(list)
             for flow in self.entries:
                 for t in flow.tags:

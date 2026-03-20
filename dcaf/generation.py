@@ -572,19 +572,26 @@ class GenerationStream(BaseStream[Generation]):
         """
         return super().extend(other)
 
-    def apply(self, fn: Callable[[Generation], Generation]) -> "GenerationStream":
+    def apply(
+        self, transform: Callable[[Generation], Generation],
+        where: Callable[[Generation], bool] | None = None,
+    ) -> "GenerationStream":
         """
-        Apply a transformation to each generation entry.
+        Apply a transformation to each generation entry for
+        which the given (optional) condition is satisfied.
 
         Parameters
         ----------
-        fn : Callable[[Generation], Generation]
-            One-to-one transformation function applied to every entry.
+        transform : Callable[[Generation], Generation]
+            One-to-one transformation function applied to the specified entries.
+        where: Callable[[Generation], bool]
+            Condition determining whether the transformation should be applied for a given entry.
+            Defaults to applying the transformation to all entries.
 
         Returns
         -------
         GenerationStream
-            New stream containing the transformed entries.
+            New stream with the transformation applied to the specified entries.
 
         Examples
         --------
@@ -595,7 +602,7 @@ class GenerationStream(BaseStream[Generation]):
         >>> doubled[0].amount_mwh
         200.0
         """
-        return super().apply(fn)
+        return super().apply(transform, where)
 
     def apply_streamwise(
         self, fn: Callable[["GenerationStream"], "GenerationStream"]
