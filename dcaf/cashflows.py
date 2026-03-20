@@ -18,6 +18,7 @@ from typing import (
     Literal,
     Optional,
     overload,
+    Self,
 )
 
 from dcaf._streams import BaseGroup, BaseStream
@@ -1197,6 +1198,38 @@ class CashFlowStream(BaseStream[CashFlow]):
             A new sorted CashFlowStream.
         """
         return self.sort(attr=attr, descending=not ascending)
+
+    def scale(self, factor: float) -> "CashFlowStream":
+        """
+        Multiply all cashflow amounts by the provided factor.
+
+        Parameters
+        ----------
+        factor: float
+            The value by which to scale the cashflow amounts.
+
+        Returns
+        -------
+        CashFlowStream
+            A new CashFlowStream with scaled cashflows.
+
+        Examples
+        --------
+        >>> # Change units from thousands to millions
+        >>> stream_in_millions = stream_in_thousands.scale(1000)
+
+        >>> # Add 20% to all cashflow amounts
+        >>> scaled_stream = stream.scale(1.2)
+
+        >>> # Reduce EXPENSE cashflow amounts by 10%
+        >>> expense_stream = stream.filter(tag=CashFlowTags.EXPENSE)
+        >>> non_expense_stream = CashFlowStream(
+        ...     entries=list(set(stream.entries) - set(expense_stream.entries))
+        ... )
+        >>> scaled_expense_stream = expense_stream.scale(0.9)
+        >>> result_stream = CashFlowStream.from_streams(scaled_expense_stream, non_expense_stream)
+        """
+        return CashFlowStream([cf.replace(amount=cf.amount*factor) for cf in self.entries])
 
     def sum(self) -> float:
         """

@@ -302,6 +302,18 @@ def test_sort_generation_stream_by_attr():
     assert [entry.amount_mwh for entry in result] == [300.0, 200.0, 100.0]
 
 
+def test_scale():
+    """Scales all generation amounts."""
+    gs = GenerationStream([Generation(200, date(2026, 1, 1)), Generation(300, date(2027, 1, 1))])
+    entries = gs.entries
+    scaled_gs = gs.scale(0.8)
+    assert abs(scaled_gs.entries[0].amount_mwh - 160) < 1e-8
+    assert abs(scaled_gs.entries[1].amount_mwh -240) < 1e-8
+
+    # Check that the original stream was not modified
+    assert entries == gs.entries
+
+
 # === aggregation ===
 
 

@@ -912,6 +912,35 @@ class GenerationStream(BaseStream[Generation]):
             raise AssertionError(f"Unexpected sort attribute: {attr!r}")
         return super().sort(fn, attr=attr, descending=descending)
 
+    def scale(self, factor: float) -> "GenerationStream":
+        """
+        Multiply all generation amounts by the provided factor.
+
+        Parameters
+        ----------
+        factor: float
+            The value by which to scale the generation amounts.
+
+        Returns
+        -------
+        GenerationStream
+            A new GenerationStream with scaled generation.
+
+        Examples
+        --------
+        >>> # Add 20% to all generation amounts
+        >>> scaled_gen_stream = gen_stream.scale(1.2)
+
+        >>> # Reduce generation amounts from an uprate by 10%
+        >>> uprate_stream = stream.filter(source="uprate")
+        >>> non_uprate_stream = GenerationStream(
+        ...     entries=list(set(stream.entries) - set(uprate_stream.entries))
+        ... )
+        >>> scaled_uprate_stream = uprate_stream.scale(0.9)
+        >>> result_stream = GenerationStream.from_streams(scaled_uprate_stream, non_uprate_stream)
+        """
+        return GenerationStream([Generation(amount_mwh = e.amount_mwh * factor, date = e.date, source = e.source, carrier = e.carrier, label = e.label) for e in self.entries])
+
     def sum(self) -> float:
         """
         Return total MWh across all entries.

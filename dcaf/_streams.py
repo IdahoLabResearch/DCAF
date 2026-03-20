@@ -210,6 +210,10 @@ class BaseStream[EntryT]:
         key = self._resolve_sort_key(resolved_attr)
         return self._new(sorted(self.entries, key=key, reverse=descending))
 
+    def scale(self, factor: float) -> Self:
+        """Return a new stream with entry amounts scaled by a given factor."""
+        raise NotImplementedError
+
     def sum(self) -> float:
         """Return the sum of entry amounts."""
         return sum((self._amount(entry) for entry in self.entries), start=0.0)
