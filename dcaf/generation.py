@@ -6,7 +6,7 @@ and GenerationGroup (grouped container) for modeling MWh production
 from various sources and energy carriers.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as dc_replace
 from datetime import date
 from typing import (
     Any,
@@ -58,6 +58,52 @@ class Generation:
     source: str = ""
     carrier: str = "electricity"
     label: str = ""
+
+    def replace(
+        self,
+        amount_mwh: float | None = None,
+        date: date | None = None,
+        source: str | None = None,
+        carrier: str | None = None,
+        label: str | None = None,
+    ) -> "Generation":
+        """
+        Return a new version of this Generation with the specified changes to parameters.
+
+        Parameters
+        ----------
+        amount_mwh: float | None = None
+        date: date | None = None
+        source: str | None = None
+        carrier: str | None = None
+        label: str | None = None
+
+        Returns
+        -------
+        Generation
+            A new Generation instance with the specified parameters updated to the new values provided.
+
+        Examples
+        --------
+        >>> # Change the label
+        >>> gen = Generation(1000, date(2026, 1, 1), label="old_gen")
+        >>> new_gen = gen.replace(label="new_gen")
+
+        >>> # Increase the amount
+        >>> gen = Generation(500, date(2026, 1, 1)
+        >>> larger_gen = gen.replace(amount_mwh=gen.amount_mwh*1.2)
+
+        >>> # Perform multiple modifications
+        >>> old_gen = Generation(300, date(2027, 6, 1))
+        >>> new_gen = old_gen.replace(
+        ...     amount = old_gen.amount - 50,
+        ...     date = (old_gen.date - relativedelta(months=6)),
+        ... )
+        >>> # This decreases the generation amount by 50 and moves it forward 6 months
+        """
+        params = {"amount_mwh": amount_mwh, "date": date, "source": source, "carrier": carrier, "label": label}
+        changes = {argname: arg for argname, arg in params.items() if arg is not None}
+        return dc_replace(self, **changes)
 
 
 @dataclass
@@ -939,7 +985,7 @@ class GenerationStream(BaseStream[Generation]):
         >>> scaled_uprate_stream = uprate_stream.scale(0.9)
         >>> result_stream = GenerationStream.from_streams(scaled_uprate_stream, non_uprate_stream)
         """
-        return GenerationStream([Generation(amount_mwh = e.amount_mwh * factor, date = e.date, source = e.source, carrier = e.carrier, label = e.label) for e in self.entries])
+        return GenerationStream([e.replace(e.amount_mwh * factor) for e in self.entries])
 
     def sum(self) -> float:
         """

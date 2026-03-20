@@ -26,6 +26,24 @@ def test_generation_immutable():
         g.amount_mwh = 200.0  # type: ignore[misc]
 
 
+def test_generation_replace():
+    """replace method replaces the specified parameters."""
+    old_g = Generation(amount_mwh=100.0, date=date(2026, 1, 1), source="uprate", label="old_gen")
+    new_g = old_g.replace(amount_mwh=150.0, label="new_gen")
+
+    # Check that replacements were made
+    assert new_g.amount_mwh == 150.0
+    assert new_g.label == "new_gen"
+
+    # Check that other parameters are untouched
+    assert new_g.date == date(2026, 1, 1)
+    assert new_g.source == "uprate"
+    assert new_g.carrier == "electricity"
+
+    # Check that original stream is unmodified
+    assert old_g.amount_mwh == 100.0
+
+
 # === GenerationStream.from_capacity ===
 
 
