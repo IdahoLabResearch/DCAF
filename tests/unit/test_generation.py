@@ -31,6 +31,24 @@ def test_generation_immutable():
         g.amount_mwh = 200.0  # type: ignore[misc]
 
 
+def test_generation_replace():
+    """replace method replaces the specified parameters."""
+    old_g = Generation(amount_mwh=100.0, date=date(2026, 1, 1), source="uprate", label="old_gen")
+    new_g = old_g.replace(amount_mwh=150.0, label="new_gen")
+
+    # Check that replacements were made
+    assert new_g.amount_mwh == 150.0
+    assert new_g.label == "new_gen"
+
+    # Check that other parameters are untouched
+    assert new_g.date == date(2026, 1, 1)
+    assert new_g.source == "uprate"
+    assert new_g.carrier == "electricity"
+
+    # Check that original stream is unmodified
+    assert old_g.amount_mwh == 100.0
+
+
 # === GenerationStream.from_capacity ===
 
 
@@ -305,6 +323,18 @@ def test_sort_generation_stream_by_attr():
     ])
     result = gs.sort(attr="amount_mwh", descending=True)
     assert [entry.amount_mwh for entry in result] == [300.0, 200.0, 100.0]
+
+
+def test_scale():
+    """Scales all generation amounts."""
+    gs = GenerationStream([Generation(200, date(2026, 1, 1)), Generation(300, date(2027, 1, 1))])
+    entries = gs.entries
+    scaled_gs = gs.scale(0.8)
+    assert abs(scaled_gs.entries[0].amount_mwh - 160) < 1e-8
+    assert abs(scaled_gs.entries[1].amount_mwh -240) < 1e-8
+
+    # Check that the original stream was not modified
+    assert entries == gs.entries
 
 
 # === aggregation ===

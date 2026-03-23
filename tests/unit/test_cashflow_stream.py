@@ -40,7 +40,7 @@ def _create_cf_stream():
         label="rev_2",
     )
     cf_stream = CashFlowStream([cf1, cf2, cf3, cf4])
-    return (cf_stream, (cf1, cf2, cf3, cf4))
+    return (cf_stream, [cf1, cf2, cf3, cf4])
 
 
 def test_from_recurring_defaults():
@@ -395,7 +395,18 @@ def test_sort(_create_cf_stream):
     assert sorted_cf_stream.entries == [flows[3], flows[0], flows[2], flows[1]]
 
     # Verify that the original cashflow stream was not modified
-    assert cf_stream_old.entries == [flows[0], flows[1], flows[2], flows[3]]
+    assert cf_stream_old.entries == flows
+
+
+def test_scale(_create_cf_stream):
+    """Tests the CashFlowStream.scale method."""
+    cf_stream, flows = _create_cf_stream
+    scaled_cf_stream = cf_stream.scale(1.5)
+    assert abs(scaled_cf_stream.entries[0].amount - (-750)) < 1e-8
+    assert abs(scaled_cf_stream.entries[1].amount - 3000) < 1e-8
+
+    # Verify that the original cashflow stream was not modified
+    assert cf_stream.entries == flows
 
 
 def test_sum(_create_cf_stream):

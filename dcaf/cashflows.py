@@ -158,22 +158,18 @@ class CashFlow:
         Examples
         --------
         >>> # Change the label
-        >>> cf = CashFlow(Decimal(1000), date(2026, 1, 1), label="old_cf")
+        >>> cf = CashFlow(1000, date(2026, 1, 1), label="old_cf")
         >>> new_cf = cf.replace(label="new_cf")
 
         >>> # Increase the magnitude of the amount
-        >>> cf = CashFlow(Decimal(-500), date(2026, 1, 1))
-        >>> new_amount = Decimal(-100) if cf.amount < Decimal(0) else Decimal(100)
+        >>> cf = CashFlow(-500, date(2026, 1, 1))
+        >>> new_amount = -100 if cf.amount < 0 else 100
         >>> larger_cf = cf.replace(amount=new_amount)
 
         >>> # Perform multiple modifications
-        >>> old_cf = CashFlow(
-        ...     Decimal(-3000),
-        ...     date(2027, 6, 1),
-        ...     tags=frozenset([CashFlowTags.EXPENSE]),
-        ... )
+        >>> old_cf = CashFlow(-3000, date(2027, 6, 1), tags=frozenset([CashFlowTags.EXPENSE]))
         >>> new_cf = old_cf.replace(
-        ...     amount = old_cf.amount + Decimal(500),
+        ...     amount = old_cf.amount + 500,
         ...     date = (old_cf.date + relativedelta(months=6)),
         ... )
         >>> # This reduces the expense magnitude by 500 and moves it back 6 months
@@ -1261,6 +1257,38 @@ class CashFlowStream(BaseStream[CashFlow]):
             A new sorted CashFlowStream.
         """
         return self.sort(attr=attr, descending=not ascending)
+
+    def scale(self, factor: float) -> "CashFlowStream":
+        """
+        Multiply all cashflow amounts by the provided factor.
+
+        Parameters
+        ----------
+        factor: float
+            The value by which to scale the cashflow amounts.
+
+        Returns
+        -------
+        CashFlowStream
+            A new CashFlowStream with scaled cashflows.
+
+        Examples
+        --------
+        >>> # Change units from thousands to millions
+        >>> stream_in_millions = stream_in_thousands.scale(1000)
+
+        >>> # Add 20% to all cashflow amounts
+        >>> scaled_stream = stream.scale(1.2)
+
+        >>> # Reduce EXPENSE cashflow amounts by 10%
+        >>> expense_stream = stream.filter(tag=CashFlowTags.EXPENSE)
+        >>> non_expense_stream = CashFlowStream(
+        ...     entries=list(set(stream.entries) - set(expense_stream.entries))
+        ... )
+        >>> scaled_expense_stream = expense_stream.scale(0.9)
+        >>> result_stream = CashFlowStream.from_streams(scaled_expense_stream, non_expense_stream)
+        """
+        return CashFlowStream([cf.replace(amount=cf.amount*factor) for cf in self.entries])
 
     def sum(self) -> float:
         """
