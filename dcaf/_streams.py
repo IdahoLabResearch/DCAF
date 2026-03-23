@@ -110,9 +110,20 @@ class BaseStream[EntryT]:
             return self._new([*self.entries, *other.entries])
         return self._new([*self.entries, *other])
 
-    def apply(self, fn: Callable[[EntryT], EntryT]) -> Self:
+    def apply(
+        self, transform: Callable[[EntryT], EntryT], where: Callable[[EntryT], bool] | None = None
+    ) -> Self:
         """Map entries one-to-one."""
-        return self._new(fn(entry) for entry in self.entries)
+        new_entries = []
+        for entry in self.entries:
+            if where is None:
+                new_entries.append(transform(entry))
+            else:
+                if where(entry):
+                    new_entries.append(transform(entry))
+                else:
+                    new_entries.append(entry)
+        return self._new(new_entries)
 
     def apply_streamwise(self, fn: Callable[[Self], Self]) -> Self:
         """Apply a transformation to the entire stream object."""

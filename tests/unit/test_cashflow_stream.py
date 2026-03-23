@@ -244,19 +244,38 @@ def test_from_streams_rejects_other_stream_types():
         CashFlowStream.from_streams(generation_stream)
 
 
-def test_apply(_create_cf_stream):
-    """Tests the CashFlowStream.apply method."""
+def test_apply_no_condition(_create_cf_stream):
+    """Tests the CashFlowStream.apply method with no condition."""
 
     def _modify_cf(cf):
         return CashFlow(cf.amount * 2, cf.date, cf.label, cf.is_cash, cf.tags)
 
     cf_stream_old = _create_cf_stream[0]
     cf_stream_new = cf_stream_old.apply(_modify_cf)
-    assert cf_stream_new.entries[0].amount == -1000
-    assert cf_stream_new.entries[1].amount == 4000
+    assert isinstance(cf_stream_new, CashFlowStream)
+    assert cf_stream_new[0].amount == -1000
+    assert cf_stream_new[1].amount == 4000
+    assert cf_stream_new[2].amount == -2000
+    assert cf_stream_new[3].amount == 200
     assert (
-        cf_stream_old.entries[0].amount == -500
+        cf_stream_old[0].amount == -500
     )  # Verifies that the original object was not modified
+
+
+def test_apply_with_condition(_create_cf_stream):
+    """Tests that CashFlowStream.apply method with a condition."""
+    def _modify_cf(cf):
+        return CashFlow(cf.amount * 2, cf.date, cf.label, cf.is_cash, cf.tags)
+
+    cf_stream_old = _create_cf_stream[0]
+    cf_stream_new = cf_stream_old.apply(_modify_cf, lambda cf: "exp" in cf.label)
+    assert isinstance(cf_stream_new, CashFlowStream)
+    assert len(cf_stream_new) == 4
+    assert cf_stream_new[0].amount == -1000  # Modified
+    assert cf_stream_new[1].amount == 2000
+    assert cf_stream_new[2].amount == -2000  # Modified
+    assert cf_stream_new[3].amount == 100
+    assert cf_stream_old[0].amount == -500  # Verifies that the original object was not modified
 
 
 def test_apply_streamwise(_create_cf_stream):
