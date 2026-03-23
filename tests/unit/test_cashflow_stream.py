@@ -930,3 +930,103 @@ def test_sort_fn_and_attr_raises(_create_cf_stream):
     cf_stream = _create_cf_stream[0]
     with pytest.raises(ValueError, match="Cannot pass both"):
         cf_stream.sort(lambda cf: cf.date, attr="date")
+
+
+# ---- irr tests ----
+
+
+def test_irr_main():
+    """IRR of invest $1000, receive $1100 after exactly one non-leap year equals 10%.
+
+    2025 is not a leap year: 2025-01-01 → 2026-01-01 = 365 days → t = 365/365 = 1.0 exactly.
+    NPV = -1000 + 1100/(1+r) = 0 → r = 0.1 exactly.
+    """
+    stream = CashFlowStream([
+        CashFlow(-1000.0, date(2025, 1, 1)),
+        CashFlow(1100.0, date(2026, 1, 1)),
+    ])
+    assert stream.irr() == pytest.approx(0.1, abs=1e-8)
+
+
+def test_irr_multi_cashflow():
+    """IRR of a 3-cashflow project: NPV must be zero at the computed rate.
+
+    Uses two back-to-back non-leap years so time fractions are 1.0 and 2.0 exactly,
+    making the polynomial root analytically verifiable via the quadratic formula.
+    """
+    # 2025 and 2026 are both non-leap years: t₂=1.0, t₃=2.0 exactly
+    stream = CashFlowStream([
+        CashFlow(-10_000.0, date(2025, 1, 1)),
+        CashFlow(5_000.0, date(2026, 1, 1)),
+        CashFlow(7_000.0, date(2027, 1, 1)),
+    ])
+    irr = stream.irr()
+    # Verify by evaluating NPV at the returned rate
+    ref_date = date(2025, 1, 1)
+    assert stream.npv(irr, ref_date) == pytest.approx(0.0, abs=1e-6)
+    # Quadratic solution: x = 1/(1+r), 7000x²+5000x−10000=0 → r = 0.12321245...
+    # x = (−5000 + sqrt(305_000_000)) / 14_000
+    assert irr == pytest.approx(0.12321245982864881, abs=1e-8)
+
+
+def test_irr_convention_default():
+    """Default 'actual/365' convention produces the same result as the explicit argument."""
+    stream = CashFlowStream([
+        CashFlow(-5_000.0, date(2025, 3, 1)),
+        CashFlow(2_000.0, date(2026, 3, 1)),
+        CashFlow(4_500.0, date(2027, 3, 1)),
+    ])
+    assert stream.irr() == stream.irr(convention="actual/365")
+
+
+def test_irr_npv_is_zero_at_irr():
+    """stream.npv(stream.irr(), ref_date) ≈ 0 for a multi-year project."""
+    stream = CashFlowStream([
+        CashFlow(-50_000.0, date(2025, 1, 1)),
+        CashFlow(15_000.0, date(2026, 1, 1)),
+        CashFlow(20_000.0, date(2027, 1, 1)),
+        CashFlow(25_000.0, date(2028, 1, 1)),
+    ])
+    irr = stream.irr()
+    assert stream.npv(irr, date(2025, 1, 1)) == pytest.approx(0.0, abs=1e-6)
+
+
+def test_irr_no_inflows():
+    """Stream with no positive cashflows raises ValueError."""
+    stream = CashFlowStream([
+        CashFlow(-1_000.0, date(2025, 1, 1)),
+        CashFlow(-500.0, date(2026, 1, 1)),
+    ])
+    with pytest.raises(ValueError, match="inflow"):
+        stream.irr()
+
+
+def test_irr_no_outflows():
+    """Stream with no negative cashflows raises ValueError."""
+    stream = CashFlowStream([
+        CashFlow(1_000.0, date(2025, 1, 1)),
+        CashFlow(500.0, date(2026, 1, 1)),
+    ])
+    with pytest.raises(ValueError, match="outflow"):
+        stream.irr()
+
+
+def test_irr_empty():
+    """Empty stream raises ValueError (no inflows or outflows)."""
+    with pytest.raises(ValueError):
+        CashFlowStream([]).irr()
+
+
+def test_irr_excludes_non_cash():
+    """Non-cash flows (is_cash=False) are excluded from the IRR calculation.
+
+    The stream's only outflow is non-cash; cash-only view is all inflows,
+    so irr() must raise ValueError rather than computing a spurious rate.
+    """
+    stream = CashFlowStream([
+        CashFlow(-5_000.0, date(2025, 1, 1), is_cash=False),
+        CashFlow(1_000.0, date(2026, 1, 1)),
+        CashFlow(1_500.0, date(2027, 1, 1)),
+    ])
+    with pytest.raises(ValueError):
+        stream.irr()
