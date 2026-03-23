@@ -28,7 +28,7 @@ from dcaf.escalation import (
     _resolve_escalation_policy_override,
 )
 from dcaf.types import DayCountConvention, Period, SupportsLessThan
-from dcaf.utils import time_delta_per_period
+from dcaf.utils import time_delta_per_period, timedelta_fractional_years
 
 
 def _recurring_escalation(
@@ -1511,3 +1511,175 @@ class CashFlowStream(BaseStream[CashFlow]):
             total += flow.amount / discount_policy.factor(flow.date)
 
         return total
+
+    def irr(
+        self,
+        convention: DayCountConvention = "actual/365",
+        *,
+        tol: float = 1e-8,
+        max_iter: int = 100,
+    ) -> float:
+        """
+        Calculate the Internal Rate of Return (IRR) of the cashflow stream.
+
+        The IRR is the discount rate at which the Net Present Value (NPV) of the
+        stream equals zero. This method uses a centroid-based Newton-Raphson algorithm:
+        a time-weighted centroid of inflows and outflows provides a near-optimal initial
+        guess, and Newton-Raphson iterations converge to the root using the analytical
+        first derivative of NPV with respect to the discount rate.
+
+        Parameters
+        ----------
+        convention : DayCountConvention, optional
+            The day count convention for converting days to year fractions.
+            Default is ``"actual/365"`` (standard economics convention).
+        tol : float, optional
+            Convergence tolerance on |NPV|. Iteration stops when ``|NPV(r)| < tol``.
+            Default is ``1e-8``.
+        max_iter : int, optional
+            Maximum number of Newton-Raphson iterations before raising a convergence
+            error. Default is ``100``.
+
+        Returns
+        -------
+        float
+            The annual IRR as a decimal (e.g., ``0.10`` for 10%).
+
+        Raises
+        ------
+        ValueError
+            If the stream contains no cash cashflows, or if all cashflows have the
+            same sign (i.e., there are no inflows or no outflows), making it
+            impossible for the NPV to equal zero at any finite rate.
+        ValueError
+            If the algorithm fails to converge within ``max_iter`` iterations, or
+            if the derivative becomes effectively zero during iteration.
+
+        Notes
+        -----
+        - Only cashflows with ``is_cash=True`` are included, consistent with ``npv()``.
+        - The earliest cashflow date is used as the internal time reference. This
+          does not affect the IRR value: shifting the reference date scales NPV by a
+          non-zero constant ``(1+r)^Δt``, leaving the root unchanged.
+        - **Centroid initial guess**: inflows and outflows are each collapsed to their
+          time-weighted centroid dates ``t_in`` and ``t_out``, and the single-period
+          approximation ``r₀ = (ΣCF_in / ΣCF_out)^(1/(t_in - t_out)) - 1`` is used
+          as the starting rate. This typically places the initial guess within one or
+          two Newton-Raphson steps of the solution for project cashflow profiles.
+        - **Newton-Raphson derivative**: ``dNPV/dr = −Σ tᵢ·CFᵢ / (1+r)^(tᵢ+1)``,
+          computed in a single pass by reusing the present-value term.
+        - The rate is clamped to ``r > -1 + 1e-8`` at each step to prevent the
+          algorithm from escaping the valid domain ``(-1, ∞)``.
+
+        Examples
+        --------
+        >>> # Simple two-cashflow project: invest $1000, receive $1100 one year later
+        >>> stream = CashFlowStream([
+        ...     CashFlow(-1000.0, date(2024, 1, 1)),
+        ...     CashFlow(1100.0, date(2025, 1, 1)),
+        ... ])
+        >>> stream.irr()   # approximately 0.10 (10%)
+
+        >>> # Multi-period project
+        >>> stream = CashFlowStream([
+        ...     CashFlow(-50_000.0, date(2024, 1, 1)),
+        ...     CashFlow(15_000.0, date(2025, 1, 1)),
+        ...     CashFlow(20_000.0, date(2026, 1, 1)),
+        ...     CashFlow(25_000.0, date(2027, 1, 1)),
+        ... ])
+        >>> irr = stream.irr()
+
+        >>> # Verify that NPV equals zero at the IRR
+        >>> assert abs(stream.npv(irr, date(2024, 1, 1))) < 1e-6
+        """
+        cash_only = self.cash_only()
+        if not cash_only.inflows() or not cash_only.outflows():
+            raise ValueError(
+                "IRR requires both positive (inflow) and negative (outflow) cashflows."
+            )
+
+        ref_date = cash_only.min(key=lambda cf: cf.date).date
+        rate = _irr_initial_guess(cash_only, ref_date, convention)
+
+        for _ in range(max_iter):
+            npv, dnpv = _irr_npv_and_dnpv(cash_only, rate, ref_date, convention)
+            if abs(npv) < tol:
+                return rate
+            if abs(dnpv) < 1e-12:
+                raise ValueError("IRR did not converge: zero derivative encountered.")
+            rate -= npv / dnpv
+            rate = max(rate, -1.0 + 1e-8)
+
+        npv, _ = _irr_npv_and_dnpv(cash_only, rate, ref_date, convention)
+        if abs(npv) < tol:
+            return rate
+        raise ValueError(f"IRR did not converge after {max_iter} iterations.")
+
+
+# ---------------------------------------------------------------------------
+# Module-level helpers for CashFlowStream.irr()
+# ---------------------------------------------------------------------------
+
+
+def _irr_initial_guess(
+    cashflows: "CashFlowStream", ref_date: date, convention: DayCountConvention
+) -> float:
+    """
+    Compute a centroid-based initial guess for Newton-Raphson IRR iteration.
+
+    Treats inflows and outflows as two single lumps located at their respective
+    time-weighted centroid dates.  Under this two-lump approximation the
+    NPV = 0 condition reduces to a closed-form equation in ``r``:
+
+        r₀ = (ΣCF_in / Σ|CF_out|) ^ (1 / (t_in - t_out)) - 1
+
+    where ``t_in`` and ``t_out`` are the centroid times of the positive and
+    negative cashflows respectively, measured in fractional years from
+    ``ref_date``.  Falls back to ``0.1`` when the centroids coincide.
+    """
+    def _centroid(stream: "CashFlowStream", weight: Callable[[CashFlow], float]) -> tuple[float, float]:
+        total = 0.0
+        weighted_t = 0.0
+        for cf in stream:
+            w = weight(cf)
+            t = timedelta_fractional_years(ref_date, cf.date, convention)
+            total += w
+            weighted_t += w * t
+        return total, weighted_t
+
+    sum_in, weighted_t_in = _centroid(cashflows.inflows(), lambda cf: cf.amount)
+    sum_out, weighted_t_out = _centroid(cashflows.outflows(), lambda cf: abs(cf.amount))
+
+    dt = (weighted_t_in / sum_in) - (weighted_t_out / sum_out)
+    if abs(dt) < 1e-10:
+        return 0.1
+    return (sum_in / sum_out) ** (1.0 / dt) - 1.0
+
+
+def _irr_npv_and_dnpv(
+    cashflows: "CashFlowStream", rate: float, ref_date: date, convention: DayCountConvention
+) -> tuple[float, float]:
+    """
+    Compute NPV and its first derivative with respect to ``rate`` in a single pass.
+
+    Reuses the present-value term to compute the derivative without a second
+    exponentiation:
+
+        dNPV/dr = −Σ tᵢ · CFᵢ / (1+r)^(tᵢ+1)
+                = −Σ [tᵢ / (1+r)] · PVᵢ
+
+    Returns
+    -------
+    tuple[float, float]
+        ``(npv, dnpv)`` where ``npv = Σ CFᵢ/(1+r)^tᵢ`` and
+        ``dnpv = dNPV/dr``.
+    """
+    npv = 0.0
+    dnpv = 0.0
+    one_plus_r = 1.0 + rate
+    for cf in cashflows:
+        t = timedelta_fractional_years(ref_date, cf.date, convention)
+        pv = cf.amount / (one_plus_r**t)
+        npv += pv
+        dnpv -= t / one_plus_r * pv
+    return npv, dnpv
