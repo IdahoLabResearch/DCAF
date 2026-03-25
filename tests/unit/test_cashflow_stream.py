@@ -1,7 +1,14 @@
 from datetime import date
 import pytest
 
-from dcaf import CashFlow, CashFlowGroup, CashFlowStream, CashFlowTags, GenerationStream
+from dcaf import (
+    CashFlow,
+    CashFlowGroup,
+    CashFlowStream,
+    GenerationStream,
+    ProFormaCategory,
+    TaxTreatment,
+)
 from dcaf.escalation import ConstantRateEscalation, EscalationBuilder, IndexSeriesEscalation
 
 
@@ -19,19 +26,21 @@ def _create_cf_stream():
         amount=-500.0,
         date=date(2026, 1, 1),
         label="exp",
-        tags=frozenset([CashFlowTags.EXPENSE, CashFlowTags.TAXABLE]),
+        pro_forma_category=ProFormaCategory.OPERATING_COST,
+        tax_treatment=TaxTreatment.TAXABLE,
     )
     cf2 = CashFlow(
         amount=2000.0,
         date=date(2026, 1, 31),
         label="rev",
-        tags=frozenset([CashFlowTags.REVENUE, CashFlowTags.TAXABLE]),
+        pro_forma_category=ProFormaCategory.REVENUE,
+        tax_treatment=TaxTreatment.TAXABLE,
     )
     cf3 = CashFlow(
         amount=-1000.0,
         date=date(2026, 4, 1),
         label="exp_2",
-        tags=frozenset([CashFlowTags.EXPENSE]),
+        pro_forma_category=ProFormaCategory.OPERATING_COST,
         is_cash=False,
     )
     cf4 = CashFlow(
@@ -53,7 +62,8 @@ def test_from_recurring_defaults():
         assert flow.amount == 1000.0  # Check that escalation is zero by default
         assert len(flow.label) > 0  # Check that some default label is set
         assert flow.is_cash is True  # Check that is_cash defaults to True
-        assert len(flow.tags) == 0  # Check that no tags are added by default
+        assert flow.pro_forma_category is ProFormaCategory.OTHER
+        assert flow.tax_treatment is TaxTreatment.NONE
 
 
 def test_from_recurring_bad_frequency():
@@ -80,7 +90,7 @@ def test_from_recurring_annual_escalation_is_date_based():
         escalation=0.1,
         label="test recurring cf",
         is_cash=False,
-        tags=frozenset([CashFlowTags.TAXABLE]),
+        tax_treatment=TaxTreatment.TAXABLE,
     )
     expected_dates = [date(2026, 3, 5), date(2026, 4, 5), date(2026, 5, 5)]
     expected_amounts = [
@@ -91,7 +101,8 @@ def test_from_recurring_annual_escalation_is_date_based():
         assert flow.amount == pytest.approx(expected_amounts[i])
         assert flow.label == "test recurring cf"
         assert flow.is_cash is False
-        assert flow.tags == frozenset([CashFlowTags.TAXABLE])
+        assert flow.pro_forma_category is ProFormaCategory.OTHER
+        assert flow.tax_treatment is TaxTreatment.TAXABLE
 
 
 def test_from_recurring_supports_explicit_nonannual_escalation_period():
@@ -248,7 +259,7 @@ def test_apply_no_condition(_create_cf_stream):
     """Tests the CashFlowStream.apply method with no condition."""
 
     def _modify_cf(cf):
-        return CashFlow(cf.amount * 2, cf.date, cf.label, cf.is_cash, cf.tags)
+        return cf.replace(amount=cf.amount * 2)
 
     cf_stream_old = _create_cf_stream[0]
     cf_stream_new = cf_stream_old.apply(_modify_cf)
@@ -265,7 +276,7 @@ def test_apply_no_condition(_create_cf_stream):
 def test_apply_with_condition(_create_cf_stream):
     """Tests that CashFlowStream.apply method with a condition."""
     def _modify_cf(cf):
-        return CashFlow(cf.amount * 2, cf.date, cf.label, cf.is_cash, cf.tags)
+        return cf.replace(amount=cf.amount * 2)
 
     cf_stream_old = _create_cf_stream[0]
     cf_stream_new = cf_stream_old.apply(_modify_cf, lambda cf: "exp" in cf.label)
@@ -289,7 +300,8 @@ def test_apply_streamwise(_create_cf_stream):
                 cf.date,
                 cf.label + f"_cf_{i + 1}/{num_flows}",
                 cf.is_cash,
-                cf.tags,
+                cf.pro_forma_category,
+                cf.tax_treatment,
             )
             for i, cf in enumerate(stream.entries)
         ]
@@ -337,15 +349,25 @@ def test_group_by(_create_cf_stream):
     assert cf_group[True].entries == [flows[3]]
 
 
-def test_group_by_tag(_create_cf_stream):
-    """Tests the CashFlowStream.group_by(tag=True) method."""
+def test_group_by_pro_forma_category(_create_cf_stream):
+    """Tests grouping by pro-forma category."""
     cf_stream, flows = _create_cf_stream
-    cf_group = cf_stream.group_by(tag=True)
+    cf_group = cf_stream.group_by_pro_forma_category()
     assert isinstance(cf_group, CashFlowGroup)
     assert len(cf_group.groups) == 3
-    assert cf_group[CashFlowTags.EXPENSE].entries == [flows[0], flows[2]]
-    assert cf_group[CashFlowTags.REVENUE].entries == [flows[1]]
-    assert cf_group[CashFlowTags.TAXABLE].entries == [flows[0], flows[1]]
+    assert cf_group[ProFormaCategory.OPERATING_COST].entries == [flows[0], flows[2]]
+    assert cf_group[ProFormaCategory.REVENUE].entries == [flows[1]]
+    assert cf_group[ProFormaCategory.OTHER].entries == [flows[3]]
+
+
+def test_group_by_tax_treatment(_create_cf_stream):
+    """Tests grouping by tax treatment."""
+    cf_stream, flows = _create_cf_stream
+    cf_group = cf_stream.group_by_tax_treatment()
+    assert isinstance(cf_group, CashFlowGroup)
+    assert len(cf_group.groups) == 2
+    assert cf_group[TaxTreatment.TAXABLE].entries == [flows[0], flows[1]]
+    assert cf_group[TaxTreatment.NONE].entries == [flows[2], flows[3]]
 
 
 @pytest.mark.parametrize(
@@ -568,26 +590,26 @@ def test_npv_no_cashflows():
     assert abs(npv) < tol
 
 
-# ---- filter by tag / is_cash keyword tests ----
+# ---- filter by classification / is_cash keyword tests ----
 
 
-def test_filter_by_tag(_create_cf_stream):
-    """Tests filter(tag=...) keyword argument."""
+def test_filter_by_pro_forma_category(_create_cf_stream):
+    """Tests filter(pro_forma_category=...) keyword argument."""
     cf_stream, flows = _create_cf_stream
-    result = cf_stream.filter(tag=CashFlowTags.EXPENSE)
+    result = cf_stream.filter(pro_forma_category=ProFormaCategory.OPERATING_COST)
     assert result.entries == [flows[0], flows[2]]
 
 
-def test_filter_by_tag_no_match(_create_cf_stream):
-    """Tests filter(tag=...) when no flows have the tag."""
+def test_filter_by_pro_forma_category_no_match(_create_cf_stream):
+    """Tests category filtering when no flows match."""
     cf_stream = _create_cf_stream[0]
-    result = cf_stream.filter(tag=CashFlowTags.DEPRECIATION)
+    result = cf_stream.filter(pro_forma_category=ProFormaCategory.DEPRECIATION)
     assert result.entries == []
 
 
-def test_filter_by_tag_empty_stream():
-    """Tests filter(tag=...) on an empty stream."""
-    result = CashFlowStream([]).filter(tag=CashFlowTags.REVENUE)
+def test_filter_by_pro_forma_category_empty_stream():
+    """Tests category filtering on an empty stream."""
+    result = CashFlowStream([]).filter(pro_forma_category=ProFormaCategory.REVENUE)
     assert result.entries == []
 
 

@@ -9,7 +9,8 @@ Functions:
     tax_liability: Apply tax rate to taxable income to generate tax payment cashflows
 """
 
-from dcaf.cashflows import CashFlow, CashFlowStream, CashFlowTags
+from dcaf.cashflows import CashFlow, CashFlowStream
+from dcaf.types import ProFormaCategory, TaxTreatment, normalize_cashflow_classification
 from dcaf.utils import period_end
 
 
@@ -25,8 +26,8 @@ def compute_taxable_income(
     stream (is_cash=False) representing taxable income, not actual cash flows.
 
     Args:
-        revenue_stream: Stream of revenue cashflows (should have TAXABLE tag)
-        deductible_stream: Stream of deductible cashflows (should have TAX_DEDUCTIBLE tag)
+        revenue_stream: Stream of taxable revenue cashflows.
+        deductible_stream: Stream of tax-deductible cashflows.
         label: Label template for taxable income flows. Use {n} for sequential numbering.
 
     Returns:
@@ -35,12 +36,12 @@ def compute_taxable_income(
 
     Example:
         >>> from datetime import date
-        >>> from dcaf import CashFlowStream, CashFlow, CashFlowTags
+        >>> from dcaf import CashFlowStream, CashFlow
         >>> revenue = CashFlowStream([
-        ...     CashFlow(100_000, date(2025, 6, 1), "Revenue", tags=frozenset({CashFlowTags.TAXABLE}))
+        ...     CashFlow(100_000, date(2025, 6, 1), "Revenue", tax_treatment="taxable")
         ... ])
         >>> deductions = CashFlowStream([
-        ...     CashFlow(-20_000, date(2025, 3, 1), "Expense", tags=frozenset({CashFlowTags.TAX_DEDUCTIBLE}))
+        ...     CashFlow(-20_000, date(2025, 3, 1), "Expense", tax_treatment="deductible")
         ... ])
         >>> taxable_income = compute_taxable_income(revenue, deductions)
         >>> taxable_income[0].amount  # 100,000 + (-20,000) = 80,000
@@ -58,7 +59,14 @@ def compute_taxable_income(
     net_by_period = grouped.aggregate(lambda s: s.sum())
 
     return CashFlowStream([
-        CashFlow(amount=net, date=period_end(period, "year"), label=label, is_cash=False, tags=frozenset())
+        CashFlow(
+            amount=net,
+            date=period_end(period, "year"),
+            label=label,
+            is_cash=False,
+            pro_forma_category=None,
+            tax_treatment=TaxTreatment.NONE,
+        )
         for period, net in net_by_period.items()
     ])
 
@@ -67,7 +75,8 @@ def tax_liability(
     taxable_income_stream: CashFlowStream,
     tax_rate: float,
     label: str = "Tax Liability {n}",
-    tags: frozenset[CashFlowTags] = frozenset({CashFlowTags.EXPENSE}),
+    pro_forma_category: ProFormaCategory | str | None = ProFormaCategory.TAX,
+    tax_treatment: TaxTreatment | str = TaxTreatment.NONE,
 ) -> CashFlowStream:
     """Apply scalar tax rate to taxable income to generate tax payment cashflows.
 
@@ -80,7 +89,8 @@ def tax_liability(
         tax_rate: Scalar tax rate to apply (e.g., 0.21 for 21% federal rate, or 0.26
                   for combined 21% federal + 5% state)
         label: Label template for tax liability flows. Use {n} for sequential numbering.
-        tags: Tags to apply to tax liability flows. Defaults to {EXPENSE}.
+        pro_forma_category: Pro-forma category for tax-liability flows. Defaults to ``"tax"``.
+        tax_treatment: Tax treatment for tax-liability flows. Defaults to ``"none"``.
 
     Returns:
         CashFlowStream of tax payment cashflows with negative amounts (outflows) and
@@ -110,6 +120,10 @@ def tax_liability(
     if not positive_income:
         return CashFlowStream()
 
+    resolved_category, resolved_tax_treatment = normalize_cashflow_classification(
+        pro_forma_category,
+        tax_treatment,
+    )
     # Apply tax rate and convert to negative (outflow)
     tax_flows = positive_income.apply(
         lambda cf: CashFlow(
@@ -117,7 +131,8 @@ def tax_liability(
             date=cf.date,
             label=label,
             is_cash=True,  # Tax payments are actual cash outflows
-            tags=tags,
+            pro_forma_category=resolved_category,
+            tax_treatment=resolved_tax_treatment,
         )
     )
 

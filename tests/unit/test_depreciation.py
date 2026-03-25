@@ -4,7 +4,7 @@ from datetime import date
 
 import pytest
 
-from dcaf import CashFlowTags, vdb, vdb_schedule
+from dcaf import ProFormaCategory, TaxTreatment, vdb, vdb_schedule
 
 
 def test_vdb_matches_documented_excel_example():
@@ -80,8 +80,8 @@ def test_vdb_schedule_matches_vdb_rollup_and_metadata():
     assert all(entry.amount <= 0 for entry in stream.entries)
     assert all(not entry.is_cash for entry in stream.entries)
     for entry in stream.entries:
-        assert entry.has_tag(CashFlowTags.DEPRECIATION)
-        assert entry.has_tag(CashFlowTags.TAX_DEDUCTIBLE)
+        assert entry.pro_forma_category is ProFormaCategory.DEPRECIATION
+        assert entry.tax_treatment is TaxTreatment.DEDUCTIBLE
 
     schedule_total = -sum(entry.amount for entry in stream.entries[10:20])
     direct_total = vdb(

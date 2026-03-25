@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace as dc_replace
 from datetime import date, timedelta
-from typing import Self
+from typing import Self, cast
 
-from dcaf.cashflows import CashFlow, CashFlowStream, CashFlowTags
+from dcaf.cashflows import CashFlow, CashFlowStream
 from dcaf.escalation import (
     ConstantRateEscalation,
     EscalationPolicy,
@@ -17,8 +17,10 @@ from dcaf._spend_curves import get_spend_curve
 from dcaf.types import (
     InterestTreatment,
     Period,
+    ProFormaCategory,
     SpendSchedule,
     SpendScheduleName,
+    TaxTreatment,
     _InterestTreatmentEnum,
     _PeriodEnum,
     parse_interest_treatment,
@@ -26,12 +28,16 @@ from dcaf.types import (
 )
 from dcaf.utils import time_delta_per_period, timedelta_fractional_years
 
+class _UnsetType:
+    """Sentinel type for optional builder arguments."""
+
+
 # This _UNSET sentinel object helps use implement a 3-option handling for modifications
 # to builder class arguments:
 #   1. A value is provided -> use that value
 #   2. `None` is provided -> reset to the default value
 #   3. `_UNSET` is provided -> do nothing
-_UNSET = object()
+_UNSET = _UnsetType()
 
 
 def _validate_schedule(schedule: SpendSchedule) -> None:
@@ -373,7 +379,7 @@ def _construction_simple_escalation(config: ConstructionSpendConfig) -> Constant
     return ConstantRateEscalation(
         reference_date=config.start_date if config.amount_reference_date is None else config.amount_reference_date,
         rate=config.escalation,
-        period=config.escalation_period,
+        period=cast(Period, parse_period(str(config.escalation_period)).value),
     )
 
 
@@ -439,7 +445,11 @@ def _scheduled_spends(
     escalation_policy: EscalationPolicy | None = None,
 ) -> list[_ScheduledSpend]:
     """Expand a validated config into per-period scheduled spend entries."""
-    periods = _iter_period_boundaries(config.start_date, config.end_date, config.period)
+    periods = _iter_period_boundaries(
+        config.start_date,
+        config.end_date,
+        parse_period(str(config.period)),
+    )
     effective_policy = _construction_simple_escalation(config) if escalation_policy is None else escalation_policy
     spends: list[_ScheduledSpend] = []
 
@@ -463,7 +473,8 @@ def _construction_spend_cashflow(spend: _ScheduledSpend) -> CashFlow:
         date=spend.booking_date,
         label="Construction Spend",
         is_cash=True,
-        tags=frozenset({CashFlowTags.CAPEX, CashFlowTags.EXPENSE}),
+        pro_forma_category=ProFormaCategory.CAPITAL_COST,
+        tax_treatment=TaxTreatment.NONE,
     )
 
 
@@ -481,14 +492,16 @@ def _construction_interest_cashflow(
             date=booking_date,
             label="Capitalized Interest",
             is_cash=False,
-            tags=frozenset({CashFlowTags.CAPEX}),
+            pro_forma_category=ProFormaCategory.CAPITAL_COST,
+            tax_treatment=TaxTreatment.NONE,
         )
     return CashFlow(
         amount=-interest,
         date=booking_date,
         label="Interest Payment",
         is_cash=True,
-        tags=frozenset({CashFlowTags.EXPENSE}),
+        pro_forma_category=ProFormaCategory.FINANCING_INTEREST,
+        tax_treatment=TaxTreatment.NONE,
     )
 
 
@@ -496,8 +509,8 @@ def _debt_servicing_period(config: ConstructionSpendConfig) -> _PeriodEnum:
     """Return the effective servicing interval for construction debt interest."""
     servicing_period = config.financing.servicing_period
     if servicing_period is None:
-        return config.period
-    return servicing_period
+        return parse_period(str(config.period))
+    return parse_period(str(servicing_period))
 
 
 def _build_cashflows(
@@ -528,7 +541,7 @@ def _build_cashflows(
         interest_flow = _construction_interest_cashflow(
             interest,
             service_end,
-            config.financing.interest_treatment,
+            parse_interest_treatment(str(config.financing.interest_treatment)),
         )
         if interest_flow is not None:
             entries.append(interest_flow)
@@ -611,11 +624,11 @@ class ConstructionSpendBuilder:
             total_cost=total_cost,
             start_date=start_date,
             end_date=end_date,
-            period=period,
-            profile=profile,
-            financing=financing,
+            period=parse_period(str(period)),
+            profile=_normalize_profile(profile),
+            financing=_normalize_financing(financing),
             escalation=escalation,
-            escalation_period=escalation_period,
+            escalation_period=parse_period(str(escalation_period)),
             amount_reference_date=amount_reference_date,
         )
         self._escalation_policy: EscalationPolicy | None = None
@@ -652,7 +665,7 @@ class ConstructionSpendBuilder:
         self,
         *,
         config: ConstructionSpendConfig | None = None,
-        escalation_policy: EscalationPolicy | object = _UNSET,
+        escalation_policy: EscalationPolicy | None | _UnsetType = _UNSET,
     ) -> Self:
         """Return a new builder preserving or overriding private state."""
         builder = self.__class__.__new__(self.__class__)
@@ -660,6 +673,7 @@ class ConstructionSpendBuilder:
         if escalation_policy is _UNSET:
             builder._escalation_policy = self._escalation_policy
         else:
+            assert not isinstance(escalation_policy, _UnsetType)
             builder._escalation_policy = escalation_policy
         return builder
 
@@ -851,7 +865,7 @@ class ConstructionSpendBuilder:
         rate: float,
         *,
         escalation_period: Period | None = None,
-        amount_reference_date: date | object = _UNSET,
+        amount_reference_date: date | None | _UnsetType = _UNSET,
     ) -> Self:
         """Set the construction cost escalation assumptions.
 
@@ -880,13 +894,26 @@ class ConstructionSpendBuilder:
         >>> builder.escalation(0.03).config.escalation
         0.03
         """
-        changes: dict[str, object] = {"escalation": rate}
-        if escalation_period is not None:
-            changes["escalation_period"] = escalation_period
-        if amount_reference_date is not _UNSET:
-            changes["amount_reference_date"] = amount_reference_date
         return self._copy(
-            config=dc_replace(self._config, **changes),
+            config=ConstructionSpendConfig(
+                total_cost=self._config.total_cost,
+                start_date=self._config.start_date,
+                end_date=self._config.end_date,
+                period=self._config.period,
+                profile=self._config.profile,
+                financing=self._config.financing,
+                escalation=rate,
+                escalation_period=(
+                    self._config.escalation_period
+                    if escalation_period is None
+                    else parse_period(str(escalation_period))
+                ),
+                amount_reference_date=(
+                    self._config.amount_reference_date
+                    if isinstance(amount_reference_date, _UnsetType)
+                    else amount_reference_date
+                ),
+            ),
             escalation_policy=None,
         )
 

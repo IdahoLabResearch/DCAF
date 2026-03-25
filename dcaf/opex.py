@@ -7,9 +7,9 @@ For variable OPEX, use ``GenerationStream.to_cost()`` directly.
 
 from datetime import date
 
-from .cashflows import CashFlowStream, CashFlowTags
+from .cashflows import CashFlowStream
 from .escalation import EscalationPolicy
-from .types import Period
+from .types import Period, ProFormaCategory, TaxTreatment
 
 def fixed_opex(
     amount: float,
@@ -18,9 +18,8 @@ def fixed_opex(
     frequency: Period = "year",
     escalation: float = 0.0,
     label: str = "Fixed OPEX {n}",
-    tags: frozenset[CashFlowTags] = frozenset(
-        {CashFlowTags.EXPENSE, CashFlowTags.OPEX, CashFlowTags.TAX_DEDUCTIBLE}
-    ),
+    pro_forma_category: ProFormaCategory | str | None = ProFormaCategory.OPERATING_COST,
+    tax_treatment: TaxTreatment | str = TaxTreatment.DEDUCTIBLE,
     *,
     escalation_period: Period = "year",
     amount_reference_date: date | None = None,
@@ -59,8 +58,10 @@ def fixed_opex(
     label : str
         Label template; ``{n}`` is replaced with the 1-based period index.
         Default is ``"Fixed OPEX {n}"``.
-    tags : frozenset[CashFlowTags]
-        Tags applied to every cashflow. Default is ``{EXPENSE, OPEX, TAX_DEDUCTIBLE}``.
+    pro_forma_category : ProFormaCategory or str or None
+        Pro-forma category applied to every cashflow. Default is ``"operating_cost"``.
+    tax_treatment : TaxTreatment or str
+        Tax treatment applied to every cashflow. Default is ``"deductible"``.
 
     Returns
     -------
@@ -85,5 +86,6 @@ def fixed_opex(
         amount_reference_date=amount_reference_date,
         escalation_policy=escalation_policy,
         label=label,
-        tags=tags,
+        pro_forma_category=pro_forma_category,
+        tax_treatment=tax_treatment,
     )

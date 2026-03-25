@@ -4,7 +4,14 @@ from datetime import date
 
 import pytest
 
-from dcaf import CashFlowStream, CashFlowTags, Generation, GenerationGroup, GenerationStream
+from dcaf import (
+    CashFlowStream,
+    Generation,
+    GenerationGroup,
+    GenerationStream,
+    ProFormaCategory,
+    TaxTreatment,
+)
 from dcaf.escalation import ConstantRateEscalation, IndexSeriesEscalation
 
 
@@ -480,8 +487,8 @@ def test_to_revenue_basic():
     assert cfs.count() == 2
     assert abs(cfs.entries[0].amount - 50_000.0) < 1e-8
     assert cfs.entries[0].is_cash is True
-    assert cfs.entries[0].has_tag(CashFlowTags.REVENUE)
-    assert cfs.entries[0].has_tag(CashFlowTags.TAXABLE)
+    assert cfs.entries[0].pro_forma_category is ProFormaCategory.REVENUE
+    assert cfs.entries[0].tax_treatment is TaxTreatment.TAXABLE
 
 
 def test_to_revenue_escalation():
@@ -551,7 +558,7 @@ def test_to_cost_basic():
     cfs = gs.to_cost(rate_per_mwh=5.0)
     assert cfs.count() == 1
     assert abs(cfs.entries[0].amount - (-5_000.0)) < 1e-8
-    assert cfs.entries[0].has_tag(CashFlowTags.EXPENSE)
+    assert cfs.entries[0].pro_forma_category is ProFormaCategory.OPERATING_COST
 
 
 def test_to_cost_escalation():

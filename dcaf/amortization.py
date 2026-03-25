@@ -19,8 +19,15 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Self, assert_never, overload
 
-from dcaf.cashflows import CashFlow, CashFlowStream, CashFlowTags
-from dcaf.types import Period, _PeriodEnum, parse_period
+from dcaf.cashflows import CashFlow, CashFlowStream
+from dcaf.types import (
+    Period,
+    ProFormaCategory,
+    TaxTreatment,
+    _PeriodEnum,
+    normalize_cashflow_classification,
+    parse_period,
+)
 from dcaf.utils import time_delta_per_period
 
 
@@ -86,12 +93,14 @@ class AmortizationSchedule:
         label: str = "Debt Service Period {n}",
         interest_label: str = "Interest Period {n}",
         principal_label: str = "Principal Period {n}",
-        interest_tags: frozenset[CashFlowTags] = frozenset(
-            {CashFlowTags.DEBT_INTEREST, CashFlowTags.EXPENSE, CashFlowTags.TAX_DEDUCTIBLE}
+        interest_pro_forma_category: ProFormaCategory | str | None = (
+            ProFormaCategory.FINANCING_INTEREST
         ),
-        principal_tags: frozenset[CashFlowTags] = frozenset(
-            {CashFlowTags.DEBT_PRINCIPAL, CashFlowTags.EXPENSE}
+        interest_tax_treatment: TaxTreatment | str = TaxTreatment.DEDUCTIBLE,
+        principal_pro_forma_category: ProFormaCategory | str | None = (
+            ProFormaCategory.FINANCING_PRINCIPAL
         ),
+        principal_tax_treatment: TaxTreatment | str = TaxTreatment.NONE,
     ) -> AmortizationBuilder:
         """Return an ``AmortizationBuilder`` for fluent schedule configuration.
 
@@ -113,10 +122,14 @@ class AmortizationSchedule:
             Template for interest payment labels.
         principal_label : str, optional
             Template for principal payment labels.
-        interest_tags : frozenset[CashFlowTags], optional
-            Tags applied to interest cashflows.
-        principal_tags : frozenset[CashFlowTags], optional
-            Tags applied to principal cashflows.
+        interest_pro_forma_category : ProFormaCategory or str or None, optional
+            Pro-forma category applied to interest cashflows.
+        interest_tax_treatment : TaxTreatment or str, optional
+            Tax treatment applied to interest cashflows.
+        principal_pro_forma_category : ProFormaCategory or str or None, optional
+            Pro-forma category applied to principal cashflows.
+        principal_tax_treatment : TaxTreatment or str, optional
+            Tax treatment applied to principal cashflows.
 
         Returns
         -------
@@ -132,8 +145,10 @@ class AmortizationSchedule:
             label=label,
             interest_label=interest_label,
             principal_label=principal_label,
-            interest_tags=interest_tags,
-            principal_tags=principal_tags,
+            interest_pro_forma_category=interest_pro_forma_category,
+            interest_tax_treatment=interest_tax_treatment,
+            principal_pro_forma_category=principal_pro_forma_category,
+            principal_tax_treatment=principal_tax_treatment,
         )
 
     @classmethod
@@ -147,12 +162,14 @@ class AmortizationSchedule:
         label: str = "Debt Service Period {n}",
         interest_label: str = "Interest Period {n}",
         principal_label: str = "Principal Period {n}",
-        interest_tags: frozenset[CashFlowTags] = frozenset(
-            {CashFlowTags.DEBT_INTEREST, CashFlowTags.EXPENSE, CashFlowTags.TAX_DEDUCTIBLE}
+        interest_pro_forma_category: ProFormaCategory | str | None = (
+            ProFormaCategory.FINANCING_INTEREST
         ),
-        principal_tags: frozenset[CashFlowTags] = frozenset(
-            {CashFlowTags.DEBT_PRINCIPAL, CashFlowTags.EXPENSE}
+        interest_tax_treatment: TaxTreatment | str = TaxTreatment.DEDUCTIBLE,
+        principal_pro_forma_category: ProFormaCategory | str | None = (
+            ProFormaCategory.FINANCING_PRINCIPAL
         ),
+        principal_tax_treatment: TaxTreatment | str = TaxTreatment.NONE,
     ) -> AmortizationSchedule:
         """Build and return an ``AmortizationSchedule`` directly (no rules).
 
@@ -177,10 +194,14 @@ class AmortizationSchedule:
             Template for interest payment labels.
         principal_label : str, optional
             Template for principal payment labels.
-        interest_tags : frozenset[CashFlowTags], optional
-            Tags applied to interest cashflows.
-        principal_tags : frozenset[CashFlowTags], optional
-            Tags applied to principal cashflows.
+        interest_pro_forma_category : ProFormaCategory or str or None, optional
+            Pro-forma category applied to interest cashflows.
+        interest_tax_treatment : TaxTreatment or str, optional
+            Tax treatment applied to interest cashflows.
+        principal_pro_forma_category : ProFormaCategory or str or None, optional
+            Pro-forma category applied to principal cashflows.
+        principal_tax_treatment : TaxTreatment or str, optional
+            Tax treatment applied to principal cashflows.
 
         Returns
         -------
@@ -196,8 +217,10 @@ class AmortizationSchedule:
             label=label,
             interest_label=interest_label,
             principal_label=principal_label,
-            interest_tags=interest_tags,
-            principal_tags=principal_tags,
+            interest_pro_forma_category=interest_pro_forma_category,
+            interest_tax_treatment=interest_tax_treatment,
+            principal_pro_forma_category=principal_pro_forma_category,
+            principal_tax_treatment=principal_tax_treatment,
         ).build()
 
 
@@ -219,12 +242,14 @@ class AmortizationBuilder:
         label: str = "Debt Service Period {n}",
         interest_label: str = "Interest Period {n}",
         principal_label: str = "Principal Period {n}",
-        interest_tags: frozenset[CashFlowTags] = frozenset(
-            {CashFlowTags.DEBT_INTEREST, CashFlowTags.EXPENSE, CashFlowTags.TAX_DEDUCTIBLE}
+        interest_pro_forma_category: ProFormaCategory | str | None = (
+            ProFormaCategory.FINANCING_INTEREST
         ),
-        principal_tags: frozenset[CashFlowTags] = frozenset(
-            {CashFlowTags.DEBT_PRINCIPAL, CashFlowTags.EXPENSE}
+        interest_tax_treatment: TaxTreatment | str = TaxTreatment.DEDUCTIBLE,
+        principal_pro_forma_category: ProFormaCategory | str | None = (
+            ProFormaCategory.FINANCING_PRINCIPAL
         ),
+        principal_tax_treatment: TaxTreatment | str = TaxTreatment.NONE,
     ) -> None:
         self._principal = principal
         self._annual_rate = annual_rate
@@ -234,8 +259,20 @@ class AmortizationBuilder:
         self._label = label
         self._interest_label = interest_label
         self._principal_label = principal_label
-        self._interest_tags = interest_tags
-        self._principal_tags = principal_tags
+        (
+            self._interest_pro_forma_category,
+            self._interest_tax_treatment,
+        ) = normalize_cashflow_classification(
+            interest_pro_forma_category,
+            interest_tax_treatment,
+        )
+        (
+            self._principal_pro_forma_category,
+            self._principal_tax_treatment,
+        ) = normalize_cashflow_classification(
+            principal_pro_forma_category,
+            principal_tax_treatment,
+        )
         self._rules: list[tuple[str, set[int] | tuple[int, float]]] = []
 
     @staticmethod
@@ -510,21 +547,24 @@ class AmortizationBuilder:
             date=payment_date,
             label=fmt(self._label),
             is_cash=True,
-            tags=self._interest_tags | self._principal_tags,
+            pro_forma_category=None,
+            tax_treatment=TaxTreatment.NONE,
         )
         interest_flow = CashFlow(
             amount=-interest_amount,
             date=payment_date,
             label=fmt(self._interest_label),
             is_cash=True,
-            tags=self._interest_tags,
+            pro_forma_category=self._interest_pro_forma_category,
+            tax_treatment=self._interest_tax_treatment,
         )
         principal_flow = CashFlow(
             amount=-principal_amount,
             date=payment_date,
             label=fmt(self._principal_label),
             is_cash=True,
-            tags=self._principal_tags,
+            pro_forma_category=self._principal_pro_forma_category,
+            tax_treatment=self._principal_tax_treatment,
         )
         return total_flow, interest_flow, principal_flow
 

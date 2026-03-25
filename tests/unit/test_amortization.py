@@ -4,7 +4,7 @@ from datetime import date
 
 import pytest
 
-from dcaf import AmortizationSchedule, CashFlowTags
+from dcaf import AmortizationSchedule, ProFormaCategory, TaxTreatment
 
 
 @pytest.fixture()
@@ -264,33 +264,28 @@ def test_composed_rules():
     assert abs(total_principal + 120_000.0) < 0.01
 
 
-# === Tags ===
+# === Classification ===
 
 
-def test_interest_tags(monthly_schedule: AmortizationSchedule):
-    """Interest flows have correct default tags."""
-    expected = {CashFlowTags.DEBT_INTEREST, CashFlowTags.EXPENSE, CashFlowTags.TAX_DEDUCTIBLE}
+def test_interest_classification(monthly_schedule: AmortizationSchedule):
+    """Interest flows have the correct default classification."""
     for f in monthly_schedule.interest.entries:
-        assert set(f.tags) == expected
+        assert f.pro_forma_category is ProFormaCategory.FINANCING_INTEREST
+        assert f.tax_treatment is TaxTreatment.DEDUCTIBLE
 
 
-def test_principal_tags(monthly_schedule: AmortizationSchedule):
-    """Principal flows have correct default tags."""
-    expected = {CashFlowTags.DEBT_PRINCIPAL, CashFlowTags.EXPENSE}
+def test_principal_classification(monthly_schedule: AmortizationSchedule):
+    """Principal flows have the correct default classification."""
     for f in monthly_schedule.principal.entries:
-        assert set(f.tags) == expected
+        assert f.pro_forma_category is ProFormaCategory.FINANCING_PRINCIPAL
+        assert f.tax_treatment is TaxTreatment.NONE
 
 
-def test_total_tags(monthly_schedule: AmortizationSchedule):
-    """Total flows have the union of interest and principal tags."""
-    expected = {
-        CashFlowTags.DEBT_INTEREST,
-        CashFlowTags.DEBT_PRINCIPAL,
-        CashFlowTags.EXPENSE,
-        CashFlowTags.TAX_DEDUCTIBLE,
-    }
+def test_total_classification(monthly_schedule: AmortizationSchedule):
+    """Total flows are intentionally uncategorized composite rows."""
     for f in monthly_schedule.total.entries:
-        assert set(f.tags) == expected
+        assert f.pro_forma_category is None
+        assert f.tax_treatment is TaxTreatment.NONE
 
 
 # === Date spacing ===

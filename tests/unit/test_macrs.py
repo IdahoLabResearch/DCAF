@@ -4,7 +4,13 @@ from datetime import date
 
 import pytest
 
-from dcaf import CashFlowTags, MACRS_MID_QUARTER_RATES, MACRS_RATES, macrs_schedule
+from dcaf import (
+    MACRS_MID_QUARTER_RATES,
+    MACRS_RATES,
+    ProFormaCategory,
+    TaxTreatment,
+    macrs_schedule,
+)
 
 
 # === MACRS_RATES ===
@@ -43,16 +49,16 @@ def test_from_macrs_5year():
     assert all(not f.is_cash for f in stream.entries)
 
 
-def test_from_macrs_tags():
-    """Default tags include DEPRECIATION and TAX_DEDUCTIBLE."""
+def test_from_macrs_classification():
+    """Default classification is depreciation plus deductible tax treatment."""
     stream = macrs_schedule(
         cost_basis=1000.0,
         placed_in_service=date(2026, 1, 1),
         property_class=3,
     )
     for f in stream.entries:
-        assert f.has_tag(CashFlowTags.DEPRECIATION)
-        assert f.has_tag(CashFlowTags.TAX_DEDUCTIBLE)
+        assert f.pro_forma_category is ProFormaCategory.DEPRECIATION
+        assert f.tax_treatment is TaxTreatment.DEDUCTIBLE
 
 
 def test_from_macrs_dates():

@@ -2,7 +2,7 @@ from dataclasses import FrozenInstanceError
 from datetime import date
 import pytest
 
-from dcaf import CashFlow, CashFlowTags
+from dcaf import CashFlow, ProFormaCategory, TaxTreatment
 
 
 @pytest.fixture()
@@ -11,7 +11,7 @@ def _create_cashflow():
         500.0,
         date(2025, 1, 1),
         label="test label",
-        tags=frozenset({CashFlowTags.REVENUE}),
+        pro_forma_category=ProFormaCategory.REVENUE,
     )
     return cf
 
@@ -27,8 +27,7 @@ def test_initialization(_create_cashflow):
     assert cf.date == date(2025, 1, 1)
     assert cf.label == "test label"
     assert cf.is_cash is True
-    assert cf.has_tag(CashFlowTags.REVENUE) is True
-    assert cf.has_tag(CashFlowTags.EXPENSE) is False
+    assert cf.pro_forma_category is ProFormaCategory.REVENUE
 
     with pytest.raises(FrozenInstanceError):
         cf.amount = 600.0
@@ -41,3 +40,16 @@ def test_replace(_create_cashflow):
     assert cf.amount == 600.0
     assert cf.is_cash is False
     assert cf.label == "test label"  # other attributes should be unchanged
+
+
+def test_initialization_parses_string_classification_inputs():
+    cf = CashFlow(
+        500.0,
+        date(2025, 1, 1),
+        label="test label",
+        pro_forma_category="Operating Cost",
+        tax_treatment="deductible",
+    )
+
+    assert cf.pro_forma_category is ProFormaCategory.OPERATING_COST
+    assert cf.tax_treatment is TaxTreatment.DEDUCTIBLE

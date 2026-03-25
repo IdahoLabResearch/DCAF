@@ -8,13 +8,14 @@ import pytest
 from dcaf._spend_curves import BELL_CURVE, FLAT_CURVE, LINEAR_CURVE, RAMPED_CURVE, TRIANGLE_CURVE
 from dcaf import (
     CashFlowStream,
-    CashFlowTags,
     ConstantRateEscalation,
     ConstructionFinancing,
     ConstructionSpendBuilder,
     EscalationBuilder,
     IndexSeriesEscalation,
+    ProFormaCategory,
     SpendProfile,
+    TaxTreatment,
     construction_spend_schedule,
 )
 from dcaf.construction import ConstructionSpendConfig, _validate_schedule
@@ -334,7 +335,7 @@ def test_flat_schedule_roughly_equal_periods():
         assert abs(amount - avg) / avg < 0.15
 
 
-def test_all_flows_tagged_capex_expense_no_debt():
+def test_all_flows_classified_as_capital_cost_no_debt():
     stream = construction_spend_schedule(
         1000,
         date(2025, 1, 1),
@@ -343,8 +344,8 @@ def test_all_flows_tagged_capex_expense_no_debt():
     )
 
     for cf in stream.entries:
-        assert cf.has_tag(CashFlowTags.CAPEX)
-        assert cf.has_tag(CashFlowTags.EXPENSE)
+        assert cf.pro_forma_category is ProFormaCategory.CAPITAL_COST
+        assert cf.tax_treatment is TaxTreatment.NONE
         assert cf.label == "Construction Spend"
         assert cf.is_cash is True
 
@@ -584,19 +585,17 @@ def test_debt_financing_keeps_full_capex_tagged_as_expense():
         financing=ConstructionFinancing.debt(0.5),
     )
 
-    expense_total = sum(
-        cf.amount for cf in stream.entries if cf.has_tag(CashFlowTags.EXPENSE)
-    )
-    capex_total = sum(
-        cf.amount for cf in stream.entries if cf.has_tag(CashFlowTags.CAPEX)
+    capital_cost_total = sum(
+        cf.amount
+        for cf in stream.entries
+        if cf.pro_forma_category is ProFormaCategory.CAPITAL_COST
     )
 
-    assert abs(expense_total - (-1000)) < 1.0
-    assert abs(capex_total - (-1000)) < 1.0
+    assert abs(capital_cost_total - (-1000)) < 1.0
     for cf in stream.entries:
         assert cf.label == "Construction Spend"
-        assert cf.has_tag(CashFlowTags.CAPEX)
-        assert cf.has_tag(CashFlowTags.EXPENSE)
+        assert cf.pro_forma_category is ProFormaCategory.CAPITAL_COST
+        assert cf.tax_treatment is TaxTreatment.NONE
         assert cf.is_cash is True
 
 
@@ -617,7 +616,7 @@ def test_capitalized_interest_is_not_cash():
     assert len(capitalized_interest) > 0
     for cf in capitalized_interest:
         assert cf.is_cash is False
-        assert cf.has_tag(CashFlowTags.CAPEX)
+        assert cf.pro_forma_category is ProFormaCategory.CAPITAL_COST
         assert cf.amount < 0
 
 
@@ -638,7 +637,8 @@ def test_paid_interest_is_cash():
     assert len(paid_interest) > 0
     for cf in paid_interest:
         assert cf.is_cash is True
-        assert cf.has_tag(CashFlowTags.EXPENSE)
+        assert cf.pro_forma_category is ProFormaCategory.FINANCING_INTEREST
+        assert cf.tax_treatment is TaxTreatment.NONE
         assert cf.amount < 0
 
 

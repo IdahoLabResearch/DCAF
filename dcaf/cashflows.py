@@ -2,13 +2,12 @@
 Core cashflow abstractions for discounted cash-flow analysis.
 
 Provides CashFlow (immutable data point), CashFlowStream (functional container),
-CashFlowGroup (grouped container), and CashFlowTags (categorisation enum).
+CashFlowGroup (grouped container), and structured cashflow classification fields.
 """
 
-from collections import defaultdict
-from dataclasses import dataclass, field, replace as dc_replace
+import datetime as dt
+from dataclasses import dataclass
 from datetime import date
-from enum import Enum
 from typing import (
     Any,
     Callable,
@@ -27,8 +26,25 @@ from dcaf.escalation import (
     _constant_discount_policy,
     _resolve_escalation_policy_override,
 )
-from dcaf.types import DayCountConvention, Period, SupportsLessThan
+from dcaf.types import (
+    DayCountConvention,
+    Period,
+    ProFormaCategory,
+    SupportsLessThan,
+    TaxTreatment,
+    normalize_cashflow_classification,
+    normalize_pro_forma_category,
+    parse_pro_forma_category,
+    parse_tax_treatment,
+)
 from dcaf.utils import time_delta_per_period, timedelta_fractional_years
+
+
+class _UnsetType:
+    """Sentinel type for optional filter arguments."""
+
+
+_UNSET = _UnsetType()
 
 
 def _recurring_escalation(
@@ -56,32 +72,6 @@ def _recurring_escalation(
     )
 
 
-class CashFlowTags(Enum):
-    """
-    Tags for categorizing cashflows in financial analysis and pro-forma statements.
-
-    Used to filter and group cashflows by various characteristics such as income/expense
-    classification, tax treatment, and accounting treatment.
-    """
-
-    # Income/Expense classification
-    REVENUE = "revenue"
-    EXPENSE = "expense"
-
-    # Tax treatment
-    TAXABLE = "taxable"
-    TAX_DEDUCTIBLE = "tax_deductible"
-
-    # Accounting treatment
-    CAPEX = "capex"  # Capital expenditure
-    OPEX = "opex"  # Operating expense
-    DEPRECIATION = "depreciation"
-
-    # Debt service
-    DEBT_INTEREST = "debt_interest"
-    DEBT_PRINCIPAL = "debt_principal"
-
-
 @dataclass(frozen=True)
 class CashFlow:
     """
@@ -97,47 +87,40 @@ class CashFlow:
         Optional descriptive label for the cashflow.
     is_cash : bool
         True for cash-basis items, False for accrual-basis items (e.g., depreciation).
-    tags : frozenset[CashFlowTags]
-        Set of tags for categorization (e.g., REVENUE, TAXABLE, EXPENSE).
+    pro_forma_category : ProFormaCategory or None
+        Presentation category used for pro-forma grouping.
+    tax_treatment : TaxTreatment
+        Tax classification used for taxable-income assembly.
     """
 
     amount: float
     date: date
     label: str = ""
     is_cash: bool = True
-    tags: frozenset[CashFlowTags] = field(default_factory=frozenset)
+    pro_forma_category: ProFormaCategory | None = ProFormaCategory.OTHER
+    tax_treatment: TaxTreatment = TaxTreatment.NONE
 
-    def has_tag(self, tag: CashFlowTags) -> bool:
-        """
-        Check if this cashflow has a specific tag.
-
-        Parameters
-        ----------
-        tag : CashFlowTags
-            The tag to check for.
-
-        Returns
-        -------
-        bool
-            True if the cashflow has the tag, False otherwise.
-
-        Examples
-        --------
-        >>> cf = CashFlow(1000.0, date(2024, 1, 1), tags=frozenset({CashFlowTags.REVENUE}))
-        >>> cf.has_tag(CashFlowTags.REVENUE)
-        True
-        >>> cf.has_tag(CashFlowTags.EXPENSE)
-        False
-        """
-        return tag in self.tags
+    def __post_init__(self) -> None:
+        if self.pro_forma_category is not None:
+            object.__setattr__(
+                self,
+                "pro_forma_category",
+                parse_pro_forma_category(self.pro_forma_category),
+            )
+        object.__setattr__(
+            self,
+            "tax_treatment",
+            parse_tax_treatment(self.tax_treatment),
+        )
 
     def replace(
         self,
         amount: float | None = None,
-        date: date | None = None,
+        date: dt.date | None = None,
         label: str | None = None,
         is_cash: bool | None = None,
-        tags: frozenset[CashFlowTags] | None = None,
+        pro_forma_category: ProFormaCategory | str | None | _UnsetType = _UNSET,
+        tax_treatment: TaxTreatment | str | _UnsetType = _UNSET,
     ) -> "CashFlow":
         """
         Return a new version of this CashFlow with the specified changes to parameters.
@@ -148,7 +131,10 @@ class CashFlow:
         date: date | None = None
         label: str | None = None
         is_cash: bool | None = None
-        tags: frozenset[CashFlowTags] | None = None
+        pro_forma_category: ProFormaCategory | str | None, optional
+            Updated pro-forma category. Pass ``None`` to clear the category.
+        tax_treatment: TaxTreatment | str, optional
+            Updated tax treatment.
 
         Returns
         -------
@@ -167,16 +153,31 @@ class CashFlow:
         >>> larger_cf = cf.replace(amount=new_amount)
 
         >>> # Perform multiple modifications
-        >>> old_cf = CashFlow(-3000, date(2027, 6, 1), tags=frozenset([CashFlowTags.EXPENSE]))
+        >>> old_cf = CashFlow(-3000, date(2027, 6, 1), pro_forma_category="operating_cost")
         >>> new_cf = old_cf.replace(
         ...     amount = old_cf.amount + 500,
         ...     date = (old_cf.date + relativedelta(months=6)),
         ... )
         >>> # This reduces the expense magnitude by 500 and moves it back 6 months
         """
-        params = {"amount": amount, "date": date, "label": label, "is_cash": is_cash, "tags": tags}
-        changes = {argname: arg for argname, arg in params.items() if arg is not None}
-        return dc_replace(self, **changes)
+        resolved_category = (
+            self.pro_forma_category
+            if isinstance(pro_forma_category, _UnsetType)
+            else normalize_pro_forma_category(pro_forma_category)
+        )
+        resolved_tax_treatment = (
+            self.tax_treatment
+            if isinstance(tax_treatment, _UnsetType)
+            else parse_tax_treatment(tax_treatment)
+        )
+        return CashFlow(
+            amount=self.amount if amount is None else amount,
+            date=self.date if date is None else date,
+            label=self.label if label is None else label,
+            is_cash=self.is_cash if is_cash is None else is_cash,
+            pro_forma_category=resolved_category,
+            tax_treatment=resolved_tax_treatment,
+        )
 
     def to_stream(self) -> "CashFlowStream":
         """
@@ -280,10 +281,15 @@ class CashFlowGroup[KeyType](BaseGroup[KeyType, CashFlow, "CashFlowStream"]):
         Examples
         --------
         >>> # Scale all amounts in each group by 1.1 (all groups)
-        >>> by_tag = stream.group_by(tag=True)
-        >>> scaled_groups = by_tag.apply_to_groups(
+        >>> by_category = stream.group_by_pro_forma_category()
+        >>> scaled_groups = by_category.apply_to_groups(
         ...     lambda s: s.apply(lambda cf: CashFlow(
-        ...         cf.amount * 1.1, cf.date, cf.label, cf.is_cash, cf.tags
+        ...         cf.amount * 1.1,
+        ...         cf.date,
+        ...         cf.label,
+        ...         cf.is_cash,
+        ...         cf.pro_forma_category,
+        ...         cf.tax_treatment,
         ...     ))
         ... )
 
@@ -297,19 +303,15 @@ class CashFlowGroup[KeyType](BaseGroup[KeyType, CashFlow, "CashFlowStream"]):
         >>> sorted_groups = by_year.apply_to_groups(lambda s: s.sort())
 
         >>> # Apply transformation only to specific groups (sequence of keys)
-        >>> by_tag = stream.group_by(tag=True)
-        >>> scaled_revenue = by_tag.apply_to_groups(
-        ...     lambda s: s.apply(lambda cf: CashFlow(
-        ...         cf.amount * 1.05, cf.date, cf.label, cf.is_cash, cf.tags
-        ...     )),
-        ...     keys=[CashFlowTags.REVENUE]
+        >>> by_category = stream.group_by_pro_forma_category()
+        >>> scaled_revenue = by_category.apply_to_groups(
+        ...     lambda s: s.apply(lambda cf: cf.replace(amount=cf.amount * 1.05)),
+        ...     keys=[ProFormaCategory.REVENUE]
         ... )
 
         >>> # Apply transformation to a single group
         >>> scaled_one_year = by_year.apply_to_groups(
-        ...     lambda s: s.apply(lambda cf: CashFlow(
-        ...         cf.amount * 1.5, cf.date, cf.label, cf.is_cash, cf.tags
-        ...     )),
+        ...     lambda s: s.apply(lambda cf: cf.replace(amount=cf.amount * 1.5)),
         ...     keys=date(2024, 1, 1)
         ... )
         """
@@ -337,9 +339,7 @@ class CashFlowGroup[KeyType](BaseGroup[KeyType, CashFlow, "CashFlowStream"]):
         """
         Ungroup the cashflows and return them as a single CashFlowStream.
 
-        Combines all cashflows from all groups into a single stream. Note that
-        cashflows may appear multiple times if they belonged to multiple groups
-        (e.g., from group_by_tag where a flow can have multiple tags).
+        Combines all cashflows from all groups into a single stream.
 
         Returns
         -------
@@ -363,20 +363,20 @@ class CashFlowGroup[KeyType](BaseGroup[KeyType, CashFlow, "CashFlowStream"]):
         >>> recent_flows = recent_years.ungroup()
 
         >>> # Apply transformations to groups, then ungroup
-        >>> by_tag = stream.group_by(tag=True)
-        >>> # Scale revenue by 1.05
-        >>> revenue_scaled = by_tag[CashFlowTags.REVENUE].apply(
-        ...     lambda cf: CashFlow(cf.amount * 1.05, cf.date, cf.label, cf.is_cash, cf.tags)
+        >>> by_category = stream.group_by_pro_forma_category()
+        >>> revenue_scaled = by_category[ProFormaCategory.REVENUE].apply(
+        ...     lambda cf: cf.replace(amount=cf.amount * 1.05)
         ... )
         >>> # Put back into a stream
-        >>> scaled_stream = CashFlowGroup({CashFlowTags.REVENUE: revenue_scaled}).ungroup()
+        >>> scaled_stream = CashFlowGroup({ProFormaCategory.REVENUE: revenue_scaled}).ungroup()
 
         Notes
         -----
         - The resulting stream is not guaranteed to be in any particular order.
           Use `sort()` on the result if ordering is important.
-        - Cashflows that appear in multiple groups (e.g., from group_by_tag)
-          will appear multiple times in the ungrouped stream.
+        - If the same cashflow object appears in multiple groups of a manually
+          constructed ``CashFlowGroup``, it will appear multiple times after
+          ungrouping.
         """
         return super().ungroup()
 
@@ -418,11 +418,11 @@ class CashFlowGroup[KeyType](BaseGroup[KeyType, CashFlow, "CashFlowStream"]):
 
         Examples
         --------
-        >>> # Get total amount per tag
-        >>> by_tag = stream.group_by(tag=True)
-        >>> totals = by_tag.sum()
-        >>> # Returns: {CashFlowTags.REVENUE: 50000.0,
-        >>> #           CashFlowTags.EXPENSE: -20000.0, ...}
+        >>> # Get total amount per pro-forma category
+        >>> by_category = stream.group_by_pro_forma_category()
+        >>> totals = by_category.sum()
+        >>> # Returns: {ProFormaCategory.REVENUE: 50000.0,
+        >>> #           ProFormaCategory.OPERATING_COST: -20000.0, ...}
 
         >>> # Get monthly totals
         >>> by_month = stream.group_by(period="month")
@@ -446,10 +446,10 @@ class CashFlowGroup[KeyType](BaseGroup[KeyType, CashFlow, "CashFlowStream"]):
 
         Examples
         --------
-        >>> # Get count per tag
-        >>> by_tag = stream.group_by(tag=True)
-        >>> counts = by_tag.count()
-        >>> # Returns: {CashFlowTags.REVENUE: 15, CashFlowTags.EXPENSE: 42, ...}
+        >>> # Get count per pro-forma category
+        >>> by_category = stream.group_by_pro_forma_category()
+        >>> counts = by_category.count()
+        >>> # Returns: {ProFormaCategory.REVENUE: 15, ProFormaCategory.OPERATING_COST: 42, ...}
 
         >>> # Get cashflows per year
         >>> by_year = stream.group_by(period="year")
@@ -550,7 +550,8 @@ class CashFlowStream(BaseStream[CashFlow]):
         escalation: float = 0.0,
         label: str = "Recurring Payment",
         is_cash: bool = True,
-        tags: frozenset[CashFlowTags] = frozenset(),
+        pro_forma_category: ProFormaCategory | str | None = ProFormaCategory.OTHER,
+        tax_treatment: TaxTreatment | str = TaxTreatment.NONE,
         *,
         escalation_period: Period = "year",
         amount_reference_date: date | None = None,
@@ -602,8 +603,10 @@ class CashFlowStream(BaseStream[CashFlow]):
             (1-indexed). Default is "Recurring Payment".
         is_cash : bool, optional
             Whether the cashflows represent actual cash movements. Default is True.
-        tags : frozenset[CashFlowTags], optional
-            Tags to apply to all cashflows. Default is empty set.
+        pro_forma_category : ProFormaCategory or str or None, optional
+            Pro-forma category applied to all generated flows. Default is ``"other"``.
+        tax_treatment : TaxTreatment or str, optional
+            Tax treatment applied to all generated flows. Default is ``"none"``.
 
         Returns
         -------
@@ -625,6 +628,10 @@ class CashFlowStream(BaseStream[CashFlow]):
             amount_reference_date=amount_reference_date,
             escalation_policy=escalation_policy,
         )
+        resolved_category, resolved_tax_treatment = normalize_cashflow_classification(
+            pro_forma_category,
+            tax_treatment,
+        )
         entries = []
         for i in range(periods):
             flow_date = start + delta * i
@@ -636,7 +643,8 @@ class CashFlowStream(BaseStream[CashFlow]):
                     date=flow_date,
                     label=flow_label,
                     is_cash=is_cash,
-                    tags=tags,
+                    pro_forma_category=resolved_category,
+                    tax_treatment=resolved_tax_treatment,
                 )
             )
 
@@ -755,7 +763,8 @@ class CashFlowStream(BaseStream[CashFlow]):
         escalation: float = 0.0,
         label: str = "Recurring Payment",
         is_cash: bool = True,
-        tags: frozenset[CashFlowTags] = frozenset(),
+        pro_forma_category: ProFormaCategory | str | None = ProFormaCategory.OTHER,
+        tax_treatment: TaxTreatment | str = TaxTreatment.NONE,
         *,
         escalation_period: Period = "year",
         amount_reference_date: date | None = None,
@@ -783,7 +792,8 @@ class CashFlowStream(BaseStream[CashFlow]):
             escalation_policy=escalation_policy,
             label=label,
             is_cash=is_cash,
-            tags=tags,
+            pro_forma_category=pro_forma_category,
+            tax_treatment=tax_treatment,
         )
         return self.extend(recurring)
 
@@ -813,21 +823,18 @@ class CashFlowStream(BaseStream[CashFlow]):
         Examples
         --------
         >>> def scale_amount(cf: CashFlow) -> CashFlow:
-        ...     return CashFlow(cf.amount * 2, cf.date, cf.label, cf.is_cash, cf.tags)
+        ...     return cf.replace(amount=cf.amount * 2)
         >>> stream = CashFlowStream([cf1, cf2])
         >>> scaled_stream = stream.apply(scale_amount)
 
         >>> # Apply discount factor to all amounts
-        >>> discounted = stream.apply(lambda cf: CashFlow(
-        ...     cf.amount * 0.9, cf.date, cf.label, cf.is_cash, cf.tags
-        ... ))
+        >>> discounted = stream.apply(lambda cf: cf.replace(amount=cf.amount * 0.9))
 
-        >>> # Add a tag to all cashflows with positive amounts
-        >>> tagged = stream.apply(lambda cf: CashFlow(
-        ...     cf.amount, cf.date, cf.label, cf.is_cash,
-        ...     cf.tags | frozenset({CashFlowTags.REVENUE}),
-        ...     lambda cf: cf.amount > 0
-        ... ))
+        >>> # Reclassify positive amounts as revenue
+        >>> classified = stream.apply(
+        ...     lambda cf: cf.replace(pro_forma_category=ProFormaCategory.REVENUE),
+        ...     where=lambda cf: cf.amount > 0,
+        ... )
 
         Notes
         -----
@@ -865,8 +872,9 @@ class CashFlowStream(BaseStream[CashFlow]):
         ...     if not stream:
         ...         return stream
         ...     first_amount = stream[0].amount
-        ...     return stream.apply(lambda cf: CashFlow(
-        ...         cf.amount / first_amount, cf.date, cf.label, cf.is_cash, cf.tags))
+        ...     return stream.apply(
+        ...         lambda cf: cf.replace(amount=cf.amount / first_amount)
+        ...     )
         >>> stream = CashFlowStream([cf1, cf2, cf3])
         >>> normalized_stream = stream.apply_streamwise(normalize_to_first)
 
@@ -919,8 +927,8 @@ class CashFlowStream(BaseStream[CashFlow]):
         --------
         >>> # Double revenue flows, drop everything else
         >>> def double_revenue(cf: CashFlow) -> CashFlow | None:
-        ...     if cf.has_tag(CashFlowTags.REVENUE):
-        ...         return CashFlow(cf.amount * 2, cf.date, cf.label, cf.is_cash, cf.tags)
+        ...     if cf.pro_forma_category is ProFormaCategory.REVENUE:
+        ...         return cf.replace(amount=cf.amount * 2)
         ...     return None
         >>> revenue_doubled = stream.filter_apply(double_revenue)
         """
@@ -930,22 +938,27 @@ class CashFlowStream(BaseStream[CashFlow]):
         self,
         fn: Callable[[CashFlow], bool] | None = None,
         *,
-        tag: CashFlowTags | None = None,
+        pro_forma_category: ProFormaCategory | str | None | _UnsetType = _UNSET,
+        tax_treatment: TaxTreatment | str | _UnsetType = _UNSET,
         is_cash: bool | None = None,
     ) -> "CashFlowStream":
         """
         Return a new CashFlowStream object filtered by a predicate or keyword criteria.
 
-        Accepts either a callable predicate **or** keyword arguments (``tag``,
-        ``is_cash``), but not both. Multiple keyword arguments are combined with
+        Accepts either a callable predicate **or** keyword arguments
+        (``pro_forma_category``, ``tax_treatment``, ``is_cash``), but not both.
+        Multiple keyword arguments are combined with
         AND semantics.
 
         Parameters
         ----------
         fn : Callable, optional
             A predicate function that takes a CashFlow object and returns a boolean.
-        tag : CashFlowTags, optional
-            Keep only cashflows that have this tag.
+        pro_forma_category : ProFormaCategory or str or None, optional
+            Keep only cashflows in this pro-forma category. Pass ``None`` to
+            select uncategorized flows.
+        tax_treatment : TaxTreatment or str, optional
+            Keep only cashflows with this tax treatment.
         is_cash : bool, optional
             Keep only cashflows where ``is_cash`` matches this value.
 
@@ -959,7 +972,11 @@ class CashFlowStream(BaseStream[CashFlow]):
         ValueError
             If both *fn* and keyword arguments are provided, or if neither is.
         """
-        has_kwargs = tag is not None or is_cash is not None
+        has_kwargs = (
+            not isinstance(pro_forma_category, _UnsetType)
+            or not isinstance(tax_treatment, _UnsetType)
+            or is_cash is not None
+        )
 
         if fn is not None and has_kwargs:
             raise ValueError("Cannot combine a callable predicate with keyword arguments.")
@@ -969,9 +986,27 @@ class CashFlowStream(BaseStream[CashFlow]):
         if fn is not None:
             return self._filter_where(fn)
 
+        category_value = (
+            parse_pro_forma_category(pro_forma_category)
+            if not isinstance(pro_forma_category, _UnsetType) and pro_forma_category is not None
+            else pro_forma_category
+        )
+        tax_value = (
+            parse_tax_treatment(tax_treatment)
+            if not isinstance(tax_treatment, _UnsetType)
+            else tax_treatment
+        )
+
         # Keyword-based filtering (AND semantics)
         return self._filter_where(
-            lambda flow: (tag is None or flow.has_tag(tag))
+            lambda flow: (
+                isinstance(pro_forma_category, _UnsetType)
+                or flow.pro_forma_category == category_value
+            )
+            and (
+                isinstance(tax_treatment, _UnsetType)
+                or flow.tax_treatment == tax_value
+            )
             and (is_cash is None or flow.is_cash is is_cash)
         )
 
@@ -1012,29 +1047,23 @@ class CashFlowStream(BaseStream[CashFlow]):
     @overload
     def group_by[KeyType](self, fn: Callable[[CashFlow], KeyType]) -> CashFlowGroup[KeyType]: ...
     @overload
-    def group_by(self, *, tag: Literal[True]) -> CashFlowGroup[CashFlowTags]: ...
-    @overload
     def group_by(self, *, period: Period) -> CashFlowGroup[date]: ...
 
     def group_by(
         self,
         fn: Callable[[CashFlow], Any] | None = None,
         *,
-        tag: bool = False,
         period: Period | None = None,
     ) -> CashFlowGroup:
         """
-        Group cashflows by a key function, by tags, or by time period.
+        Group cashflows by a key function or by time period.
 
-        Exactly one of *fn*, *tag*, or *period* must be provided.
+        Exactly one of *fn* or *period* must be provided.
 
         Parameters
         ----------
         fn : Callable, optional
             A key function applied to each cashflow.
-        tag : bool, optional
-            If ``True``, group by tags (fan-out: a flow with multiple tags
-            appears in each corresponding group).
         period : Period, optional
             Group by time period (``"day"``, ``"month"``, ``"quarter"``,
             ``"year"``).
@@ -1049,72 +1078,37 @@ class CashFlowStream(BaseStream[CashFlow]):
         ValueError
             If not exactly one argument is provided.
         """
-        provided = (fn is not None) + tag + (period is not None)
+        provided = (fn is not None) + (period is not None)
         if provided != 1:
-            raise ValueError("Provide exactly one of 'fn', 'tag=True', or 'period'.")
+            raise ValueError("Provide exactly one of 'fn' or 'period'.")
 
         if fn is not None:
             groups = self._grouped_entries_by_key(fn)
             return CashFlowGroup(self._grouped_streams(groups))
-
-        if tag:
-            # NOTE: In the current version (as of 3/20/26), grouping by tag does not create a group
-            # for untagged cashflows. This means that, in a workflow where a stream is grouped, then
-            # ungrouped, any cashflows without tags will be omitted in the group and final stream.
-            tag_groups: defaultdict[CashFlowTags, list[CashFlow]] = defaultdict(list)
-            for flow in self.entries:
-                for t in flow.tags:
-                    tag_groups[t].append(flow)
-            return CashFlowGroup(self._grouped_streams(dict(tag_groups)))
 
         # period path
         assert period is not None
         period_groups = self._grouped_entries_by_period(period)
         return CashFlowGroup(self._grouped_streams(period_groups))
 
-    # Keep group_by_tag as alias for backwards compat during transition
-    def group_by_tag(self) -> CashFlowGroup[CashFlowTags]:
+    def group_by_pro_forma_category(self) -> CashFlowGroup[ProFormaCategory | None]:
         """
-        Group cashflows by their tags.
+        Group cashflows by their pro-forma category.
 
-        This is a convenience method that groups cashflows by each tag they contain.
-        Since cashflows can have multiple tags, a single cashflow may appear in
-        multiple groups. This is sugar for the more general ``group_by()`` method,
-        handling the multi-tag case automatically.
+        This is sugar for ``group_by(lambda cf: cf.pro_forma_category)``.
+        Uncategorized cashflows appear under the ``None`` key instead of
+        being silently dropped.
 
         Returns
         -------
         CashFlowGroup
-            A CashFlowGroup object mapping each CashFlowTags value to a
-            CashFlowStream containing all cashflows with that tag.
-
-        Examples
-        --------
-        >>> # Group by tags and get total per tag
-        >>> by_tag = stream.group_by_tag()
-        >>> revenue_total = by_tag[CashFlowTags.REVENUE].sum()
-        >>> expense_total = by_tag[CashFlowTags.EXPENSE].sum()
-
-        >>> # Get all taxable cashflows
-        >>> taxable_flows = by_tag[CashFlowTags.TAXABLE]
-
-        >>> # Count cashflows per tag
-        >>> counts = by_tag.aggregate(lambda s: s.count())
-        >>> # Returns: {CashFlowTags.REVENUE: 5, CashFlowTags.EXPENSE: 12, ...}
-
-        Notes
-        -----
-        This method is equivalent to manually filtering by each tag, but more efficient:
-
-        >>> # Instead of:
-        >>> revenue = stream.filter(lambda cf: cf.has_tag(CashFlowTags.REVENUE))
-        >>> expense = stream.filter(lambda cf: cf.has_tag(CashFlowTags.EXPENSE))
-        >>> # You can do:
-        >>> by_tag = stream.group_by_tag()
-        >>> revenue = by_tag[CashFlowTags.REVENUE]
-        >>> expense = by_tag[CashFlowTags.EXPENSE]
+            Cashflows grouped by ``pro_forma_category``.
         """
-        return self.group_by(tag=True)
+        return self.group_by(lambda flow: flow.pro_forma_category)
+
+    def group_by_tax_treatment(self) -> CashFlowGroup[TaxTreatment]:
+        """Group cashflows by their tax treatment."""
+        return self.group_by(lambda flow: flow.tax_treatment)
 
     def group_by_period(self, period: Period) -> CashFlowGroup[date]:
         """
@@ -1149,7 +1143,7 @@ class CashFlowStream(BaseStream[CashFlow]):
         >>> # Group by year and get yearly revenue
         >>> by_year = stream.group_by_period("year")
         >>> yearly_revenue = by_year.aggregate(
-        ...     lambda s: s.filter(tag=CashFlowTags.REVENUE).sum()
+        ...     lambda s: s.filter(pro_forma_category=ProFormaCategory.REVENUE).sum()
         ... )
 
         >>> # Group by quarter
@@ -1178,7 +1172,7 @@ class CashFlowStream(BaseStream[CashFlow]):
     def sort(
         self,
         *,
-        attr: Literal["date", "amount", "label"],
+        attr: str,
         descending: bool = ...,
     ) -> "CashFlowStream": ...
     @overload
@@ -1188,7 +1182,7 @@ class CashFlowStream(BaseStream[CashFlow]):
         self,
         fn: Callable[[CashFlow], SupportsLessThan] | None = None,
         *,
-        attr: Literal["date", "amount", "label"] | None = None,
+        attr: str | None = None,
         descending: bool = False,
     ) -> "CashFlowStream":
         """
@@ -1232,9 +1226,9 @@ class CashFlowStream(BaseStream[CashFlow]):
         >>> sorted_stream = stream.sort(lambda cf: (cf.date.year, cf.amount))
 
         >>> # Chain with other operations
-        >>> recent_revenue = (stream
-        ...     .filter(lambda cf: cf.has_tag(CashFlowTags.REVENUE))
-        ...     .sort()[-10:])  # Get 10 most recent revenue cashflows
+        >>> recent_revenue = (
+        ...     stream.filter(pro_forma_category=ProFormaCategory.REVENUE).sort()[-10:]
+        ... )  # Get 10 most recent revenue cashflows
 
         Notes
         -----
@@ -1242,9 +1236,15 @@ class CashFlowStream(BaseStream[CashFlow]):
         The sorting is stable, meaning that when multiple cashflows have the same
         key value, they maintain their original relative order.
         """
+        if fn is not None and attr is not None:
+            raise ValueError("Cannot pass both a key function and 'attr' to sort()")
         if attr not in (None, "date", "amount", "label"):
             raise AssertionError(f"Unexpected sort attribute: {attr!r}")
-        return super().sort(fn, attr=attr, descending=descending)
+        if fn is not None:
+            return super().sort(fn, descending=descending)
+        if attr is None:
+            return super().sort()
+        return super().sort(attr=attr, descending=descending)
 
     def sort_by(
         self,
@@ -1293,13 +1293,15 @@ class CashFlowStream(BaseStream[CashFlow]):
         >>> # Add 20% to all cashflow amounts
         >>> scaled_stream = stream.scale(1.2)
 
-        >>> # Reduce EXPENSE cashflow amounts by 10%
-        >>> expense_stream = stream.filter(tag=CashFlowTags.EXPENSE)
-        >>> non_expense_stream = CashFlowStream(
-        ...     entries=list(set(stream.entries) - set(expense_stream.entries))
+        >>> # Reduce operating-cost amounts by 10%
+        >>> operating_costs = stream.filter(
+        ...     pro_forma_category=ProFormaCategory.OPERATING_COST
         ... )
-        >>> scaled_expense_stream = expense_stream.scale(0.9)
-        >>> result_stream = CashFlowStream.from_streams(scaled_expense_stream, non_expense_stream)
+        >>> other_flows = CashFlowStream(
+        ...     entries=list(set(stream.entries) - set(operating_costs.entries))
+        ... )
+        >>> scaled_costs = operating_costs.scale(0.9)
+        >>> result_stream = CashFlowStream.from_streams(scaled_costs, other_flows)
         """
         return CashFlowStream([cf.replace(amount=cf.amount*factor) for cf in self.entries])
 
@@ -1324,7 +1326,7 @@ class CashFlowStream(BaseStream[CashFlow]):
         >>> # Returns: 2500.0
 
         >>> # Get total revenue
-        >>> revenue_total = stream.filter(lambda cf: cf.has_tag(CashFlowTags.REVENUE)).sum()
+        >>> revenue_total = stream.filter(pro_forma_category=ProFormaCategory.REVENUE).sum()
 
         >>> # Get net cash flow (cash flows only)
         >>> net_cash = stream.filter(lambda cf: cf.is_cash).sum()
@@ -1353,7 +1355,7 @@ class CashFlowStream(BaseStream[CashFlow]):
         >>> # Returns: 3
 
         >>> # Count revenue items
-        >>> revenue_count = stream.filter(lambda cf: cf.has_tag(CashFlowTags.REVENUE)).count()
+        >>> revenue_count = stream.filter(pro_forma_category=ProFormaCategory.REVENUE).count()
 
         >>> # Check if stream is empty
         >>> if stream.count() == 0:

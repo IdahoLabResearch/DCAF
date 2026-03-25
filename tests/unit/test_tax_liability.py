@@ -2,8 +2,9 @@
 
 from datetime import date
 
-from dcaf.cashflows import CashFlow, CashFlowStream, CashFlowTags
+from dcaf.cashflows import CashFlow, CashFlowStream
 from dcaf.tax_liability import compute_taxable_income, tax_liability
+from dcaf.types import ProFormaCategory, TaxTreatment
 
 
 class TestComputeTaxableIncome:
@@ -18,7 +19,8 @@ class TestComputeTaxableIncome:
                     date=date(2025, 6, 15),
                     label="Revenue",
                     is_cash=True,
-                    tags=frozenset({CashFlowTags.REVENUE, CashFlowTags.TAXABLE}),
+                    pro_forma_category=ProFormaCategory.REVENUE,
+                    tax_treatment=TaxTreatment.TAXABLE,
                 )
             ]
         )
@@ -29,7 +31,8 @@ class TestComputeTaxableIncome:
                     date=date(2025, 3, 1),
                     label="Expense",
                     is_cash=True,
-                    tags=frozenset({CashFlowTags.EXPENSE, CashFlowTags.TAX_DEDUCTIBLE}),
+                    pro_forma_category=ProFormaCategory.OPERATING_COST,
+                    tax_treatment=TaxTreatment.DEDUCTIBLE,
                 )
             ]
         )
@@ -40,7 +43,8 @@ class TestComputeTaxableIncome:
         assert result.entries[0].amount == 80_000  # 100,000 - 20,000
         assert result.entries[0].date == date(2025, 12, 31)  # Period end
         assert result.entries[0].is_cash is False  # Accrual concept
-        assert result.entries[0].tags == frozenset()  # No tags
+        assert result.entries[0].pro_forma_category is None
+        assert result.entries[0].tax_treatment is TaxTreatment.NONE
 
     def test_multiple_periods(self):
         """Test grouping by year when flows span multiple periods."""
@@ -50,13 +54,13 @@ class TestComputeTaxableIncome:
                     amount=100_000,
                     date=date(2025, 6, 1),
                     label="Revenue 2025",
-                    tags=frozenset({CashFlowTags.TAXABLE}),
+                    tax_treatment=TaxTreatment.TAXABLE,
                 ),
                 CashFlow(
                     amount=150_000,
                     date=date(2026, 6, 1),
                     label="Revenue 2026",
-                    tags=frozenset({CashFlowTags.TAXABLE}),
+                    tax_treatment=TaxTreatment.TAXABLE,
                 ),
             ]
         )
@@ -66,13 +70,13 @@ class TestComputeTaxableIncome:
                     amount=-20_000,
                     date=date(2025, 3, 1),
                     label="Expense 2025",
-                    tags=frozenset({CashFlowTags.TAX_DEDUCTIBLE}),
+                    tax_treatment=TaxTreatment.DEDUCTIBLE,
                 ),
                 CashFlow(
                     amount=-30_000,
                     date=date(2026, 3, 1),
                     label="Expense 2026",
-                    tags=frozenset({CashFlowTags.TAX_DEDUCTIBLE}),
+                    tax_treatment=TaxTreatment.DEDUCTIBLE,
                 ),
             ]
         )
@@ -97,7 +101,7 @@ class TestComputeTaxableIncome:
                     amount=50_000,
                     date=date(2025, 6, 1),
                     label="Revenue",
-                    tags=frozenset({CashFlowTags.TAXABLE}),
+                    tax_treatment=TaxTreatment.TAXABLE,
                 )
             ]
         )
@@ -107,7 +111,7 @@ class TestComputeTaxableIncome:
                     amount=-100_000,
                     date=date(2025, 3, 1),
                     label="Large Expense",
-                    tags=frozenset({CashFlowTags.TAX_DEDUCTIBLE}),
+                    tax_treatment=TaxTreatment.DEDUCTIBLE,
                 )
             ]
         )
@@ -135,7 +139,7 @@ class TestComputeTaxableIncome:
                     amount=100_000,
                     date=date(2025, 6, 1),
                     label="Revenue",
-                    tags=frozenset({CashFlowTags.TAXABLE}),
+                    tax_treatment=TaxTreatment.TAXABLE,
                 )
             ]
         )
@@ -155,7 +159,7 @@ class TestComputeTaxableIncome:
                     amount=-50_000,
                     date=date(2025, 3, 1),
                     label="Expense",
-                    tags=frozenset({CashFlowTags.TAX_DEDUCTIBLE}),
+                    tax_treatment=TaxTreatment.DEDUCTIBLE,
                 )
             ]
         )
@@ -173,13 +177,13 @@ class TestComputeTaxableIncome:
                     amount=100_000,
                     date=date(2025, 3, 1),
                     label="Revenue Source 1",
-                    tags=frozenset({CashFlowTags.TAXABLE}),
+                    tax_treatment=TaxTreatment.TAXABLE,
                 ),
                 CashFlow(
                     amount=50_000,
                     date=date(2025, 6, 1),
                     label="Revenue Source 2",
-                    tags=frozenset({CashFlowTags.TAXABLE}),
+                    tax_treatment=TaxTreatment.TAXABLE,
                 ),
             ]
         )
@@ -189,13 +193,14 @@ class TestComputeTaxableIncome:
                     amount=-20_000,
                     date=date(2025, 4, 1),
                     label="OPEX",
-                    tags=frozenset({CashFlowTags.TAX_DEDUCTIBLE}),
+                    tax_treatment=TaxTreatment.DEDUCTIBLE,
                 ),
                 CashFlow(
                     amount=-10_000,
                     date=date(2025, 8, 1),
                     label="Depreciation",
-                    tags=frozenset({CashFlowTags.TAX_DEDUCTIBLE, CashFlowTags.DEPRECIATION}),
+                    pro_forma_category=ProFormaCategory.DEPRECIATION,
+                    tax_treatment=TaxTreatment.DEDUCTIBLE,
                 ),
             ]
         )
@@ -213,7 +218,7 @@ class TestComputeTaxableIncome:
                     amount=100_000,
                     date=date(2025, 1, 1),
                     label="Revenue",
-                    tags=frozenset({CashFlowTags.TAXABLE}),
+                    tax_treatment=TaxTreatment.TAXABLE,
                 )
             ]
         )
@@ -231,13 +236,14 @@ class TestComputeTaxableIncome:
                     amount=100_000,
                     date=date(2025, 6, 1),
                     label="Taxable Revenue",
-                    tags=frozenset({CashFlowTags.TAXABLE}),
+                    tax_treatment=TaxTreatment.TAXABLE,
                 ),
                 CashFlow(
                     amount=50_000,
                     date=date(2025, 6, 1),
                     label="Other Revenue",
-                    tags=frozenset({CashFlowTags.REVENUE}),
+                    pro_forma_category=ProFormaCategory.REVENUE,
+                    tax_treatment=TaxTreatment.NONE,
                 ),
             ]
         )
@@ -247,13 +253,14 @@ class TestComputeTaxableIncome:
                     amount=-20_000,
                     date=date(2025, 3, 1),
                     label="Deductible Expense",
-                    tags=frozenset({CashFlowTags.TAX_DEDUCTIBLE}),
+                    tax_treatment=TaxTreatment.DEDUCTIBLE,
                 ),
                 CashFlow(
                     amount=-10_000,
                     date=date(2025, 3, 1),
                     label="Other Expense",
-                    tags=frozenset({CashFlowTags.EXPENSE}),
+                    pro_forma_category=ProFormaCategory.OPERATING_COST,
+                    tax_treatment=TaxTreatment.NONE,
                 ),
             ]
         )
@@ -287,7 +294,8 @@ class TestTaxLiability:
         assert result.entries[0].amount == -21_000  # Negative = outflow
         assert result.entries[0].date == date(2025, 1, 1)
         assert result.entries[0].is_cash is True  # Cash payment
-        assert CashFlowTags.EXPENSE in result.entries[0].tags
+        assert result.entries[0].pro_forma_category is ProFormaCategory.TAX
+        assert result.entries[0].tax_treatment is TaxTreatment.NONE
 
     def test_amounts_are_negative(self):
         """Test that tax amounts are negative (outflows)."""
@@ -386,8 +394,8 @@ class TestTaxLiability:
 
         assert result.entries[0].label == "Federal Tax"
 
-    def test_custom_tags(self):
-        """Test custom tags applied correctly."""
+    def test_custom_classification(self):
+        """Test custom classification applied correctly."""
         taxable_income = CashFlowStream(
             [
                 CashFlow(
@@ -399,13 +407,18 @@ class TestTaxLiability:
             ]
         )
 
-        custom_tags = frozenset({CashFlowTags.EXPENSE, CashFlowTags.OPEX})
-        result = tax_liability(taxable_income, tax_rate=0.21, tags=custom_tags)
+        result = tax_liability(
+            taxable_income,
+            tax_rate=0.21,
+            pro_forma_category="other",
+            tax_treatment="none",
+        )
 
-        assert result.entries[0].tags == custom_tags
+        assert result.entries[0].pro_forma_category is ProFormaCategory.OTHER
+        assert result.entries[0].tax_treatment is TaxTreatment.NONE
 
-    def test_default_tags(self):
-        """Test default tags are EXPENSE."""
+    def test_default_classification(self):
+        """Test default classification is tax with no tax treatment."""
         taxable_income = CashFlowStream(
             [
                 CashFlow(
@@ -419,7 +432,8 @@ class TestTaxLiability:
 
         result = tax_liability(taxable_income, tax_rate=0.21)
 
-        assert result.entries[0].tags == frozenset({CashFlowTags.EXPENSE})
+        assert result.entries[0].pro_forma_category is ProFormaCategory.TAX
+        assert result.entries[0].tax_treatment is TaxTreatment.NONE
 
     def test_is_cash_true(self):
         """Test that all tax liability flows have is_cash=True."""
@@ -476,7 +490,8 @@ class TestIntegration:
                     date=date(2025, 6, 1),
                     label="Revenue",
                     is_cash=True,
-                    tags=frozenset({CashFlowTags.REVENUE, CashFlowTags.TAXABLE}),
+                    pro_forma_category=ProFormaCategory.REVENUE,
+                    tax_treatment=TaxTreatment.TAXABLE,
                 )
             ]
         )
@@ -489,19 +504,16 @@ class TestIntegration:
                     date=date(2025, 3, 1),
                     label="OPEX",
                     is_cash=True,
-                    tags=frozenset({CashFlowTags.EXPENSE, CashFlowTags.TAX_DEDUCTIBLE}),
+                    pro_forma_category=ProFormaCategory.OPERATING_COST,
+                    tax_treatment=TaxTreatment.DEDUCTIBLE,
                 ),
                 CashFlow(
                     amount=-20_000,
                     date=date(2025, 1, 1),
                     label="Depreciation",
                     is_cash=False,
-                    tags=frozenset(
-                        {
-                            CashFlowTags.DEPRECIATION,
-                            CashFlowTags.TAX_DEDUCTIBLE,
-                        }
-                    ),
+                    pro_forma_category=ProFormaCategory.DEPRECIATION,
+                    tax_treatment=TaxTreatment.DEDUCTIBLE,
                 ),
             ]
         )
@@ -535,13 +547,13 @@ class TestIntegration:
                     amount=50_000,
                     date=date(2025, 6, 1),
                     label="Revenue 2025",
-                    tags=frozenset({CashFlowTags.TAXABLE}),
+                    tax_treatment=TaxTreatment.TAXABLE,
                 ),
                 CashFlow(
                     amount=150_000,
                     date=date(2026, 6, 1),
                     label="Revenue 2026",
-                    tags=frozenset({CashFlowTags.TAXABLE}),
+                    tax_treatment=TaxTreatment.TAXABLE,
                 ),
             ]
         )
@@ -551,13 +563,13 @@ class TestIntegration:
                     amount=-100_000,
                     date=date(2025, 3, 1),
                     label="High Expense 2025",
-                    tags=frozenset({CashFlowTags.TAX_DEDUCTIBLE}),
+                    tax_treatment=TaxTreatment.DEDUCTIBLE,
                 ),
                 CashFlow(
                     amount=-50_000,
                     date=date(2026, 3, 1),
                     label="Expense 2026",
-                    tags=frozenset({CashFlowTags.TAX_DEDUCTIBLE}),
+                    tax_treatment=TaxTreatment.DEDUCTIBLE,
                 ),
             ]
         )

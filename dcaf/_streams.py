@@ -9,7 +9,7 @@ user-facing API, domain language, and full end-user documentation.
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Callable, Collection, Iterable, Iterator, Protocol, Self, overload
+from typing import Callable, Collection, Iterable, Iterator, Protocol, Self, cast, overload
 
 from dcaf.types import Period, SupportsLessThan
 from dcaf.utils import period_start
@@ -71,9 +71,9 @@ class BaseStream[EntryT]:
                 all_entries.extend(item.entries)
             else:
                 try:
-                    iterator = iter(item)
+                    iterator = iter(cast(Iterable[EntryT], item))
                 except TypeError:
-                    all_entries.append(item)
+                    all_entries.append(cast(EntryT, item))
                 else:
                     all_entries.extend(iterator)
 
@@ -235,7 +235,7 @@ class BaseStream[EntryT]:
 
 
 @dataclass
-class BaseGroup[KeyT, EntryT, StreamT: _StreamProtocol[EntryT]]:
+class BaseGroup[KeyT, EntryT, StreamT]:
     """Reusable grouped-container behavior for stream grouping results.
 
     The group container remains intentionally small: subclasses still own the
@@ -293,13 +293,14 @@ class BaseGroup[KeyT, EntryT, StreamT: _StreamProtocol[EntryT]]:
         """Flatten all groups back into a single stream."""
         all_entries: list[EntryT] = []
         for stream in self.groups.values():
-            all_entries.extend(stream.entries)
+            protocol_stream = cast(_StreamProtocol[EntryT], stream)
+            all_entries.extend(protocol_stream.entries)
 
         if not self.groups:
             return self._empty_stream()
 
-        exemplar = next(iter(self.groups.values()))
-        return exemplar._new(all_entries)
+        exemplar = cast(_StreamProtocol[EntryT], next(iter(self.groups.values())))
+        return cast(StreamT, exemplar._new(all_entries))
 
     def keys(self) -> Iterable[KeyT]:
         """Return the group keys."""
@@ -327,8 +328,14 @@ class BaseGroup[KeyT, EntryT, StreamT: _StreamProtocol[EntryT]]:
 
     def sum(self) -> dict[KeyT, float]:
         """Return the per-group sums."""
-        return {key: stream.sum() for key, stream in self.groups.items()}
+        return {
+            key: cast(_StreamProtocol[EntryT], stream).sum()
+            for key, stream in self.groups.items()
+        }
 
     def count(self) -> dict[KeyT, int]:
         """Return the per-group entry counts."""
-        return {key: stream.count() for key, stream in self.groups.items()}
+        return {
+            key: cast(_StreamProtocol[EntryT], stream).count()
+            for key, stream in self.groups.items()
+        }

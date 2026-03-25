@@ -4,12 +4,12 @@ from typing import assert_never
 
 from dateutil.relativedelta import relativedelta
 
-from dcaf.types import DayCountConvention, Period, parse_period
+from dcaf.types import DayCountConvention, Period, _PeriodEnum, parse_period
 
 
-def _normalize_period(period: Period) -> str:
+def _normalize_period(period: Period) -> _PeriodEnum:
     try:
-        return parse_period(period).value
+        return parse_period(period)
     except ValueError as exc:
         raise AssertionError(str(exc)) from exc
 
@@ -18,14 +18,14 @@ def period_start(dt: date, period: Period) -> date:
     """Return the start date of the period containing *dt*."""
     normalized_period = _normalize_period(period)
     match normalized_period:
-        case "day":
+        case _PeriodEnum.DAY:
             return dt
-        case "month":
+        case _PeriodEnum.MONTH:
             return date(dt.year, dt.month, 1)
-        case "quarter":
+        case _PeriodEnum.QUARTER:
             quarter_month = ((dt.month - 1) // 3) * 3 + 1
             return date(dt.year, quarter_month, 1)
-        case "year":
+        case _PeriodEnum.YEAR:
             return date(dt.year, 1, 1)
         case _:
             assert_never(normalized_period)
@@ -110,13 +110,13 @@ def elapsed_periods(
     """Return the fractional number of periods between two dates."""
     normalized_period = _normalize_period(period)
     match normalized_period:
-        case "year":
+        case _PeriodEnum.YEAR:
             return timedelta_fractional_years(start_date, end_date, convention)
-        case "quarter":
+        case _PeriodEnum.QUARTER:
             return elapsed_months(start_date, end_date) / 3.0
-        case "month":
+        case _PeriodEnum.MONTH:
             return elapsed_months(start_date, end_date)
-        case "day":
+        case _PeriodEnum.DAY:
             return float((end_date - start_date).days)
         case _:
             assert_never(normalized_period)
@@ -127,13 +127,13 @@ def hours_per_period(period: Period) -> float:
     """Return the number of hours in a period."""
     normalized_period = _normalize_period(period)
     match normalized_period:
-        case "year":
+        case _PeriodEnum.YEAR:
             return 8760.0
-        case "quarter":
+        case _PeriodEnum.QUARTER:
             return 8760.0 / 4
-        case "month":
+        case _PeriodEnum.MONTH:
             return 8760.0 / 12
-        case "day":
+        case _PeriodEnum.DAY:
             return 24.0
         case _:
             assert_never(normalized_period)
@@ -144,13 +144,13 @@ def time_delta_per_period(period: Period) -> relativedelta:
     """Return a relativedelta representing one period."""
     normalized_period = _normalize_period(period)
     match normalized_period:
-        case "year":
+        case _PeriodEnum.YEAR:
             return relativedelta(years=1)
-        case "quarter":
+        case _PeriodEnum.QUARTER:
             return relativedelta(months=3)
-        case "month":
+        case _PeriodEnum.MONTH:
             return relativedelta(months=1)
-        case "day":
+        case _PeriodEnum.DAY:
             return relativedelta(days=1)
         case _:
             assert_never(normalized_period)

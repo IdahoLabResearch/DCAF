@@ -1,7 +1,7 @@
 from datetime import date
 import pytest
 
-from dcaf import CashFlow, CashFlowGroup, CashFlowTags, CashFlowStream
+from dcaf import CashFlow, CashFlowGroup, CashFlowStream, ProFormaCategory
 
 
 @pytest.fixture()
@@ -12,7 +12,7 @@ def _create_cf_grp():
         date(2025, 1, 1),
         is_cash=True,
         label="cf1",
-        tags=frozenset({CashFlowTags.REVENUE}),
+        pro_forma_category=ProFormaCategory.REVENUE,
     )
     cf2 = CashFlow(
         -2000.0,
@@ -24,7 +24,7 @@ def _create_cf_grp():
         5000.0,
         date(2026, 12, 31),
         is_cash=False,
-        tags=frozenset({CashFlowTags.EXPENSE}),
+        pro_forma_category=ProFormaCategory.OPERATING_COST,
     )
 
     cf_stream_1 = CashFlowStream([cf1])

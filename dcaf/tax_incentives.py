@@ -11,10 +11,15 @@ Functions:
 
 from datetime import date
 
-from dcaf.cashflows import CashFlow, CashFlowStream, CashFlowTags
+from dcaf.cashflows import CashFlow, CashFlowStream
 from dcaf.escalation import EscalationPolicy
 from dcaf.generation import GenerationStream, _generation_escalation
-from dcaf.types import Period
+from dcaf.types import (
+    Period,
+    ProFormaCategory,
+    TaxTreatment,
+    normalize_cashflow_classification,
+)
 
 
 def ptc(
@@ -23,7 +28,8 @@ def ptc(
     years: int,
     escalation: float = 0.0,
     label: str = "PTC {n}",
-    tags: frozenset[CashFlowTags] = frozenset({CashFlowTags.REVENUE}),
+    pro_forma_category: ProFormaCategory | str | None = ProFormaCategory.TAX_CREDIT,
+    tax_treatment: TaxTreatment | str = TaxTreatment.TAXABLE,
     *,
     escalation_period: Period = "year",
     amount_reference_date: date | None = None,
@@ -61,9 +67,10 @@ def ptc(
         Label template applied to each generated credit cashflow. If ``"{n}"``
         is present, it is replaced with the 1-based count of eligible PTC
         entries. Default is ``"PTC {n}"``.
-    tags : frozenset[CashFlowTags], optional
-        Tags applied to each generated credit cashflow. Default is
-        ``frozenset({CashFlowTags.REVENUE})``.
+    pro_forma_category : ProFormaCategory or str or None, optional
+        Pro-forma category applied to each credit flow. Default is ``"tax_credit"``.
+    tax_treatment : TaxTreatment or str, optional
+        Tax treatment applied to each credit flow. Default is ``"taxable"``.
     escalation_period : Period, optional
         Compounding period associated with ``escalation``. Default is
         ``"year"``.
@@ -134,6 +141,10 @@ def ptc(
         amount_reference_date=amount_reference_date,
         escalation_policy=escalation_policy,
     )
+    resolved_category, resolved_tax_treatment = normalize_cashflow_classification(
+        pro_forma_category,
+        tax_treatment,
+    )
 
     entries: list[CashFlow] = []
     n = 0
@@ -149,7 +160,8 @@ def ptc(
                 date=entry.date,
                 label=flow_label,
                 is_cash=True,
-                tags=tags,
+                pro_forma_category=resolved_category,
+                tax_treatment=resolved_tax_treatment,
             )
         )
     return CashFlowStream(entries)
@@ -160,7 +172,8 @@ def itc(
     rate: float,
     placed_in_service: date,
     label: str = "ITC",
-    tags: frozenset[CashFlowTags] = frozenset({CashFlowTags.REVENUE}),
+    pro_forma_category: ProFormaCategory | str | None = ProFormaCategory.TAX_CREDIT,
+    tax_treatment: TaxTreatment | str = TaxTreatment.NONE,
 ) -> CashFlowStream:
     """Compute Investment Tax Credit (ITC) from a CAPEX stream.
 
@@ -176,7 +189,8 @@ def itc(
         rate: ITC rate as a decimal (e.g., 0.30 for 30% Section 48E credit)
         placed_in_service: Date the asset is placed in service; the credit date
         label: Label for the resulting credit cashflow. Defaults to "ITC".
-        tags: Tags to apply to the credit cashflow. Defaults to {REVENUE}.
+        pro_forma_category: Pro-forma category for the credit cashflow. Defaults to ``"tax_credit"``.
+        tax_treatment: Tax treatment for the credit cashflow. Defaults to ``"none"``.
 
     Returns:
         CashFlowStream containing a single ITC credit cashflow (positive amount, is_cash=True).
@@ -184,10 +198,14 @@ def itc(
 
     Example:
         >>> from datetime import date
-        >>> from dcaf import CashFlowStream, CashFlow, CashFlowTags
+        >>> from dcaf import CashFlowStream, CashFlow
         >>> capex = CashFlowStream([
-        ...     CashFlow(-10_000_000, date(2028, 6, 1), "Construction CAPEX",
-        ...              tags=frozenset({CashFlowTags.CAPEX}))
+        ...     CashFlow(
+        ...         -10_000_000,
+        ...         date(2028, 6, 1),
+        ...         "Construction CAPEX",
+        ...         pro_forma_category="capital_cost",
+        ...     )
         ... ])
         >>> credit = itc(capex, rate=0.30, placed_in_service=date(2030, 1, 1))
         >>> credit[0].amount  # 10,000,000 * 0.30 = 3,000,000
@@ -196,6 +214,10 @@ def itc(
     if not capex_stream.entries or rate == 0.0:
         return CashFlowStream()
 
+    resolved_category, resolved_tax_treatment = normalize_cashflow_classification(
+        pro_forma_category,
+        tax_treatment,
+    )
     total_basis = abs(capex_stream.sum())
     credit_amount = total_basis * rate
 
@@ -205,7 +227,8 @@ def itc(
             date=placed_in_service,
             label=label,
             is_cash=True,
-            tags=tags,
+            pro_forma_category=resolved_category,
+            tax_treatment=resolved_tax_treatment,
         )
     ])
 
@@ -230,10 +253,14 @@ def itc_adjusted_basis(capex_stream: CashFlowStream, rate: float) -> float:
 
     Example:
         >>> from datetime import date
-        >>> from dcaf import CashFlowStream, CashFlow, CashFlowTags
+        >>> from dcaf import CashFlowStream, CashFlow
         >>> capex = CashFlowStream([
-        ...     CashFlow(-100_000_000, date(2028, 6, 1), "CAPEX",
-        ...              tags=frozenset({CashFlowTags.CAPEX}))
+        ...     CashFlow(
+        ...         -100_000_000,
+        ...         date(2028, 6, 1),
+        ...         "CAPEX",
+        ...         pro_forma_category="capital_cost",
+        ...     )
         ... ])
         >>> itc_adjusted_basis(capex, rate=0.30)  # 100M * (1 - 0.15) = 85M
         85000000.0

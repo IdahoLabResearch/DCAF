@@ -4,7 +4,7 @@ from datetime import date
 
 import pytest
 
-from dcaf import CashFlowTags
+from dcaf import ProFormaCategory, TaxTreatment
 from dcaf.escalation import IndexSeriesEscalation
 from dcaf.opex import fixed_opex
 
@@ -112,15 +112,21 @@ def test_custom_label_with_template():
     assert stream.entries[1].label == "Maintenance 2"
 
 
-def test_custom_tags_applied_to_all_flows():
-    """Caller-supplied tags override the defaults on every flow."""
-    custom_tags = frozenset({CashFlowTags.EXPENSE})
-    stream = fixed_opex(amount=1000, start=date(2025, 1, 1), periods=3, tags=custom_tags)
-    assert all(f.tags == custom_tags for f in stream.entries)
+def test_custom_classification_applied_to_all_flows():
+    """Caller-supplied classification overrides the defaults on every flow."""
+    stream = fixed_opex(
+        amount=1000,
+        start=date(2025, 1, 1),
+        periods=3,
+        pro_forma_category="other",
+        tax_treatment="none",
+    )
+    assert all(f.pro_forma_category is ProFormaCategory.OTHER for f in stream.entries)
+    assert all(f.tax_treatment is TaxTreatment.NONE for f in stream.entries)
 
 
-def test_default_tags_are_opex_tags():
-    """Default tags include EXPENSE, OPEX, and TAX_DEDUCTIBLE."""
+def test_default_classification_is_opex_deductible():
+    """Default classification is operating cost plus deductible tax treatment."""
     stream = fixed_opex(amount=1000, start=date(2025, 1, 1), periods=1)
-    expected = frozenset({CashFlowTags.EXPENSE, CashFlowTags.OPEX, CashFlowTags.TAX_DEDUCTIBLE})
-    assert stream.entries[0].tags == expected
+    assert stream.entries[0].pro_forma_category is ProFormaCategory.OPERATING_COST
+    assert stream.entries[0].tax_treatment is TaxTreatment.DEDUCTIBLE

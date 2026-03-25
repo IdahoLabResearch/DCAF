@@ -12,8 +12,16 @@ from math import isfinite
 from typing import assert_never
 
 from dcaf._macrs_tables import MACRS_MID_QUARTER_RATES, MACRS_RATES
-from dcaf.cashflows import CashFlow, CashFlowStream, CashFlowTags
-from dcaf.types import MACRSConvention, MACRSPropertyClass, Period, VDBConvention
+from dcaf.cashflows import CashFlow, CashFlowStream
+from dcaf.types import (
+    MACRSConvention,
+    MACRSPropertyClass,
+    Period,
+    ProFormaCategory,
+    TaxTreatment,
+    VDBConvention,
+    normalize_cashflow_classification,
+)
 from dcaf.utils import time_delta_per_period
 
 
@@ -133,9 +141,14 @@ def _build_vdb_candidate_schedule(
     convention: VDBConvention,
     terminal_catch_up: bool,
     label: str,
-    tags: frozenset[CashFlowTags],
+    pro_forma_category: ProFormaCategory | str | None,
+    tax_treatment: TaxTreatment | str,
 ) -> CashFlowStream:
     """Build a single convention-aware VDB candidate schedule."""
+    resolved_category, resolved_tax_treatment = normalize_cashflow_classification(
+        pro_forma_category,
+        tax_treatment,
+    )
     shift = _vdb_convention_shift(convention, placed_in_service)
     target_total = cost_basis - salvage_value
     accumulated = 0.0
@@ -159,7 +172,8 @@ def _build_vdb_candidate_schedule(
                         date=current_date,
                         label=_format_label(label, period_number),
                         is_cash=False,
-                        tags=tags,
+                        pro_forma_category=resolved_category,
+                        tax_treatment=resolved_tax_treatment,
                     )
                 )
             break
@@ -189,7 +203,8 @@ def _build_vdb_candidate_schedule(
                 date=current_date,
                 label=_format_label(label, period_number),
                 is_cash=False,
-                tags=tags,
+                pro_forma_category=resolved_category,
+                tax_treatment=resolved_tax_treatment,
             )
         )
 
@@ -290,9 +305,8 @@ def macrs_schedule(
     property_class: MACRSPropertyClass,
     convention: MACRSConvention = "half-year",
     label: str = "MACRS Depreciation Yr {n}",
-    tags: frozenset[CashFlowTags] = frozenset(
-        {CashFlowTags.DEPRECIATION, CashFlowTags.TAX_DEDUCTIBLE}
-    ),
+    pro_forma_category: ProFormaCategory | str | None = ProFormaCategory.DEPRECIATION,
+    tax_treatment: TaxTreatment | str = TaxTreatment.DEDUCTIBLE,
 ) -> CashFlowStream:
     """
     Generate a MACRS depreciation schedule.
@@ -311,8 +325,10 @@ def macrs_schedule(
         automatically from ``placed_in_service``.
     label : str, optional
         Label template.
-    tags : frozenset[CashFlowTags], optional
-        Tags for each flow.
+    pro_forma_category : ProFormaCategory or str or None, optional
+        Pro-forma category for each flow. Default is ``"depreciation"``.
+    tax_treatment : TaxTreatment or str, optional
+        Tax treatment for each flow. Default is ``"deductible"``.
 
     Returns
     -------
@@ -326,6 +342,10 @@ def macrs_schedule(
             rates = MACRS_MID_QUARTER_RATES[property_class][quarter]
         case _:
             assert_never(convention)
+    resolved_category, resolved_tax_treatment = normalize_cashflow_classification(
+        pro_forma_category,
+        tax_treatment,
+    )
     entries: list[CashFlow] = []
     for i, rate in enumerate(rates):
         dep_date = date(placed_in_service.year + i, placed_in_service.month, placed_in_service.day)
@@ -336,7 +356,8 @@ def macrs_schedule(
                 date=dep_date,
                 label=flow_label,
                 is_cash=False,
-                tags=tags,
+                pro_forma_category=resolved_category,
+                tax_treatment=resolved_tax_treatment,
             )
         )
     return CashFlowStream(entries)
@@ -356,9 +377,8 @@ def vdb_schedule(
     valuation_date: date | None = None,
     terminal_catch_up: bool = False,
     label: str = "VDB Depreciation Period {n}",
-    tags: frozenset[CashFlowTags] = frozenset(
-        {CashFlowTags.DEPRECIATION, CashFlowTags.TAX_DEDUCTIBLE}
-    ),
+    pro_forma_category: ProFormaCategory | str | None = ProFormaCategory.DEPRECIATION,
+    tax_treatment: TaxTreatment | str = TaxTreatment.DEDUCTIBLE,
 ) -> CashFlowStream:
     """
     Generate a variable declining balance depreciation schedule.
@@ -406,8 +426,10 @@ def vdb_schedule(
         depreciation needed to exactly reach ``cost_basis - salvage_value``.
     label : str, optional
         Label template. ``{n}`` is replaced with the 1-based period index.
-    tags : frozenset[CashFlowTags], optional
-        Tags for each flow.
+    pro_forma_category : ProFormaCategory or str or None, optional
+        Pro-forma category for each flow. Default is ``"depreciation"``.
+    tax_treatment : TaxTreatment or str, optional
+        Tax treatment for each flow. Default is ``"deductible"``.
 
     Returns
     -------
@@ -498,6 +520,11 @@ def vdb_schedule(
         else:
             candidate_dates = normalized_schedule_dates
 
+        resolved_category, resolved_tax_treatment = normalize_cashflow_classification(
+            pro_forma_category,
+            tax_treatment,
+        )
+
         if convention == "best-of-half-year-mid-quarter":
             half_year = _build_vdb_candidate_schedule(
                 cost_basis=cost_basis,
@@ -510,7 +537,8 @@ def vdb_schedule(
                 convention="half-year",
                 terminal_catch_up=terminal_catch_up,
                 label=label,
-                tags=tags,
+                pro_forma_category=resolved_category,
+                tax_treatment=resolved_tax_treatment,
             )
             mid_quarter = _build_vdb_candidate_schedule(
                 cost_basis=cost_basis,
@@ -523,8 +551,11 @@ def vdb_schedule(
                 convention="mid-quarter",
                 terminal_catch_up=terminal_catch_up,
                 label=label,
-                tags=tags,
+                pro_forma_category=resolved_category,
+                tax_treatment=resolved_tax_treatment,
             )
+            assert valuation_rate is not None
+            assert valuation_date is not None
             if _candidate_npv(
                 half_year,
                 valuation_rate=valuation_rate,
@@ -548,11 +579,16 @@ def vdb_schedule(
             convention=convention,
             terminal_catch_up=terminal_catch_up,
             label=label,
-            tags=tags,
+            pro_forma_category=resolved_category,
+            tax_treatment=resolved_tax_treatment,
         )
 
     delta = time_delta_per_period(frequency)
     current_date = placed_in_service
+    resolved_category, resolved_tax_treatment = normalize_cashflow_classification(
+        pro_forma_category,
+        tax_treatment,
+    )
     entries: list[CashFlow] = []
 
     for period_number in range(1, life + 1):
@@ -571,7 +607,8 @@ def vdb_schedule(
                 date=current_date,
                 label=_format_label(label, period_number),
                 is_cash=False,
-                tags=tags,
+                pro_forma_category=resolved_category,
+                tax_treatment=resolved_tax_treatment,
             )
         )
         current_date += delta

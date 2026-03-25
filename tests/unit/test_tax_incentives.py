@@ -4,11 +4,12 @@ from datetime import date
 
 import pytest
 
-from dcaf.cashflows import CashFlow, CashFlowStream, CashFlowTags
+from dcaf.cashflows import CashFlow, CashFlowStream
 from dcaf.depreciation import macrs_schedule
 from dcaf.escalation import ConstantRateEscalation
 from dcaf.generation import Generation, GenerationStream
 from dcaf.tax_incentives import itc, itc_adjusted_basis, ptc
+from dcaf.types import ProFormaCategory, TaxTreatment
 
 
 def _annual_factor(start: date, end: date, rate: float) -> float:
@@ -16,7 +17,12 @@ def _annual_factor(start: date, end: date, rate: float) -> float:
 
 
 def _capex(amount: float, dt: date, label: str = "CAPEX") -> CashFlow:
-    return CashFlow(amount=amount, date=dt, label=label, tags=frozenset({CashFlowTags.CAPEX}))
+    return CashFlow(
+        amount=amount,
+        date=dt,
+        label=label,
+        pro_forma_category=ProFormaCategory.CAPITAL_COST,
+    )
 
 
 class TestITC:
@@ -61,20 +67,21 @@ class TestITC:
 
         assert result.entries[0].date == placed
 
-    def test_itc_custom_label_and_tags(self):
-        """label and tags are forwarded to the resulting cashflow."""
+    def test_itc_custom_label_and_classification(self):
+        """label and classification are forwarded to the resulting cashflow."""
         capex = CashFlowStream([_capex(-10_000_000, date(2028, 6, 1))])
-        custom_tags = frozenset({CashFlowTags.REVENUE, CashFlowTags.CAPEX})
         result = itc(
             capex,
             rate=0.30,
             placed_in_service=date(2030, 1, 1),
             label="Section 48E ITC",
-            tags=custom_tags,
+            pro_forma_category="other",
+            tax_treatment="none",
         )
 
         assert result.entries[0].label == "Section 48E ITC"
-        assert result.entries[0].tags == custom_tags
+        assert result.entries[0].pro_forma_category is ProFormaCategory.OTHER
+        assert result.entries[0].tax_treatment is TaxTreatment.NONE
 
     def test_itc_is_cash_true(self):
         """ITC credit cashflow must have is_cash=True."""
@@ -83,12 +90,13 @@ class TestITC:
 
         assert result.entries[0].is_cash is True
 
-    def test_itc_default_tags_revenue(self):
-        """Default tags include REVENUE."""
+    def test_itc_default_classification(self):
+        """Default ITC classification is tax credit with no tax treatment."""
         capex = CashFlowStream([_capex(-10_000_000, date(2028, 6, 1))])
         result = itc(capex, rate=0.30, placed_in_service=date(2030, 1, 1))
 
-        assert CashFlowTags.REVENUE in result.entries[0].tags
+        assert result.entries[0].pro_forma_category is ProFormaCategory.TAX_CREDIT
+        assert result.entries[0].tax_treatment is TaxTreatment.NONE
 
 
 class TestPTC:
@@ -230,7 +238,7 @@ class TestIntegration:
                 date=date(2028, 6, 1),
                 label="CAPEX",
                 is_cash=True,
-                tags=frozenset({CashFlowTags.CAPEX}),
+                pro_forma_category=ProFormaCategory.CAPITAL_COST,
             )
         ])
         credit = itc(capex, rate=0.30, placed_in_service=placed)

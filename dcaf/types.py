@@ -13,6 +13,24 @@ type InterestTreatment = Literal["capitalize", "pay"]
 type SpendScheduleName = Literal["flat", "bell", "ramped", "triangle", "linear"]
 
 
+class ProFormaCategory(StrEnum):
+    REVENUE = "revenue"
+    OPERATING_COST = "operating_cost"
+    CAPITAL_COST = "capital_cost"
+    TAX = "tax"
+    TAX_CREDIT = "tax_credit"
+    DEPRECIATION = "depreciation"
+    FINANCING_INTEREST = "financing_interest"
+    FINANCING_PRINCIPAL = "financing_principal"
+    OTHER = "other"
+
+
+class TaxTreatment(StrEnum):
+    NONE = "none"
+    TAXABLE = "taxable"
+    DEDUCTIBLE = "deductible"
+
+
 class _PeriodEnum(StrEnum):
     DAY = "day"
     MONTH = "month"
@@ -23,6 +41,11 @@ class _PeriodEnum(StrEnum):
 class _InterestTreatmentEnum(StrEnum):
     CAPITALIZE = "capitalize"
     PAY = "pay"
+
+
+def _normalize_enum_value(value: str) -> str:
+    """Normalize user-facing enum strings for permissive parsing."""
+    return value.strip().lower().replace(" ", "_").replace("-", "_")
 
 
 def parse_period(period: str) -> _PeriodEnum:
@@ -44,6 +67,55 @@ def parse_interest_treatment(treatment: str) -> _InterestTreatmentEnum:
             f"Unknown interest treatment '{treatment}'. "
             "Expected one of: 'capitalize', 'pay'"
         ) from exc
+
+
+def parse_pro_forma_category(
+    category: ProFormaCategory | str,
+) -> ProFormaCategory:
+    """Normalize user-facing pro-forma category strings to the internal enum."""
+    if isinstance(category, ProFormaCategory):
+        return category
+    normalized = _normalize_enum_value(category)
+    try:
+        return ProFormaCategory(normalized)
+    except ValueError as exc:
+        valid = ", ".join(member.value for member in ProFormaCategory)
+        raise ValueError(
+            f"Unknown pro forma category '{category}'. Expected one of: {valid}"
+        ) from exc
+
+
+def normalize_pro_forma_category(
+    category: ProFormaCategory | str | None,
+) -> ProFormaCategory | None:
+    """Normalize an optional pro-forma category, preserving ``None``."""
+    if category is None:
+        return None
+    return parse_pro_forma_category(category)
+
+
+def parse_tax_treatment(
+    treatment: TaxTreatment | str,
+) -> TaxTreatment:
+    """Normalize user-facing tax-treatment strings to the internal enum."""
+    if isinstance(treatment, TaxTreatment):
+        return treatment
+    normalized = _normalize_enum_value(treatment)
+    try:
+        return TaxTreatment(normalized)
+    except ValueError as exc:
+        valid = ", ".join(member.value for member in TaxTreatment)
+        raise ValueError(
+            f"Unknown tax treatment '{treatment}'. Expected one of: {valid}"
+        ) from exc
+
+
+def normalize_cashflow_classification(
+    pro_forma_category: ProFormaCategory | str | None,
+    tax_treatment: TaxTreatment | str,
+) -> tuple[ProFormaCategory | None, TaxTreatment]:
+    """Normalize user-facing cashflow classification inputs."""
+    return normalize_pro_forma_category(pro_forma_category), parse_tax_treatment(tax_treatment)
 
 
 class SupportsLessThan(Protocol):

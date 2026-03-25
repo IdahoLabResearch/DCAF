@@ -6,7 +6,8 @@ and GenerationGroup (grouped container) for modeling MWh production
 from various sources and energy carriers.
 """
 
-from dataclasses import dataclass, replace as dc_replace
+import datetime as dt
+from dataclasses import dataclass
 from datetime import date
 from typing import (
     Any,
@@ -22,7 +23,6 @@ from dcaf._streams import BaseGroup, BaseStream
 from dcaf.cashflows import (
     CashFlow,
     CashFlowStream,
-    CashFlowTags,
 )
 from dcaf.escalation import (
     ConstantRateEscalation,
@@ -30,7 +30,14 @@ from dcaf.escalation import (
     _constant_discount_policy,
     _resolve_escalation_policy_override,
 )
-from dcaf.types import DayCountConvention, Period, SupportsLessThan
+from dcaf.types import (
+    DayCountConvention,
+    Period,
+    ProFormaCategory,
+    SupportsLessThan,
+    TaxTreatment,
+    normalize_cashflow_classification,
+)
 from dcaf.utils import (
     hours_per_period,
     time_delta_per_period,
@@ -65,7 +72,7 @@ class Generation:
     def replace(
         self,
         amount_mwh: float | None = None,
-        date: date | None = None,
+        date: dt.date | None = None,
         source: str | None = None,
         carrier: str | None = None,
         label: str | None = None,
@@ -104,9 +111,13 @@ class Generation:
         ... )
         >>> # This decreases the generation amount by 50 and moves it forward 6 months
         """
-        params = {"amount_mwh": amount_mwh, "date": date, "source": source, "carrier": carrier, "label": label}
-        changes = {argname: arg for argname, arg in params.items() if arg is not None}
-        return dc_replace(self, **changes)
+        return Generation(
+            amount_mwh=self.amount_mwh if amount_mwh is None else amount_mwh,
+            date=self.date if date is None else date,
+            source=self.source if source is None else source,
+            carrier=self.carrier if carrier is None else carrier,
+            label=self.label if label is None else label,
+        )
 
 
 def _generation_escalation(
@@ -904,11 +915,11 @@ class GenerationStream(BaseStream[Generation]):
             return GenerationGroup(self._grouped_streams(groups))
 
         if source is True:
-            src_groups = self._grouped_entries_by_attr("source")
+            src_groups: dict[str, list[Generation]] = self._grouped_entries_by_attr("source")
             return GenerationGroup(self._grouped_streams(src_groups))
 
         if carrier is True:
-            car_groups = self._grouped_entries_by_attr("carrier")
+            car_groups: dict[str, list[Generation]] = self._grouped_entries_by_attr("carrier")
             return GenerationGroup(self._grouped_streams(car_groups))
 
         # period is set
@@ -952,7 +963,7 @@ class GenerationStream(BaseStream[Generation]):
     def sort(
         self,
         *,
-        attr: Literal["date", "amount_mwh", "source", "carrier", "label"],
+        attr: str,
         descending: bool = ...,
     ) -> "GenerationStream": ...
     @overload
@@ -962,7 +973,7 @@ class GenerationStream(BaseStream[Generation]):
         self,
         fn: Callable[[Generation], SupportsLessThan] | None = None,
         *,
-        attr: Literal["date", "amount_mwh", "source", "carrier", "label"] | None = None,
+        attr: str | None = None,
         descending: bool = False,
     ) -> "GenerationStream":
         """
@@ -990,9 +1001,15 @@ class GenerationStream(BaseStream[Generation]):
         >>> stream.sort(lambda g: g.amount_mwh, descending=True).count()
         3
         """
+        if fn is not None and attr is not None:
+            raise ValueError("Cannot pass both a key function and 'attr' to sort()")
         if attr not in (None, "date", "amount_mwh", "source", "carrier", "label"):
             raise AssertionError(f"Unexpected sort attribute: {attr!r}")
-        return super().sort(fn, attr=attr, descending=descending)
+        if fn is not None:
+            return super().sort(fn, descending=descending)
+        if attr is None:
+            return super().sort()
+        return super().sort(attr=attr, descending=descending)
 
     def scale(self, factor: float) -> "GenerationStream":
         """
@@ -1104,7 +1121,8 @@ class GenerationStream(BaseStream[Generation]):
         price_per_mwh: float,
         escalation: float = 0.0,
         label: str = "Generation Revenue {n}",
-        tags: frozenset[CashFlowTags] = frozenset({CashFlowTags.REVENUE, CashFlowTags.TAXABLE}),
+        pro_forma_category: ProFormaCategory | str | None = ProFormaCategory.REVENUE,
+        tax_treatment: TaxTreatment | str = TaxTreatment.TAXABLE,
         *,
         escalation_period: Period = "year",
         amount_reference_date: date | None = None,
@@ -1134,8 +1152,10 @@ class GenerationStream(BaseStream[Generation]):
             ``amount_reference_date``.
         label : str, optional
             Label template.
-        tags : frozenset[CashFlowTags], optional
-            Tags for the revenue flows.
+        pro_forma_category : ProFormaCategory or str or None, optional
+            Pro-forma category for the revenue flows. Default is ``"revenue"``.
+        tax_treatment : TaxTreatment or str, optional
+            Tax treatment for the revenue flows. Default is ``"taxable"``.
 
         Returns
         -------
@@ -1156,6 +1176,10 @@ class GenerationStream(BaseStream[Generation]):
             amount_reference_date=amount_reference_date,
             escalation_policy=escalation_policy,
         )
+        resolved_category, resolved_tax_treatment = normalize_cashflow_classification(
+            pro_forma_category,
+            tax_treatment,
+        )
         entries: list[CashFlow] = []
         for i, entry in enumerate(self.entries):
             price = price_per_mwh * escalation_policy.factor(entry.date)
@@ -1166,7 +1190,8 @@ class GenerationStream(BaseStream[Generation]):
                     date=entry.date,
                     label=flow_label,
                     is_cash=True,
-                    tags=tags,
+                    pro_forma_category=resolved_category,
+                    tax_treatment=resolved_tax_treatment,
                 )
             )
         return CashFlowStream(entries)
@@ -1176,9 +1201,8 @@ class GenerationStream(BaseStream[Generation]):
         rate_per_mwh: float,
         escalation: float = 0.0,
         label: str = "Variable Cost {n}",
-        tags: frozenset[CashFlowTags] = frozenset(
-            {CashFlowTags.EXPENSE, CashFlowTags.OPEX, CashFlowTags.TAX_DEDUCTIBLE}
-        ),
+        pro_forma_category: ProFormaCategory | str | None = ProFormaCategory.OPERATING_COST,
+        tax_treatment: TaxTreatment | str = TaxTreatment.DEDUCTIBLE,
         *,
         escalation_period: Period = "year",
         amount_reference_date: date | None = None,
@@ -1207,8 +1231,10 @@ class GenerationStream(BaseStream[Generation]):
             ``amount_reference_date``.
         label : str, optional
             Label template.
-        tags : frozenset[CashFlowTags], optional
-            Tags for the cost flows.
+        pro_forma_category : ProFormaCategory or str or None, optional
+            Pro-forma category for the cost flows. Default is ``"operating_cost"``.
+        tax_treatment : TaxTreatment or str, optional
+            Tax treatment for the cost flows. Default is ``"deductible"``.
 
         Returns
         -------
@@ -1229,6 +1255,10 @@ class GenerationStream(BaseStream[Generation]):
             amount_reference_date=amount_reference_date,
             escalation_policy=escalation_policy,
         )
+        resolved_category, resolved_tax_treatment = normalize_cashflow_classification(
+            pro_forma_category,
+            tax_treatment,
+        )
         entries: list[CashFlow] = []
         for i, entry in enumerate(self.entries):
             cost = rate_per_mwh * escalation_policy.factor(entry.date)
@@ -1239,7 +1269,8 @@ class GenerationStream(BaseStream[Generation]):
                     date=entry.date,
                     label=flow_label,
                     is_cash=True,
-                    tags=tags,
+                    pro_forma_category=resolved_category,
+                    tax_treatment=resolved_tax_treatment,
                 )
             )
         return CashFlowStream(entries)
