@@ -41,6 +41,7 @@ from dcaf.types import (
 from dcaf.utils import (
     hours_per_period,
     time_delta_per_period,
+    format_label,
 )
 
 
@@ -494,7 +495,7 @@ class GenerationStream(BaseStream[Generation]):
         frequency: Period = "year",
         source: str = "",
         carrier: str = "electricity",
-        label: str = "Generation {n}",
+        label: str = "Generation",
     ) -> "GenerationStream":
         """
         Generate a stream of periodic generation from capacity parameters.
@@ -516,7 +517,7 @@ class GenerationStream(BaseStream[Generation]):
         carrier : str, optional
             Energy carrier. Default ``"electricity"``.
         label : str, optional
-            Label template.
+            Label template. ``{n}`` is replaced with the 1-based period index.
 
         Returns
         -------
@@ -543,7 +544,7 @@ class GenerationStream(BaseStream[Generation]):
         current_date = start
         for i in range(periods):
             mwh = capacity_mw * capacity_factor * hours
-            gen_label = label.format(n=i + 1) if "{n}" in label else label
+            gen_label = format_label(label, i + 1)
             entries.append(
                 Generation(
                     amount_mwh=mwh,
@@ -743,7 +744,7 @@ class GenerationStream(BaseStream[Generation]):
         frequency: Period = "year",
         source: str = "",
         carrier: str = "electricity",
-        label: str = "Generation {n}",
+        label: str = "Generation",
     ) -> "GenerationStream":
         """
         Generate additional capacity-based entries and append them to this stream.
@@ -765,7 +766,8 @@ class GenerationStream(BaseStream[Generation]):
         carrier : str, optional
             Energy carrier for the appended entries.
         label : str, optional
-            Label template for the appended entries.
+            Label template for the appended entries. ``{n}`` is
+            replaced with the 1-based period index.
 
         Returns
         -------
@@ -1120,7 +1122,7 @@ class GenerationStream(BaseStream[Generation]):
         self,
         price_per_mwh: float,
         escalation: float = 0.0,
-        label: str = "Generation Revenue {n}",
+        label: str = "Generation Revenue",
         pro_forma_category: ProFormaCategory | str | None = ProFormaCategory.REVENUE,
         tax_treatment: TaxTreatment | str = TaxTreatment.TAXABLE,
         *,
@@ -1151,7 +1153,7 @@ class GenerationStream(BaseStream[Generation]):
             must not be combined with ``escalation``, ``escalation_period``, or
             ``amount_reference_date``.
         label : str, optional
-            Label template.
+            Label template. ``{n}`` is replaced with the 1-based period index.
         pro_forma_category : ProFormaCategory or str or None, optional
             Pro-forma category for the revenue flows. Default is ``"revenue"``.
         tax_treatment : TaxTreatment or str, optional
@@ -1183,7 +1185,7 @@ class GenerationStream(BaseStream[Generation]):
         entries: list[CashFlow] = []
         for i, entry in enumerate(self.entries):
             price = price_per_mwh * escalation_policy.factor(entry.date)
-            flow_label = label.format(n=i + 1) if "{n}" in label else label
+            flow_label = format_label(label, i + 1)
             entries.append(
                 CashFlow(
                     amount=entry.amount_mwh * price,
@@ -1200,7 +1202,7 @@ class GenerationStream(BaseStream[Generation]):
         self,
         rate_per_mwh: float,
         escalation: float = 0.0,
-        label: str = "Variable Cost {n}",
+        label: str = "Variable Cost",
         pro_forma_category: ProFormaCategory | str | None = ProFormaCategory.OPERATING_COST,
         tax_treatment: TaxTreatment | str = TaxTreatment.DEDUCTIBLE,
         *,
@@ -1230,7 +1232,7 @@ class GenerationStream(BaseStream[Generation]):
             must not be combined with ``escalation``, ``escalation_period``, or
             ``amount_reference_date``.
         label : str, optional
-            Label template.
+            Label template. ``{n}`` is replaced with the 1-based period index.
         pro_forma_category : ProFormaCategory or str or None, optional
             Pro-forma category for the cost flows. Default is ``"operating_cost"``.
         tax_treatment : TaxTreatment or str, optional
@@ -1262,7 +1264,7 @@ class GenerationStream(BaseStream[Generation]):
         entries: list[CashFlow] = []
         for i, entry in enumerate(self.entries):
             cost = rate_per_mwh * escalation_policy.factor(entry.date)
-            flow_label = label.format(n=i + 1) if "{n}" in label else label
+            flow_label = format_label(label, i + 1)
             entries.append(
                 CashFlow(
                     amount=-entry.amount_mwh * cost,

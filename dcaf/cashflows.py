@@ -37,7 +37,7 @@ from dcaf.types import (
     parse_pro_forma_category,
     parse_tax_treatment,
 )
-from dcaf.utils import time_delta_per_period, timedelta_fractional_years
+from dcaf.utils import time_delta_per_period, timedelta_fractional_years, format_label
 
 
 class _UnsetType:
@@ -636,7 +636,7 @@ class CashFlowStream(BaseStream[CashFlow]):
         for i in range(periods):
             flow_date = start + delta * i
             escalated_amount = amount * escalation_policy.factor(flow_date)
-            flow_label = label.format(n=i + 1) if "{n}" in label else label
+            flow_label = format_label(label, i + 1)
             entries.append(
                 CashFlow(
                     amount=escalated_amount,

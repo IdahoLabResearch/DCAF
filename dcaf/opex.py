@@ -17,7 +17,7 @@ def fixed_opex(
     periods: int,
     frequency: Period = "year",
     escalation: float = 0.0,
-    label: str = "Fixed OPEX {n}",
+    label: str = "Fixed OPEX",
     pro_forma_category: ProFormaCategory | str | None = ProFormaCategory.OPERATING_COST,
     tax_treatment: TaxTreatment | str = TaxTreatment.DEDUCTIBLE,
     *,
@@ -57,7 +57,7 @@ def fixed_opex(
         ``amount_reference_date``.
     label : str
         Label template; ``{n}`` is replaced with the 1-based period index.
-        Default is ``"Fixed OPEX {n}"``.
+        Default is ``"Fixed OPEX"``.
     pro_forma_category : ProFormaCategory or str or None
         Pro-forma category applied to every cashflow. Default is ``"operating_cost"``.
     tax_treatment : TaxTreatment or str

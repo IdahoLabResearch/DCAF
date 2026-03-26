@@ -22,14 +22,7 @@ from dcaf.types import (
     VDBConvention,
     normalize_cashflow_classification,
 )
-from dcaf.utils import time_delta_per_period
-
-
-# FIXME: This would be useful throughout the library. We should move this somewhere more
-# centralized when addressing other existing label handling issues.
-def _format_label(label: str, period_number: int) -> str:
-    """Apply the shared ``{n}`` label templating convention."""
-    return label.format(n=period_number) if "{n}" in label else label
+from dcaf.utils import time_delta_per_period, format_label
 
 
 def _validate_vdb_inputs(
@@ -170,7 +163,7 @@ def _build_vdb_candidate_schedule(
                     CashFlow(
                         amount=-depreciation,
                         date=current_date,
-                        label=_format_label(label, period_number),
+                        label=format_label(label, period_number),
                         is_cash=False,
                         pro_forma_category=resolved_category,
                         tax_treatment=resolved_tax_treatment,
@@ -201,7 +194,7 @@ def _build_vdb_candidate_schedule(
             CashFlow(
                 amount=-depreciation,
                 date=current_date,
-                label=_format_label(label, period_number),
+                label=format_label(label, period_number),
                 is_cash=False,
                 pro_forma_category=resolved_category,
                 tax_treatment=resolved_tax_treatment,
@@ -304,7 +297,7 @@ def macrs_schedule(
     placed_in_service: date,
     property_class: MACRSPropertyClass,
     convention: MACRSConvention = "half-year",
-    label: str = "MACRS Depreciation Yr {n}",
+    label: str = "MACRS Depreciation",
     pro_forma_category: ProFormaCategory | str | None = ProFormaCategory.DEPRECIATION,
     tax_treatment: TaxTreatment | str = TaxTreatment.DEDUCTIBLE,
 ) -> CashFlowStream:
@@ -324,7 +317,7 @@ def macrs_schedule(
         mid-quarter convention the placed-in-service quarter is derived
         automatically from ``placed_in_service``.
     label : str, optional
-        Label template.
+        Label template. ``{n}`` is replaced with the 1-based period index.
     pro_forma_category : ProFormaCategory or str or None, optional
         Pro-forma category for each flow. Default is ``"depreciation"``.
     tax_treatment : TaxTreatment or str, optional
@@ -349,7 +342,7 @@ def macrs_schedule(
     entries: list[CashFlow] = []
     for i, rate in enumerate(rates):
         dep_date = date(placed_in_service.year + i, placed_in_service.month, placed_in_service.day)
-        flow_label = _format_label(label, i + 1)
+        flow_label = format_label(label, i + 1)
         entries.append(
             CashFlow(
                 amount=-cost_basis * rate,
@@ -376,7 +369,7 @@ def vdb_schedule(
     valuation_rate: float | None = None,
     valuation_date: date | None = None,
     terminal_catch_up: bool = False,
-    label: str = "VDB Depreciation Period {n}",
+    label: str = "VDB Depreciation",
     pro_forma_category: ProFormaCategory | str | None = ProFormaCategory.DEPRECIATION,
     tax_treatment: TaxTreatment | str = TaxTreatment.DEDUCTIBLE,
 ) -> CashFlowStream:
@@ -605,7 +598,7 @@ def vdb_schedule(
             CashFlow(
                 amount=-depreciation,
                 date=current_date,
-                label=_format_label(label, period_number),
+                label=format_label(label, period_number),
                 is_cash=False,
                 pro_forma_category=resolved_category,
                 tax_treatment=resolved_tax_treatment,

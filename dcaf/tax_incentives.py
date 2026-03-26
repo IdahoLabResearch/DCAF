@@ -20,6 +20,7 @@ from dcaf.types import (
     TaxTreatment,
     normalize_cashflow_classification,
 )
+from dcaf.utils import format_label
 
 
 def ptc(
@@ -27,7 +28,7 @@ def ptc(
     rate_per_mwh: float,
     years: int,
     escalation: float = 0.0,
-    label: str = "PTC {n}",
+    label: str = "PTC",
     pro_forma_category: ProFormaCategory | str | None = ProFormaCategory.TAX_CREDIT,
     tax_treatment: TaxTreatment | str = TaxTreatment.TAXABLE,
     *,
@@ -66,7 +67,7 @@ def ptc(
     label : str, optional
         Label template applied to each generated credit cashflow. If ``"{n}"``
         is present, it is replaced with the 1-based count of eligible PTC
-        entries. Default is ``"PTC {n}"``.
+        entries. Default is ``"PTC"``.
     pro_forma_category : ProFormaCategory or str or None, optional
         Pro-forma category applied to each credit flow. Default is ``"tax_credit"``.
     tax_treatment : TaxTreatment or str, optional
@@ -153,7 +154,7 @@ def ptc(
             continue
         n += 1
         ptc_rate = rate_per_mwh * policy.factor(entry.date)
-        flow_label = label.format(n=n) if "{n}" in label else label
+        flow_label = format_label(label, n)
         entries.append(
             CashFlow(
                 amount=entry.amount_mwh * ptc_rate,
@@ -188,7 +189,7 @@ def itc(
         capex_stream: Stream of CAPEX cashflows (amounts stored as negatives; abs is taken)
         rate: ITC rate as a decimal (e.g., 0.30 for 30% Section 48E credit)
         placed_in_service: Date the asset is placed in service; the credit date
-        label: Label for the resulting credit cashflow. Defaults to "ITC".
+        label: Label for the single resulting credit cashflow. Defaults to "ITC".
         pro_forma_category: Pro-forma category for the credit cashflow. Defaults to ``"tax_credit"``.
         tax_treatment: Tax treatment for the credit cashflow. Defaults to ``"none"``.
 
@@ -221,16 +222,18 @@ def itc(
     total_basis = abs(capex_stream.sum())
     credit_amount = total_basis * rate
 
-    return CashFlowStream([
-        CashFlow(
-            amount=credit_amount,
-            date=placed_in_service,
-            label=label,
-            is_cash=True,
-            pro_forma_category=resolved_category,
-            tax_treatment=resolved_tax_treatment,
-        )
-    ])
+    return CashFlowStream(
+        [
+            CashFlow(
+                amount=credit_amount,
+                date=placed_in_service,
+                label=label,
+                is_cash=True,
+                pro_forma_category=resolved_category,
+                tax_treatment=resolved_tax_treatment,
+            )
+        ]
+    )
 
 
 def itc_adjusted_basis(capex_stream: CashFlowStream, rate: float) -> float:

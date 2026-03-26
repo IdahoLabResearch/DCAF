@@ -156,6 +156,32 @@ def test_vdb_schedule_rejects_non_integer_life():
         )
 
 
+def test_vdb_schedule_default_label():
+    """Default label should not have interpolated indices."""
+    stream = vdb_schedule(
+        cost_basis=1000,
+        salvage_value=200,
+        placed_in_service=date(2027, 1, 1),
+        life=20,
+    )
+    # Check that label does not change between periods
+    assert stream.entries[0].label == stream.entries[1].label
+
+
+def test_vdb_schedule_label_with_interpolated_index():
+    """Index placeholder in custom label should be interpolated."""
+    stream = vdb_schedule(
+        cost_basis=1000,
+        salvage_value=200,
+        placed_in_service=date(2027, 1, 1),
+        life=20,
+        frequency="quarter",
+        label="vdb depreciation period {n}"
+    )
+    assert stream.entries[0].label == "vdb depreciation period 1"
+    assert stream.entries[19].label == "vdb depreciation period 20"
+
+
 def test_vdb_schedule_half_year_convention_can_add_terminal_catch_up():
     """Convention-aware schedules can add a residual terminal period."""
     stream = vdb_schedule(
@@ -193,6 +219,7 @@ def test_vdb_schedule_mid_quarter_convention_uses_explicit_date_grid():
         convention="mid-quarter",
         schedule_dates=schedule_dates,
         terminal_catch_up=True,
+        label="VDB Depreciation Period {n}"
     )
 
     assert [entry.date for entry in stream.entries] == list(schedule_dates[1:])
