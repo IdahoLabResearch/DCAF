@@ -74,6 +74,29 @@ def test_from_macrs_dates():
     assert stream.entries[3].date == date(2033, 6, 15)
 
 
+def test_macrs_schedule_label_default():
+    """Default label should not have interpolated indices."""
+    stream = macrs_schedule(
+        cost_basis=1000,
+        placed_in_service=date(2027, 1, 1),
+        property_class=3,
+    )
+    # Check that label does not change between periods
+    assert stream.entries[0].label == stream.entries[1].label
+
+
+def test_macrs_schedule_index_in_label():
+    """Index in custom label should be interpolated."""
+    stream = macrs_schedule(
+        cost_basis=1000,
+        placed_in_service=date(2027, 1, 1),
+        property_class=3,
+        label="macrs depreciation period {n}",
+    )
+    assert stream.entries[0].label == "macrs depreciation period 1"
+    assert stream.entries[1].label == "macrs depreciation period 2"
+
+
 # === MACRS_MID_QUARTER_RATES ===
 
 

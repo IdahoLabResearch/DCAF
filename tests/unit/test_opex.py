@@ -105,6 +105,12 @@ def test_non_default_frequency():
     assert stream.entries[1].date == date(2025, 4, 1)
 
 
+def test_default_label():
+    """Default label does not contain period index."""
+    stream = fixed_opex(amount=1000, start=date(2025, 1, 1), periods=2)
+    assert stream.entries[0].label == stream.entries[1].label
+
+
 def test_custom_label_with_template():
     """Label template '{n}' is replaced with the 1-based period index."""
     stream = fixed_opex(amount=1000, start=date(2025, 1, 1), periods=2, label="Maintenance {n}")

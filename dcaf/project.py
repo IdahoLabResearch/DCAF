@@ -55,6 +55,7 @@ from dcaf.utils import (
     hours_per_period,
     time_delta_per_period,
     timedelta_fractional_years,
+    format_label,
 )
 
 type MarketKey = tuple[str | None, str]
@@ -309,7 +310,7 @@ class _GenerationConfig:
     frequency: Period | None = None
     carrier: str = "electricity"
     source: str | None = None
-    label: str = "Generation {n}"
+    label: str = "Generation"
 
 
 @dataclass(frozen=True)
@@ -320,7 +321,7 @@ class _RecurringCostConfig:
     start: date | None = None
     periods: int | None = None
     frequency: Period | None = None
-    label: str = "Fixed OPEX {n}"
+    label: str = "Fixed OPEX"
     escalation: _EscalationSettings = field(default_factory=_EscalationSettings)
 
 
@@ -329,7 +330,7 @@ class _VariableCostConfig:
     """Configuration for a per-unit variable cost item."""
 
     rate_per_unit: float | None = None
-    label: str = "Variable Cost {n}"
+    label: str = "Variable Cost"
     escalation: _EscalationSettings = field(default_factory=_EscalationSettings)
 
 
@@ -365,7 +366,7 @@ class _MacrsDepreciationConfig:
 
     property_class: MACRSPropertyClass
     convention: MACRSConvention = "half-year"
-    label: str = "MACRS Depreciation Yr {n}"
+    label: str = "MACRS Depreciation"
 
 
 @dataclass(frozen=True)
@@ -382,7 +383,7 @@ class _VdbDepreciationConfig:
     valuation_rate: float | None = None
     valuation_date: date | None = None
     terminal_catch_up: bool = False
-    label: str = "VDB Depreciation Period {n}"
+    label: str = "VDB Depreciation"
 
 
 type _DepreciationConfig = _MacrsDepreciationConfig | _VdbDepreciationConfig | None
@@ -394,7 +395,7 @@ class _PtcConfig:
 
     rate_per_unit: float
     years: int
-    label: str = "PTC {n}"
+    label: str = "PTC"
     escalation: _EscalationSettings = field(default_factory=_EscalationSettings)
 
 
@@ -418,7 +419,7 @@ class _MarketConfig:
 
     sell_price_per_unit: float | None = None
     unit: str | None = None
-    label: str = "Market Revenue {n}"
+    label: str = "Market Revenue"
     escalation: _EscalationSettings = field(default_factory=_EscalationSettings)
 
 
@@ -883,12 +884,12 @@ class ProjectAnalysis:
         taxable_income_without_interest = compute_taxable_income(
             taxable_revenue,
             deductions_without_interest,
-            label="Taxable Income Before Interest {n}",
+            label="Taxable Income Before Interest",
         )
         taxes_without_interest = tax_liability(
             taxable_income_without_interest,
             tax_rate=self.tax_rate,
-            label="Taxes Before Interest {n}",
+            label="Taxes Before Interest",
         )
         actual_by_date = self.taxes.group_by(lambda flow: flow.date).aggregate(lambda s: s.sum())
         hypothetical_by_date = taxes_without_interest.group_by(lambda flow: flow.date).aggregate(
@@ -896,7 +897,7 @@ class ProjectAnalysis:
         )
         shield_dates = tuple(sorted(set(actual_by_date) | set(hypothetical_by_date)))
         entries = []
-        for index, shield_date in enumerate(shield_dates, start=1):
+        for shield_date in shield_dates:
             shield_amount = actual_by_date.get(shield_date, 0.0) - hypothetical_by_date.get(
                 shield_date,
                 0.0,
@@ -907,7 +908,7 @@ class ProjectAnalysis:
                 CashFlow(
                     amount=shield_amount,
                     date=shield_date,
-                    label=f"Interest Tax Shield {index}",
+                    label="Interest Tax Shield",
                     is_cash=True,
                     pro_forma_category=None,
                     tax_treatment=TaxTreatment.NONE,
@@ -1262,7 +1263,7 @@ class EnergyProject:
             Generation source label. Defaults to the asset name.
         label : str, optional
             Label template for individual generation entries. Use ``{n}`` as a
-            period index placeholder.
+            period index placeholder if desired.
 
         Returns
         -------
@@ -1347,7 +1348,8 @@ class EnergyProject:
         escalation_policy : EscalationPolicy, optional
             Fully configured escalation policy. Overrides simple-rate inputs.
         label : str, optional
-            Label template for individual revenue cashflows.
+            Label template for individual revenue cashflows. Use ``{n}`` as a
+            period index placeholder if desired.
 
         Returns
         -------
@@ -1418,7 +1420,8 @@ class EnergyProject:
         escalation_policy : EscalationPolicy, optional
             Fully configured escalation policy. Overrides simple-rate inputs.
         label : str, optional
-            Label template for individual cost cashflows.
+            Label template for individual cost cashflows. Use ``{n}`` as a
+            period index placeholder if desired.
 
         Returns
         -------
@@ -1479,7 +1482,7 @@ class EnergyProject:
         escalation_policy : EscalationPolicy, optional
             Fully configured escalation policy.
         label : str, optional
-            Label template.
+            Label template. Use ``{n}`` as a period index placeholder if desired.
 
         Returns
         -------
@@ -1529,7 +1532,7 @@ class EnergyProject:
         escalation_policy : EscalationPolicy, optional
             Fully configured escalation policy.
         label : str, optional
-            Label template.
+            Label template. Use ``{n}`` as a period index placeholder if desired.
 
         Returns
         -------
@@ -1908,7 +1911,7 @@ class EnergyProject:
             config: _DepreciationConfig = _MacrsDepreciationConfig(
                 property_class=property_class,
                 convention=convention,
-                label="MACRS Depreciation Yr {n}" if label is None else label,
+                label="MACRS Depreciation" if label is None else label,
             )
         else:
             if life is None:
@@ -1924,7 +1927,7 @@ class EnergyProject:
                 valuation_rate=valuation_rate,
                 valuation_date=valuation_date,
                 terminal_catch_up=terminal_catch_up,
-                label="VDB Depreciation Period {n}" if label is None else label,
+                label="VDB Depreciation" if label is None else label,
             )
         asset_config = self._asset_config(asset)
         return self._with_asset(asset, dc_replace(asset_config, depreciation=config))
@@ -1948,7 +1951,7 @@ class EnergyProject:
         convention : MACRSConvention, optional
             MACRS convention. Default is ``"half-year"``.
         label : str, optional
-            Label template.
+            Label template. Use ``{n}`` as a period index placeholder if desired.
 
         Returns
         -------
@@ -2006,7 +2009,7 @@ class EnergyProject:
         terminal_catch_up : bool, optional
             Accumulate remaining basis in the final period. Default is ``False``.
         label : str, optional
-            Label template.
+            Label template. Use ``{n}`` as a period index placeholder if desired.
 
         Returns
         -------
@@ -2079,7 +2082,7 @@ class EnergyProject:
         escalation_policy : EscalationPolicy, optional
             Fully configured escalation policy.
         label : str, optional
-            Label template.
+            Label template. Use ``{n}`` as a period index placeholder if desired.
 
         Returns
         -------
@@ -2098,7 +2101,7 @@ class EnergyProject:
         updated = _PtcConfig(
             rate_per_unit=rate_per_unit,
             years=years,
-            label="PTC {n}" if label is None else label,
+            label="PTC" if label is None else label,
             escalation=_updated_escalation(
                 asset_config.ptc.escalation
                 if asset_config.ptc is not None
@@ -2387,9 +2390,7 @@ class EnergyProject:
         hours = hours_per_period(frequency)
         source = asset_name if generation.source is None else generation.source
         for index, modeled_period in enumerate(schedule, start=1):
-            label = (
-                generation.label.format(n=index) if "{n}" in generation.label else generation.label
-            )
+            label = format_label(generation.label, index)
             entries.append(
                 Generation(
                     amount_mwh=(
@@ -2476,7 +2477,7 @@ class EnergyProject:
         escalation_policy = _recurring_policy(start, escalation)
         entries: list[CashFlow] = []
         for index, modeled_period in enumerate(schedule, start=1):
-            label = fixed.label.format(n=index) if "{n}" in fixed.label else fixed.label
+            label = format_label(fixed.label, index)
             entries.append(
                 CashFlow(
                     amount=(

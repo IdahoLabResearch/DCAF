@@ -411,3 +411,44 @@ def test_invalid_frequency_is_rejected():
             start_date=date(2026, 1, 1),
             frequency="week",  # type: ignore[arg-type]
         )
+
+
+# === label index interpolation ===
+
+
+def test_default_labels(monthly_schedule):
+    """No index interpolation in default labels."""
+    total_flows = monthly_schedule.total.entries
+    interest_flows = monthly_schedule.interest.entries
+    principal_flows = monthly_schedule.principal.entries
+
+    # Check that labels do not vary between timesteps
+    assert total_flows[0].label == total_flows[1].label
+    assert interest_flows[0].label == interest_flows[1].label
+    assert principal_flows[0].label == principal_flows[1].label
+
+
+def test_index_interpolation_in_labels():
+    """Index interpolation in labels is correct"""
+    schedule = AmortizationSchedule.build(
+        principal=1_000.0,
+        annual_rate=0.1,
+        term=3,
+        start_date=date(2026, 1, 1),
+        frequency="year",
+        label="total year {n}",
+        interest_label="interest year {n}",
+        principal_label="principal year {n}",
+    )
+
+    total_flows = schedule.total.entries
+    assert total_flows[0].label == "total year 1"
+    assert total_flows[2].label == "total year 3"
+
+    interest_flows = schedule.interest.entries
+    assert interest_flows[0].label == "interest year 1"
+    assert interest_flows[2].label == "interest year 3"
+
+    principal_flows = schedule.principal.entries
+    assert principal_flows[0].label == "principal year 1"
+    assert principal_flows[2].label == "principal year 3"

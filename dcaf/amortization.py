@@ -28,7 +28,7 @@ from dcaf.types import (
     normalize_cashflow_classification,
     parse_period,
 )
-from dcaf.utils import time_delta_per_period
+from dcaf.utils import time_delta_per_period, format_label
 
 
 @dataclass(frozen=True)
@@ -90,9 +90,9 @@ class AmortizationSchedule:
         term: int,
         start_date: date,
         frequency: Period = "month",
-        label: str = "Debt Service Period {n}",
-        interest_label: str = "Interest Period {n}",
-        principal_label: str = "Principal Period {n}",
+        label: str = "Debt Service",
+        interest_label: str = "Interest",
+        principal_label: str = "Principal",
         interest_pro_forma_category: ProFormaCategory | str | None = (
             ProFormaCategory.FINANCING_INTEREST
         ),
@@ -119,9 +119,9 @@ class AmortizationSchedule:
         label : str, optional
             Template for total payment labels. ``{n}`` is replaced with the period number.
         interest_label : str, optional
-            Template for interest payment labels.
+            Template for interest payment labels. ``{n}`` is replaced with the period number.
         principal_label : str, optional
-            Template for principal payment labels.
+            Template for principal payment labels. ``{n}`` is replaced with the period number.
         interest_pro_forma_category : ProFormaCategory or str or None, optional
             Pro-forma category applied to interest cashflows.
         interest_tax_treatment : TaxTreatment or str, optional
@@ -159,9 +159,9 @@ class AmortizationSchedule:
         term: int,
         start_date: date,
         frequency: Period = "month",
-        label: str = "Debt Service Period {n}",
-        interest_label: str = "Interest Period {n}",
-        principal_label: str = "Principal Period {n}",
+        label: str = "Debt Service",
+        interest_label: str = "Interest",
+        principal_label: str = "Principal",
         interest_pro_forma_category: ProFormaCategory | str | None = (
             ProFormaCategory.FINANCING_INTEREST
         ),
@@ -191,9 +191,9 @@ class AmortizationSchedule:
         label : str, optional
             Template for total payment labels. ``{n}`` is replaced with the period number.
         interest_label : str, optional
-            Template for interest payment labels.
+            Template for interest payment labels. ``{n}`` is replaced with the period number.
         principal_label : str, optional
-            Template for principal payment labels.
+            Template for principal payment labels. ``{n}`` is replaced with the period number.
         interest_pro_forma_category : ProFormaCategory or str or None, optional
             Pro-forma category applied to interest cashflows.
         interest_tax_treatment : TaxTreatment or str, optional
@@ -239,9 +239,9 @@ class AmortizationBuilder:
         term: int,
         start_date: date,
         frequency: Period = "month",
-        label: str = "Debt Service Period {n}",
-        interest_label: str = "Interest Period {n}",
-        principal_label: str = "Principal Period {n}",
+        label: str = "Debt Service",
+        interest_label: str = "Interest",
+        principal_label: str = "Principal",
         interest_pro_forma_category: ProFormaCategory | str | None = (
             ProFormaCategory.FINANCING_INTEREST
         ),
@@ -539,13 +539,11 @@ class AmortizationBuilder:
         tuple[CashFlow, CashFlow, CashFlow]
             ``(total_flow, interest_flow, principal_flow)``
         """
-        def fmt(tmpl: str) -> str:
-            return tmpl.format(n=n) if "{n}" in tmpl else tmpl
 
         total_flow = CashFlow(
             amount=-total_amount,
             date=payment_date,
-            label=fmt(self._label),
+            label=format_label(self._label, n),
             is_cash=True,
             pro_forma_category=None,
             tax_treatment=TaxTreatment.NONE,
@@ -553,7 +551,7 @@ class AmortizationBuilder:
         interest_flow = CashFlow(
             amount=-interest_amount,
             date=payment_date,
-            label=fmt(self._interest_label),
+            label=format_label(self._interest_label, n),
             is_cash=True,
             pro_forma_category=self._interest_pro_forma_category,
             tax_treatment=self._interest_tax_treatment,
@@ -561,7 +559,7 @@ class AmortizationBuilder:
         principal_flow = CashFlow(
             amount=-principal_amount,
             date=payment_date,
-            label=fmt(self._principal_label),
+            label=format_label(self._principal_label, n),
             is_cash=True,
             pro_forma_category=self._principal_pro_forma_category,
             tax_treatment=self._principal_tax_treatment,

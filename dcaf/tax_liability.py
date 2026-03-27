@@ -11,13 +11,13 @@ Functions:
 
 from dcaf.cashflows import CashFlow, CashFlowStream
 from dcaf.types import ProFormaCategory, TaxTreatment, normalize_cashflow_classification
-from dcaf.utils import period_end
+from dcaf.utils import period_end, format_label
 
 
 def compute_taxable_income(
     revenue_stream: CashFlowStream,
     deductible_stream: CashFlowStream,
-    label: str = "Taxable Income {n}",
+    label: str = "Taxable Income",
 ) -> CashFlowStream:
     """Compute net taxable income from revenue and deductible streams.
 
@@ -58,23 +58,25 @@ def compute_taxable_income(
     grouped = combined.group_by(period="year")
     net_by_period = grouped.aggregate(lambda s: s.sum())
 
-    return CashFlowStream([
-        CashFlow(
-            amount=net,
-            date=period_end(period, "year"),
-            label=label,
-            is_cash=False,
-            pro_forma_category=None,
-            tax_treatment=TaxTreatment.NONE,
-        )
-        for period, net in net_by_period.items()
-    ])
+    return CashFlowStream(
+        [
+            CashFlow(
+                amount=net,
+                date=period_end(period, "year"),
+                label=format_label(label, period_num),
+                is_cash=False,
+                pro_forma_category=None,
+                tax_treatment=TaxTreatment.NONE,
+            )
+            for period_num, (period, net) in enumerate(net_by_period.items(), start=1)
+        ]
+    )
 
 
 def tax_liability(
     taxable_income_stream: CashFlowStream,
     tax_rate: float,
-    label: str = "Tax Liability {n}",
+    label: str = "Tax Liability",
     pro_forma_category: ProFormaCategory | str | None = ProFormaCategory.TAX,
     tax_treatment: TaxTreatment | str = TaxTreatment.NONE,
 ) -> CashFlowStream:
@@ -125,15 +127,18 @@ def tax_liability(
         tax_treatment,
     )
     # Apply tax rate and convert to negative (outflow)
-    tax_flows = positive_income.apply(
-        lambda cf: CashFlow(
-            amount=cf.amount * tax_rate * -1,  # Negative = expense/outflow
-            date=cf.date,
-            label=label,
-            is_cash=True,  # Tax payments are actual cash outflows
-            pro_forma_category=resolved_category,
-            tax_treatment=resolved_tax_treatment,
-        )
+    tax_flows = CashFlowStream(
+        [
+            CashFlow(
+                amount=cf.amount * tax_rate * -1,  # Negative = expense/outflow
+                date=cf.date,
+                label=format_label(label, i),
+                is_cash=True,  # Tax payments are actual cash outflows
+                pro_forma_category=resolved_category,
+                tax_treatment=resolved_tax_treatment,
+            )
+            for i, cf in enumerate(positive_income.entries, start=1)
+        ]
     )
 
     return tax_flows

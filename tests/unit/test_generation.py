@@ -109,6 +109,15 @@ def test_from_capacity_quarterly():
     assert gs.entries[0].carrier == "hydrogen"
 
 
+def test_from_capacity_default_label():
+    """Default label should not contain index."""
+    gs = GenerationStream.from_capacity(
+        capacity_mw=100, capacity_factor = 0.9, start=date(2030, 1, 1), periods=2
+    )
+    # Check that label does not change between periods
+    assert gs.entries[0].label == gs.entries[1].label
+
+
 def test_from_capacity_label_template():
     """Labels support {n} placeholder."""
     gs = GenerationStream.from_capacity(
@@ -146,6 +155,23 @@ def test_from_streams_rejects_other_stream_types():
 
 
 # === with_capacity ===
+
+
+def test_with_capacity_default_label():
+    """Default label should not contain index."""
+    gs = GenerationStream.from_capacity(
+        100, 0.9, date(2030, 1, 1), 2, label="gs1 year {n}"
+    )
+    gs = gs.with_capacity(20, 0.8, date(2031, 1, 1), 2)
+    assert gs.entries[2].label == gs.entries[3].label
+
+
+def test_with_capacity_label_with_index():
+    """Indices in custom label should be interpolated."""
+    gs = GenerationStream([])
+    gs = gs.with_capacity(20, 0.8, date(2030, 1, 1), 2, frequency="day", label="gs day {n}")
+    assert gs.entries[0].label == "gs day 1"
+    assert gs.entries[1].label == "gs day 2"
 
 
 def test_with_capacity_appends():
@@ -491,6 +517,27 @@ def test_to_revenue_basic():
     assert cfs.entries[0].tax_treatment is TaxTreatment.TAXABLE
 
 
+def test_to_revenue_default_label():
+    """Default label should not contain index."""
+    gs = GenerationStream([
+        Generation(1000.0, date(2030, 1, 1)),
+        Generation(1000.0, date(2031, 1, 1)),
+    ])
+    cfs = gs.to_revenue(price_per_mwh=50.0)
+    assert cfs.entries[0].label == cfs.entries[1].label
+
+
+def test_to_revenue_label_with_index():
+    """Indices in custom labels should be interpolated."""
+    gs = GenerationStream([
+        Generation(1000.0, date(2030, 1, 1)),
+        Generation(1000.0, date(2031, 1, 1)),
+    ])
+    cfs = gs.to_revenue(price_per_mwh=50.0, label="revenue {n}")
+    assert cfs.entries[0].label == "revenue 1"
+    assert cfs.entries[1].label == "revenue 2"
+
+
 def test_to_revenue_escalation():
     """Revenue price escalates annually."""
     gs = GenerationStream([
@@ -559,6 +606,27 @@ def test_to_cost_basic():
     assert cfs.count() == 1
     assert abs(cfs.entries[0].amount - (-5_000.0)) < 1e-8
     assert cfs.entries[0].pro_forma_category is ProFormaCategory.OPERATING_COST
+
+
+def test_to_cost_default_label():
+    """Default label should not contain index."""
+    gs = GenerationStream([
+        Generation(1000.0, date(2030, 1, 1)),
+        Generation(1000.0, date(2031, 1, 1)),
+    ])
+    cfs = gs.to_cost(rate_per_mwh=50.0)
+    assert cfs.entries[0].label == cfs.entries[1].label
+
+
+def test_to_cost_label_with_index():
+    """Indices in custom labels should be interpolated."""
+    gs = GenerationStream([
+        Generation(1000.0, date(2030, 1, 1)),
+        Generation(1000.0, date(2031, 1, 1)),
+    ])
+    cfs = gs.to_cost(rate_per_mwh=50.0, label="cost {n}")
+    assert cfs.entries[0].label == "cost 1"
+    assert cfs.entries[1].label == "cost 2"
 
 
 def test_to_cost_escalation():
