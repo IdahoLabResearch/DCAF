@@ -1553,7 +1553,9 @@ class CashFlowStream(BaseStream[CashFlow]):
             impossible for the NPV to equal zero at any finite rate.
         ValueError
             If the algorithm fails to converge within ``max_iter`` iterations, or
-            if the derivative becomes effectively zero during iteration.
+            if the derivative becomes effectively zero during iteration. Numerical
+            overflow while evaluating the Newton step is treated as non-convergence
+            and raises ``ValueError`` as well.
 
         Notes
         -----
@@ -1602,7 +1604,10 @@ class CashFlowStream(BaseStream[CashFlow]):
         rate = _irr_initial_guess(cash_only, ref_date, convention)
 
         for _ in range(max_iter):
-            npv, dnpv = _irr_npv_and_dnpv(cash_only, rate, ref_date, convention)
+            try:
+                npv, dnpv = _irr_npv_and_dnpv(cash_only, rate, ref_date, convention)
+            except OverflowError as exc:
+                raise ValueError("IRR did not converge: overflow encountered during iteration.") from exc
             if abs(npv) < tol:
                 return rate
             if abs(dnpv) < 1e-12:
@@ -1610,7 +1615,10 @@ class CashFlowStream(BaseStream[CashFlow]):
             rate -= npv / dnpv
             rate = max(rate, -1.0 + 1e-8)
 
-        npv, _ = _irr_npv_and_dnpv(cash_only, rate, ref_date, convention)
+        try:
+            npv, _ = _irr_npv_and_dnpv(cash_only, rate, ref_date, convention)
+        except OverflowError as exc:
+            raise ValueError("IRR did not converge: overflow encountered during iteration.") from exc
         if abs(npv) < tol:
             return rate
         raise ValueError(f"IRR did not converge after {max_iter} iterations.")

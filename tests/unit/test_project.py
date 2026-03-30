@@ -112,6 +112,32 @@ def test_energy_project_is_order_independent_across_sections():
     )
 
 
+def test_energy_project_metrics_treats_irr_overflow_as_non_convergence():
+    """IRR overflow should be reported as non-convergence rather than an exception."""
+    project = (
+        EnergyProject("overflowing-irr")
+        .timeline(
+            construction_start=date(2025, 1, 1),
+            operations_start=date(2026, 1, 1),
+            operations_end=date(2045, 12, 31),
+            frequency="month",
+        )
+        .generation(capacity_mw=100.0, capacity_factor=0.5)
+        .construction(overnight_cost=1_000_000.0, spend_profile="flat", period="month")
+        .annual_opex_cost(100.0)
+        .variable_cost(10.0)
+        .market(sell_price_per_unit=50.0)
+    )
+
+    analysis = project.analyze()
+
+    with pytest.raises(ValueError, match="overflow encountered during iteration"):
+        analysis.cashflows.cash_only().irr()
+
+    metrics = analysis.metrics(discount_rate=0.10, valuation_date=date(2025, 1, 1))
+    assert metrics.xirr is None
+
+
 def test_energy_project_supports_multiple_assets_and_asset_specific_market_overrides():
     project = (
         EnergyProject("portfolio")
