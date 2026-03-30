@@ -3,15 +3,9 @@ import csv
 
 import pytest
 
-from dcaf import (
-    CashFlow,
-    CashFlowStream,
-    EnergyProject,
-    Generation,
-    GenerationStream,
-    ProFormaCategory,
-    TaxTreatment,
-)
+from dcaf import EnergyProject
+from dcaf.shared.types import ProFormaCategory, TaxTreatment
+from dcaf.streams import CashFlow, CashFlowStream, Generation, GenerationStream
 
 
 def test_energy_project_single_asset_workflow_builds_analysis_and_metrics():
@@ -293,62 +287,72 @@ def test_project_pro_forma_groups_categories_and_computes_subtotals():
         )
         .add_cashflow_stream(
             "revenue",
-            CashFlowStream([
-                CashFlow(
-                    200.0,
-                    date(2026, 1, 1),
-                    label="Revenue",
-                    pro_forma_category="revenue",
-                    tax_treatment="taxable",
-                )
-            ]),
+            CashFlowStream(
+                [
+                    CashFlow(
+                        200.0,
+                        date(2026, 1, 1),
+                        label="Revenue",
+                        pro_forma_category="revenue",
+                        tax_treatment="taxable",
+                    )
+                ]
+            ),
         )
         .add_cashflow_stream(
             "opex",
-            CashFlowStream([
-                CashFlow(
-                    -50.0,
-                    date(2026, 2, 1),
-                    label="Operating Cost",
-                    pro_forma_category="operating_cost",
-                    tax_treatment="deductible",
-                )
-            ]),
+            CashFlowStream(
+                [
+                    CashFlow(
+                        -50.0,
+                        date(2026, 2, 1),
+                        label="Operating Cost",
+                        pro_forma_category="operating_cost",
+                        tax_treatment="deductible",
+                    )
+                ]
+            ),
         )
         .add_cashflow_stream(
             "capex",
-            CashFlowStream([
-                CashFlow(
-                    -100.0,
-                    date(2026, 3, 1),
-                    label="Capital Cost",
-                    pro_forma_category="capital_cost",
-                )
-            ]),
+            CashFlowStream(
+                [
+                    CashFlow(
+                        -100.0,
+                        date(2026, 3, 1),
+                        label="Capital Cost",
+                        pro_forma_category="capital_cost",
+                    )
+                ]
+            ),
         )
         .add_cashflow_stream(
             "depreciation",
-            CashFlowStream([
-                CashFlow(
-                    -20.0,
-                    date(2026, 12, 31),
-                    label="Depreciation",
-                    is_cash=False,
-                    pro_forma_category="depreciation",
-                    tax_treatment="deductible",
-                )
-            ]),
+            CashFlowStream(
+                [
+                    CashFlow(
+                        -20.0,
+                        date(2026, 12, 31),
+                        label="Depreciation",
+                        is_cash=False,
+                        pro_forma_category="depreciation",
+                        tax_treatment="deductible",
+                    )
+                ]
+            ),
         )
         .add_cashflow_stream(
             "tax_credit",
-            CashFlowStream([
-                CashFlow(
-                    10.0,
-                    date(2026, 12, 31),
-                    label="Tax Credit",
-                    pro_forma_category="tax_credit",
-                )
-            ]),
+            CashFlowStream(
+                [
+                    CashFlow(
+                        10.0,
+                        date(2026, 12, 31),
+                        label="Tax Credit",
+                        pro_forma_category="tax_credit",
+                    )
+                ]
+            ),
         )
         .debt(annual_rate=0.10, term=1, frequency="year", principal=100.0, start=date(2026, 1, 1))
         .tax(rate=0.20)
@@ -572,8 +576,12 @@ def test_energy_project_debt_principal_is_not_tax_deductible():
     debt_service = analysis.cashflow_components["default:debt_service"]
 
     assert debt_service.sum() == pytest.approx(-110.0)
-    assert debt_service.filter(pro_forma_category=ProFormaCategory.FINANCING_INTEREST).sum() == pytest.approx(-10.0)
-    assert debt_service.filter(pro_forma_category=ProFormaCategory.FINANCING_PRINCIPAL).sum() == pytest.approx(-100.0)
+    assert debt_service.filter(
+        pro_forma_category=ProFormaCategory.FINANCING_INTEREST
+    ).sum() == pytest.approx(-10.0)
+    assert debt_service.filter(
+        pro_forma_category=ProFormaCategory.FINANCING_PRINCIPAL
+    ).sum() == pytest.approx(-100.0)
     assert analysis.taxable_income.sum() == pytest.approx(190.0)
     assert analysis.taxes.sum() == pytest.approx(-39.9)
 
@@ -593,7 +601,8 @@ def test_energy_project_debt_principal_capitalize_vs_pay():
             .timeline(**common)
             .construction(overnight_cost=1_000.0, spend_profile="flat", period="month")
             .construction_financing(
-                debt_fraction=0.5, interest_rate=0.10,
+                debt_fraction=0.5,
+                interest_rate=0.10,
                 interest_treatment=interest_treatment,
             )
             .debt(annual_rate=0.05, term=1, frequency="year")

@@ -6,7 +6,9 @@ interval starting at ``duration_fraction`` and ending at the next breakpoint.
 The final sentinel point is always ``(1.0, 0.0)``.
 """
 
-from dcaf.types import SpendSchedule, SpendScheduleName
+from types import MappingProxyType
+
+from dcaf.shared.types import SpendSchedule, SpendScheduleName
 
 # NOTE: these off/on switches keep ruff from dictating the formatting of this block
 # fmt: off
@@ -151,8 +153,44 @@ SPEND_CURVE_REGISTRY: dict[SpendScheduleName, SpendSchedule] = {
     "linear": LINEAR_CURVE,
 }
 
+
 def get_spend_curve(name: SpendScheduleName) -> SpendSchedule | None:
     """Get the predefined spend curve with the given name.
     Returns None if there is not a curve defined for the provided name.
     """
     return SPEND_CURVE_REGISTRY.get(name)
+
+
+def get_spend_profile(name: SpendScheduleName) -> SpendSchedule:
+    """Return a read-only built-in construction spend profile by name.
+
+    Parameters
+    ----------
+    name : SpendScheduleName
+        Name of the built-in spend profile.
+
+    Returns
+    -------
+    SpendSchedule
+        Immutable breakpoint schedule for the requested profile.
+
+    Raises
+    ------
+    KeyError
+        If ``name`` is not a known built-in profile.
+    """
+    try:
+        return SPEND_CURVE_REGISTRY[name]
+    except KeyError as exc:
+        raise KeyError(f"Unknown spend profile '{name}'") from exc
+
+
+def get_spend_profiles() -> MappingProxyType[SpendScheduleName, SpendSchedule]:
+    """Return the built-in construction spend profiles as a read-only mapping.
+
+    Returns
+    -------
+    MappingProxyType[SpendScheduleName, SpendSchedule]
+        Read-only mapping of profile names to immutable breakpoint schedules.
+    """
+    return MappingProxyType(dict(SPEND_CURVE_REGISTRY))

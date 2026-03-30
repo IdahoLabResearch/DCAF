@@ -19,18 +19,18 @@ from typing import (
     overload,
 )
 
-from dcaf._streams import BaseGroup, BaseStream
-from dcaf.cashflows import (
+from dcaf.streams.base import BaseGroup, BaseStream
+from dcaf.streams.cashflows import (
     CashFlow,
     CashFlowStream,
 )
-from dcaf.escalation import (
+from dcaf.finance.escalation import (
     ConstantRateEscalation,
     EscalationPolicy,
     _constant_discount_policy,
     _resolve_escalation_policy_override,
 )
-from dcaf.types import (
+from dcaf.shared.types import (
     DayCountConvention,
     Period,
     ProFormaCategory,
@@ -38,10 +38,10 @@ from dcaf.types import (
     TaxTreatment,
     normalize_cashflow_classification,
 )
-from dcaf.utils import (
+from dcaf.shared.formatting import format_label
+from dcaf.shared.time import (
     hours_per_period,
     time_delta_per_period,
-    format_label,
 )
 
 
@@ -139,7 +139,11 @@ def _generation_escalation(
     )
     if policy_override is not None:
         return policy_override
-    reference_date = min(entry.date for entry in entries) if amount_reference_date is None else amount_reference_date
+    reference_date = (
+        min(entry.date for entry in entries)
+        if amount_reference_date is None
+        else amount_reference_date
+    )
     return ConstantRateEscalation(
         reference_date=reference_date,
         rate=escalation,
@@ -631,7 +635,8 @@ class GenerationStream(BaseStream[Generation]):
         return super().extend(other)
 
     def apply(
-        self, transform: Callable[[Generation], Generation],
+        self,
+        transform: Callable[[Generation], Generation],
         where: Callable[[Generation], bool] | None = None,
     ) -> "GenerationStream":
         """
@@ -710,9 +715,7 @@ class GenerationStream(BaseStream[Generation]):
         """
         return super().flat_apply(fn)
 
-    def filter_apply(
-        self, fn: Callable[[Generation], Generation | None]
-    ) -> "GenerationStream":
+    def filter_apply(self, fn: Callable[[Generation], Generation | None]) -> "GenerationStream":
         """
         Transform entries while dropping ``None`` results.
 

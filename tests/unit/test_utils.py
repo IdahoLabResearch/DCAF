@@ -2,7 +2,7 @@
 
 import pytest
 
-from dcaf.utils import compound_factor
+from dcaf.shared.time import compound_factor
 
 
 class TestCompoundFactor:

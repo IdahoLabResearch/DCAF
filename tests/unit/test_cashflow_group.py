@@ -1,7 +1,8 @@
 from datetime import date
 import pytest
 
-from dcaf import CashFlow, CashFlowGroup, CashFlowStream, ProFormaCategory
+from dcaf.shared.types import ProFormaCategory
+from dcaf.streams import CashFlow, CashFlowGroup, CashFlowStream
 
 
 @pytest.fixture()

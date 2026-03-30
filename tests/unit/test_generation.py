@@ -4,15 +4,9 @@ from datetime import date
 
 import pytest
 
-from dcaf import (
-    CashFlowStream,
-    Generation,
-    GenerationGroup,
-    GenerationStream,
-    ProFormaCategory,
-    TaxTreatment,
-)
-from dcaf.escalation import ConstantRateEscalation, IndexSeriesEscalation
+from dcaf.shared.types import ProFormaCategory, TaxTreatment
+from dcaf.streams import CashFlowStream, Generation, GenerationGroup, GenerationStream
+from dcaf.finance.escalation import ConstantRateEscalation, IndexSeriesEscalation
 
 
 def _annual_factor(start: date, end: date, rate: float) -> float:
@@ -112,7 +106,7 @@ def test_from_capacity_quarterly():
 def test_from_capacity_default_label():
     """Default label should not contain index."""
     gs = GenerationStream.from_capacity(
-        capacity_mw=100, capacity_factor = 0.9, start=date(2030, 1, 1), periods=2
+        capacity_mw=100, capacity_factor=0.9, start=date(2030, 1, 1), periods=2
     )
     # Check that label does not change between periods
     assert gs.entries[0].label == gs.entries[1].label
@@ -121,8 +115,11 @@ def test_from_capacity_default_label():
 def test_from_capacity_label_template():
     """Labels support {n} placeholder."""
     gs = GenerationStream.from_capacity(
-        capacity_mw=100, capacity_factor=0.9, start=date(2030, 1, 1),
-        periods=2, label="Year {n}",
+        capacity_mw=100,
+        capacity_factor=0.9,
+        start=date(2030, 1, 1),
+        periods=2,
+        label="Year {n}",
     )
     assert gs.entries[0].label == "Year 1"
     assert gs.entries[1].label == "Year 2"
@@ -159,9 +156,7 @@ def test_from_streams_rejects_other_stream_types():
 
 def test_with_capacity_default_label():
     """Default label should not contain index."""
-    gs = GenerationStream.from_capacity(
-        100, 0.9, date(2030, 1, 1), 2, label="gs1 year {n}"
-    )
+    gs = GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 2, label="gs1 year {n}")
     gs = gs.with_capacity(20, 0.8, date(2031, 1, 1), 2)
     assert gs.entries[2].label == gs.entries[3].label
 
@@ -259,9 +254,7 @@ def test_filter_rejects_predicate_and_keywords():
 def test_apply_generation_stream_no_condition():
     """apply transforms all entries with no condition provided and preserves stream type."""
     gs = GenerationStream([Generation(100.0, date(2030, 1, 1), source="a")])
-    result = gs.apply(
-        lambda g: Generation(g.amount_mwh * 2, g.date, g.source, g.carrier, g.label)
-    )
+    result = gs.apply(lambda g: Generation(g.amount_mwh * 2, g.date, g.source, g.carrier, g.label))
     assert isinstance(result, GenerationStream)
     assert result[0].amount_mwh == 200.0
     assert gs[0].amount_mwh == 100.0
@@ -296,10 +289,12 @@ def test_apply_streamwise_generation_stream():
 
 def test_filter_apply_generation_stream():
     """filter_apply can both transform and drop generation entries."""
-    gs = GenerationStream([
-        Generation(100.0, date(2030, 1, 1)),
-        Generation(0.0, date(2031, 1, 1)),
-    ])
+    gs = GenerationStream(
+        [
+            Generation(100.0, date(2030, 1, 1)),
+            Generation(0.0, date(2031, 1, 1)),
+        ]
+    )
     result = gs.filter_apply(
         lambda g: Generation(g.amount_mwh * 1.5, g.date, g.source, g.carrier, g.label)
         if g.amount_mwh > 0
@@ -352,11 +347,13 @@ def test_group_by_period():
 
 def test_sort_generation_stream_default():
     """sort() defaults to date ascending."""
-    gs = GenerationStream([
-        Generation(100.0, date(2032, 1, 1)),
-        Generation(100.0, date(2030, 1, 1)),
-        Generation(100.0, date(2031, 1, 1)),
-    ])
+    gs = GenerationStream(
+        [
+            Generation(100.0, date(2032, 1, 1)),
+            Generation(100.0, date(2030, 1, 1)),
+            Generation(100.0, date(2031, 1, 1)),
+        ]
+    )
     result = gs.sort()
     assert [entry.date for entry in result] == [
         date(2030, 1, 1),
@@ -367,11 +364,13 @@ def test_sort_generation_stream_default():
 
 def test_sort_generation_stream_by_attr():
     """sort(attr=...) sorts by a named Generation attribute."""
-    gs = GenerationStream([
-        Generation(300.0, date(2030, 1, 1), source="c"),
-        Generation(100.0, date(2031, 1, 1), source="a"),
-        Generation(200.0, date(2032, 1, 1), source="b"),
-    ])
+    gs = GenerationStream(
+        [
+            Generation(300.0, date(2030, 1, 1), source="c"),
+            Generation(100.0, date(2031, 1, 1), source="a"),
+            Generation(200.0, date(2032, 1, 1), source="b"),
+        ]
+    )
     result = gs.sort(attr="amount_mwh", descending=True)
     assert [entry.amount_mwh for entry in result] == [300.0, 200.0, 100.0]
 
@@ -382,7 +381,7 @@ def test_scale():
     entries = gs.entries
     scaled_gs = gs.scale(0.8)
     assert abs(scaled_gs.entries[0].amount_mwh - 160) < 1e-8
-    assert abs(scaled_gs.entries[1].amount_mwh -240) < 1e-8
+    assert abs(scaled_gs.entries[1].amount_mwh - 240) < 1e-8
 
     # Check that the original stream was not modified
     assert entries == gs.entries
@@ -468,10 +467,12 @@ def test_count_empty():
 
 def test_discounted_sum():
     """Discounted sum applies discount factors."""
-    gs = GenerationStream([
-        Generation(1000.0, date(2030, 1, 1)),
-        Generation(1000.0, date(2031, 1, 1)),
-    ])
+    gs = GenerationStream(
+        [
+            Generation(1000.0, date(2030, 1, 1)),
+            Generation(1000.0, date(2031, 1, 1)),
+        ]
+    )
     ds = gs.discounted_sum(rate=0.10, valuation_date=date(2030, 1, 1))
     # First entry: 1000 / (1.1)^0 = 1000
     # Second entry: 1000 / (1.1)^1 ≈ 909.09
@@ -488,11 +489,13 @@ def test_discounted_sum_zero_rate():
 def test_discounted_sum_uses_constant_rate_escalation_for_discounting():
     """Discounted sum matches evaluation through the shared constant-rate policy."""
     valuation_date = date(2030, 1, 1)
-    gs = GenerationStream([
-        Generation(1000.0, date(2029, 1, 1)),
-        Generation(1000.0, date(2030, 1, 1)),
-        Generation(1000.0, date(2031, 1, 1)),
-    ])
+    gs = GenerationStream(
+        [
+            Generation(1000.0, date(2029, 1, 1)),
+            Generation(1000.0, date(2030, 1, 1)),
+            Generation(1000.0, date(2031, 1, 1)),
+        ]
+    )
     policy = ConstantRateEscalation(valuation_date, rate=0.10, day_count_convention="actual/365")
 
     expected = sum(entry.amount_mwh / policy.factor(entry.date) for entry in gs.entries)
@@ -505,10 +508,12 @@ def test_discounted_sum_uses_constant_rate_escalation_for_discounting():
 
 def test_to_revenue_basic():
     """Convert generation to revenue cashflows."""
-    gs = GenerationStream([
-        Generation(1000.0, date(2030, 1, 1)),
-        Generation(1000.0, date(2031, 1, 1)),
-    ])
+    gs = GenerationStream(
+        [
+            Generation(1000.0, date(2030, 1, 1)),
+            Generation(1000.0, date(2031, 1, 1)),
+        ]
+    )
     cfs = gs.to_revenue(price_per_mwh=50.0)
     assert cfs.count() == 2
     assert abs(cfs.entries[0].amount - 50_000.0) < 1e-8
@@ -519,20 +524,24 @@ def test_to_revenue_basic():
 
 def test_to_revenue_default_label():
     """Default label should not contain index."""
-    gs = GenerationStream([
-        Generation(1000.0, date(2030, 1, 1)),
-        Generation(1000.0, date(2031, 1, 1)),
-    ])
+    gs = GenerationStream(
+        [
+            Generation(1000.0, date(2030, 1, 1)),
+            Generation(1000.0, date(2031, 1, 1)),
+        ]
+    )
     cfs = gs.to_revenue(price_per_mwh=50.0)
     assert cfs.entries[0].label == cfs.entries[1].label
 
 
 def test_to_revenue_label_with_index():
     """Indices in custom labels should be interpolated."""
-    gs = GenerationStream([
-        Generation(1000.0, date(2030, 1, 1)),
-        Generation(1000.0, date(2031, 1, 1)),
-    ])
+    gs = GenerationStream(
+        [
+            Generation(1000.0, date(2030, 1, 1)),
+            Generation(1000.0, date(2031, 1, 1)),
+        ]
+    )
     cfs = gs.to_revenue(price_per_mwh=50.0, label="revenue {n}")
     assert cfs.entries[0].label == "revenue 1"
     assert cfs.entries[1].label == "revenue 2"
@@ -540,11 +549,13 @@ def test_to_revenue_label_with_index():
 
 def test_to_revenue_escalation():
     """Revenue price escalates annually."""
-    gs = GenerationStream([
-        Generation(1000.0, date(2030, 1, 1)),
-        Generation(1000.0, date(2031, 1, 1)),
-        Generation(1000.0, date(2032, 1, 1)),
-    ])
+    gs = GenerationStream(
+        [
+            Generation(1000.0, date(2030, 1, 1)),
+            Generation(1000.0, date(2031, 1, 1)),
+            Generation(1000.0, date(2032, 1, 1)),
+        ]
+    )
     cfs = gs.to_revenue(price_per_mwh=50.0, escalation=0.10)
     assert abs(cfs.entries[0].amount - 50_000.0) < 1e-8
     assert abs(cfs.entries[1].amount - 55_000.0) < 1e-8
@@ -554,11 +565,13 @@ def test_to_revenue_escalation():
 def test_to_revenue_escalation_uses_entry_dates():
     """Revenue escalation uses exact entry dates rather than integer year steps."""
     reference_date = date(2030, 6, 1)
-    gs = GenerationStream([
-        Generation(1000.0, reference_date),
-        Generation(1000.0, date(2031, 1, 1)),
-        Generation(1000.0, date(2031, 6, 1)),
-    ])
+    gs = GenerationStream(
+        [
+            Generation(1000.0, reference_date),
+            Generation(1000.0, date(2031, 1, 1)),
+            Generation(1000.0, date(2031, 6, 1)),
+        ]
+    )
     cfs = gs.to_revenue(price_per_mwh=50.0, escalation=0.10)
     expected_dates = [reference_date, date(2031, 1, 1), date(2031, 6, 1)]
     expected_amounts = [
@@ -571,10 +584,12 @@ def test_to_revenue_escalation_uses_entry_dates():
 
 
 def test_to_revenue_supports_escalation_policy_parity_with_constant_rate():
-    gs = GenerationStream([
-        Generation(1000.0, date(2030, 7, 1)),
-        Generation(1000.0, date(2031, 7, 1)),
-    ])
+    gs = GenerationStream(
+        [
+            Generation(1000.0, date(2030, 7, 1)),
+            Generation(1000.0, date(2031, 7, 1)),
+        ]
+    )
     simple = gs.to_revenue(
         price_per_mwh=50.0,
         escalation=0.10,
@@ -610,20 +625,24 @@ def test_to_cost_basic():
 
 def test_to_cost_default_label():
     """Default label should not contain index."""
-    gs = GenerationStream([
-        Generation(1000.0, date(2030, 1, 1)),
-        Generation(1000.0, date(2031, 1, 1)),
-    ])
+    gs = GenerationStream(
+        [
+            Generation(1000.0, date(2030, 1, 1)),
+            Generation(1000.0, date(2031, 1, 1)),
+        ]
+    )
     cfs = gs.to_cost(rate_per_mwh=50.0)
     assert cfs.entries[0].label == cfs.entries[1].label
 
 
 def test_to_cost_label_with_index():
     """Indices in custom labels should be interpolated."""
-    gs = GenerationStream([
-        Generation(1000.0, date(2030, 1, 1)),
-        Generation(1000.0, date(2031, 1, 1)),
-    ])
+    gs = GenerationStream(
+        [
+            Generation(1000.0, date(2030, 1, 1)),
+            Generation(1000.0, date(2031, 1, 1)),
+        ]
+    )
     cfs = gs.to_cost(rate_per_mwh=50.0, label="cost {n}")
     assert cfs.entries[0].label == "cost 1"
     assert cfs.entries[1].label == "cost 2"
@@ -631,10 +650,12 @@ def test_to_cost_label_with_index():
 
 def test_to_cost_escalation():
     """Cost rate escalates annually."""
-    gs = GenerationStream([
-        Generation(1000.0, date(2030, 1, 1)),
-        Generation(1000.0, date(2031, 1, 1)),
-    ])
+    gs = GenerationStream(
+        [
+            Generation(1000.0, date(2030, 1, 1)),
+            Generation(1000.0, date(2031, 1, 1)),
+        ]
+    )
     cfs = gs.to_cost(rate_per_mwh=10.0, escalation=0.05)
     assert abs(cfs.entries[0].amount - (-10_000.0)) < 1e-8
     assert abs(cfs.entries[1].amount - (-10_500.0)) < 1e-6
@@ -642,11 +663,13 @@ def test_to_cost_escalation():
 
 def test_to_cost_supports_explicit_nonannual_escalation_period():
     """Cost escalation period can be specified independently of entry cadence."""
-    gs = GenerationStream([
-        Generation(1000.0, date(2030, 1, 1)),
-        Generation(1000.0, date(2030, 2, 1)),
-        Generation(1000.0, date(2030, 3, 1)),
-    ])
+    gs = GenerationStream(
+        [
+            Generation(1000.0, date(2030, 1, 1)),
+            Generation(1000.0, date(2030, 2, 1)),
+            Generation(1000.0, date(2030, 3, 1)),
+        ]
+    )
     cfs = gs.to_cost(rate_per_mwh=10.0, escalation=0.02, escalation_period="month")
     expected_amounts = [-10_000.0, -10_200.0, -10_404.0]
     for i, flow in enumerate(cfs.entries):
@@ -654,11 +677,13 @@ def test_to_cost_supports_explicit_nonannual_escalation_period():
 
 
 def test_to_cost_supports_index_series_escalation_policy():
-    gs = GenerationStream([
-        Generation(1000.0, date(2030, 1, 15)),
-        Generation(1000.0, date(2030, 2, 15)),
-        Generation(1000.0, date(2030, 3, 15)),
-    ])
+    gs = GenerationStream(
+        [
+            Generation(1000.0, date(2030, 1, 15)),
+            Generation(1000.0, date(2030, 2, 15)),
+            Generation(1000.0, date(2030, 3, 15)),
+        ]
+    )
     policy = IndexSeriesEscalation(
         reference_date=date(2030, 1, 1),
         points=(

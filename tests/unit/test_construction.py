@@ -1,25 +1,32 @@
-"""Tests for construction spend schedule APIs and helpers."""
+"""Tests for construction spend schedule APIs, helpers, and reference accessors."""
 
 import inspect
 from datetime import date, timedelta
 
 import pytest
 
-from dcaf._spend_curves import BELL_CURVE, FLAT_CURVE, LINEAR_CURVE, RAMPED_CURVE, TRIANGLE_CURVE
-from dcaf import (
-    CashFlowStream,
+from dcaf.finance import (
     ConstantRateEscalation,
     ConstructionFinancing,
     ConstructionSpendBuilder,
     EscalationBuilder,
     IndexSeriesEscalation,
-    ProFormaCategory,
     SpendProfile,
-    TaxTreatment,
     construction_spend_schedule,
+    get_spend_profile,
+    get_spend_profiles,
 )
-from dcaf.construction import ConstructionSpendConfig, _validate_schedule
-from dcaf.utils import timedelta_fractional_years
+from dcaf.finance.construction import ConstructionSpendConfig, _validate_schedule
+from dcaf.shared.types import ProFormaCategory, TaxTreatment
+from dcaf.shared.time import timedelta_fractional_years
+from dcaf.streams import CashFlowStream
+
+SPEND_PROFILES = get_spend_profiles()
+FLAT_CURVE = SPEND_PROFILES["flat"]
+BELL_CURVE = SPEND_PROFILES["bell"]
+RAMPED_CURVE = SPEND_PROFILES["ramped"]
+TRIANGLE_CURVE = SPEND_PROFILES["triangle"]
+LINEAR_CURVE = SPEND_PROFILES["linear"]
 
 
 def _annual_factor(start: date, end: date, rate: float) -> float:
@@ -66,6 +73,17 @@ def test_named_profiles_lookup(name):
     profile = SpendProfile.curve(name)  # type: ignore[arg-type]
     assert len(profile.schedule) > 0
     assert profile.name == name
+
+
+def test_get_spend_profile_matches_named_profile():
+    """The public accessor exposes the same built-in schedule used by SpendProfile."""
+    assert get_spend_profile("flat") == SpendProfile.curve("flat").schedule
+
+
+def test_spend_profiles_are_read_only():
+    """Public spend-profile registry is exposed as a read-only mapping."""
+    with pytest.raises(TypeError):
+        SPEND_PROFILES["custom"] = FLAT_CURVE  # type: ignore[index]
 
 
 def test_default_profile_matches_explicit_flat():
@@ -586,9 +604,7 @@ def test_debt_financing_keeps_full_capex_tagged_as_expense():
     )
 
     capital_cost_total = sum(
-        cf.amount
-        for cf in stream.entries
-        if cf.pro_forma_category is ProFormaCategory.CAPITAL_COST
+        cf.amount for cf in stream.entries if cf.pro_forma_category is ProFormaCategory.CAPITAL_COST
     )
 
     assert abs(capital_cost_total - (-1000)) < 1.0
@@ -717,8 +733,8 @@ def test_paid_interest_third_period_uses_only_prior_draws():
 
     third_period_years = timedelta_fractional_years(date(2025, 3, 1), date(2025, 4, 1))
     expected_third_interest = (
-        spend_flows[0].amount + spend_flows[1].amount
-    ) * 0.12 * third_period_years
+        (spend_flows[0].amount + spend_flows[1].amount) * 0.12 * third_period_years
+    )
     assert interest_flows[1].amount == pytest.approx(expected_third_interest)
 
 
@@ -764,9 +780,7 @@ def test_paid_interest_does_not_accumulate_on_balance():
         ),
     )
 
-    paid_total = abs(
-        sum(cf.amount for cf in paid_stream.entries if cf.label == "Interest Payment")
-    )
+    paid_total = abs(sum(cf.amount for cf in paid_stream.entries if cf.label == "Interest Payment"))
     capitalized_total = abs(
         sum(cf.amount for cf in capitalized_stream.entries if cf.label == "Capitalized Interest")
     )

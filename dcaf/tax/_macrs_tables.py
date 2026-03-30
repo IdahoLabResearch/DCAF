@@ -1,5 +1,7 @@
 """IRS MACRS depreciation rate tables."""
 
+from types import MappingProxyType
+
 # Tables A-1 through A-5 from IRS Publication 946, encoded as decimals.
 # Values preserve the table precision (e.g., 7.219% -> 0.07219; 6.563% -> 0.06563).
 # Source: https://www.irs.gov/pub/irs-pdf/p946.pdf
@@ -76,3 +78,32 @@ MACRS_MID_QUARTER_RATES: dict[int, dict[int, tuple[float, ...]]] = {
     },
 }
 # fmt: on
+
+
+def get_macrs_rates() -> MappingProxyType[int, tuple[float, ...]]:
+    """Return the built-in MACRS half-year rate tables as a read-only mapping.
+
+    Returns
+    -------
+    MappingProxyType[int, tuple[float, ...]]
+        Read-only mapping from MACRS property class to annual rate tuple.
+    """
+    return MappingProxyType(dict(MACRS_RATES))
+
+
+def get_macrs_mid_quarter_rates() -> MappingProxyType[
+    int, MappingProxyType[int, tuple[float, ...]]
+]:
+    """Return the built-in MACRS mid-quarter rate tables as nested read-only mappings.
+
+    Returns
+    -------
+    MappingProxyType[int, MappingProxyType[int, tuple[float, ...]]]
+        Read-only mapping from property class to quarter-specific rate tables.
+    """
+    return MappingProxyType(
+        {
+            property_class: MappingProxyType(dict(quarters))
+            for property_class, quarters in MACRS_MID_QUARTER_RATES.items()
+        }
+    )

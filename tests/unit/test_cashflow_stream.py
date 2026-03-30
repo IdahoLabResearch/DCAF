@@ -1,15 +1,9 @@
 from datetime import date
 import pytest
 
-from dcaf import (
-    CashFlow,
-    CashFlowGroup,
-    CashFlowStream,
-    GenerationStream,
-    ProFormaCategory,
-    TaxTreatment,
-)
-from dcaf.escalation import ConstantRateEscalation, EscalationBuilder, IndexSeriesEscalation
+from dcaf.shared.types import ProFormaCategory, TaxTreatment
+from dcaf.streams import CashFlow, CashFlowGroup, CashFlowStream, GenerationStream
+from dcaf.finance.escalation import ConstantRateEscalation, EscalationBuilder, IndexSeriesEscalation
 
 
 def _annual_factor(start: date, end: date, rate: float) -> float:
@@ -135,7 +129,9 @@ def test_from_recurring_annual_escalation_supports_daily_frequency():
         escalation=0.1,
     )
     expected_dates = [date(2026, 1, 1), date(2026, 1, 2), date(2026, 1, 3)]
-    expected_amounts = [100.0 * _annual_factor(start, flow_date, 0.1) for flow_date in expected_dates]
+    expected_amounts = [
+        100.0 * _annual_factor(start, flow_date, 0.1) for flow_date in expected_dates
+    ]
     for i, flow in enumerate(cf_stream.entries):
         assert flow.date == expected_dates[i]
         assert flow.amount == pytest.approx(expected_amounts[i])
@@ -268,13 +264,12 @@ def test_apply_no_condition(_create_cf_stream):
     assert cf_stream_new[1].amount == 4000
     assert cf_stream_new[2].amount == -2000
     assert cf_stream_new[3].amount == 200
-    assert (
-        cf_stream_old[0].amount == -500
-    )  # Verifies that the original object was not modified
+    assert cf_stream_old[0].amount == -500  # Verifies that the original object was not modified
 
 
 def test_apply_with_condition(_create_cf_stream):
     """Tests that CashFlowStream.apply method with a condition."""
+
     def _modify_cf(cf):
         return cf.replace(amount=cf.amount * 2)
 
@@ -574,9 +569,7 @@ def test_npv_uses_constant_rate_escalation_for_discounting(_create_cf_stream):
     policy = ConstantRateEscalation(valuation_date, rate=0.1, day_count_convention="actual/365")
 
     expected = sum(
-        flow.amount / policy.factor(flow.date)
-        for flow in cf_stream.entries
-        if flow.is_cash
+        flow.amount / policy.factor(flow.date) for flow in cf_stream.entries if flow.is_cash
     )
 
     assert cf_stream.npv(0.1, valuation_date) == pytest.approx(expected)
@@ -963,10 +956,12 @@ def test_irr_main():
     2025 is not a leap year: 2025-01-01 → 2026-01-01 = 365 days → t = 365/365 = 1.0 exactly.
     NPV = -1000 + 1100/(1+r) = 0 → r = 0.1 exactly.
     """
-    stream = CashFlowStream([
-        CashFlow(-1000.0, date(2025, 1, 1)),
-        CashFlow(1100.0, date(2026, 1, 1)),
-    ])
+    stream = CashFlowStream(
+        [
+            CashFlow(-1000.0, date(2025, 1, 1)),
+            CashFlow(1100.0, date(2026, 1, 1)),
+        ]
+    )
     assert stream.irr() == pytest.approx(0.1, abs=1e-8)
 
 
@@ -977,11 +972,13 @@ def test_irr_multi_cashflow():
     making the polynomial root analytically verifiable via the quadratic formula.
     """
     # 2025 and 2026 are both non-leap years: t₂=1.0, t₃=2.0 exactly
-    stream = CashFlowStream([
-        CashFlow(-10_000.0, date(2025, 1, 1)),
-        CashFlow(5_000.0, date(2026, 1, 1)),
-        CashFlow(7_000.0, date(2027, 1, 1)),
-    ])
+    stream = CashFlowStream(
+        [
+            CashFlow(-10_000.0, date(2025, 1, 1)),
+            CashFlow(5_000.0, date(2026, 1, 1)),
+            CashFlow(7_000.0, date(2027, 1, 1)),
+        ]
+    )
     irr = stream.irr()
     # Verify by evaluating NPV at the returned rate
     ref_date = date(2025, 1, 1)
@@ -993,42 +990,50 @@ def test_irr_multi_cashflow():
 
 def test_irr_convention_default():
     """Default 'actual/365' convention produces the same result as the explicit argument."""
-    stream = CashFlowStream([
-        CashFlow(-5_000.0, date(2025, 3, 1)),
-        CashFlow(2_000.0, date(2026, 3, 1)),
-        CashFlow(4_500.0, date(2027, 3, 1)),
-    ])
+    stream = CashFlowStream(
+        [
+            CashFlow(-5_000.0, date(2025, 3, 1)),
+            CashFlow(2_000.0, date(2026, 3, 1)),
+            CashFlow(4_500.0, date(2027, 3, 1)),
+        ]
+    )
     assert stream.irr() == stream.irr(convention="actual/365")
 
 
 def test_irr_npv_is_zero_at_irr():
     """stream.npv(stream.irr(), ref_date) ≈ 0 for a multi-year project."""
-    stream = CashFlowStream([
-        CashFlow(-50_000.0, date(2025, 1, 1)),
-        CashFlow(15_000.0, date(2026, 1, 1)),
-        CashFlow(20_000.0, date(2027, 1, 1)),
-        CashFlow(25_000.0, date(2028, 1, 1)),
-    ])
+    stream = CashFlowStream(
+        [
+            CashFlow(-50_000.0, date(2025, 1, 1)),
+            CashFlow(15_000.0, date(2026, 1, 1)),
+            CashFlow(20_000.0, date(2027, 1, 1)),
+            CashFlow(25_000.0, date(2028, 1, 1)),
+        ]
+    )
     irr = stream.irr()
     assert stream.npv(irr, date(2025, 1, 1)) == pytest.approx(0.0, abs=1e-6)
 
 
 def test_irr_no_inflows():
     """Stream with no positive cashflows raises ValueError."""
-    stream = CashFlowStream([
-        CashFlow(-1_000.0, date(2025, 1, 1)),
-        CashFlow(-500.0, date(2026, 1, 1)),
-    ])
+    stream = CashFlowStream(
+        [
+            CashFlow(-1_000.0, date(2025, 1, 1)),
+            CashFlow(-500.0, date(2026, 1, 1)),
+        ]
+    )
     with pytest.raises(ValueError, match="inflow"):
         stream.irr()
 
 
 def test_irr_no_outflows():
     """Stream with no negative cashflows raises ValueError."""
-    stream = CashFlowStream([
-        CashFlow(1_000.0, date(2025, 1, 1)),
-        CashFlow(500.0, date(2026, 1, 1)),
-    ])
+    stream = CashFlowStream(
+        [
+            CashFlow(1_000.0, date(2025, 1, 1)),
+            CashFlow(500.0, date(2026, 1, 1)),
+        ]
+    )
     with pytest.raises(ValueError, match="outflow"):
         stream.irr()
 
@@ -1045,10 +1050,12 @@ def test_irr_excludes_non_cash():
     The stream's only outflow is non-cash; cash-only view is all inflows,
     so irr() must raise ValueError rather than computing a spurious rate.
     """
-    stream = CashFlowStream([
-        CashFlow(-5_000.0, date(2025, 1, 1), is_cash=False),
-        CashFlow(1_000.0, date(2026, 1, 1)),
-        CashFlow(1_500.0, date(2027, 1, 1)),
-    ])
+    stream = CashFlowStream(
+        [
+            CashFlow(-5_000.0, date(2025, 1, 1), is_cash=False),
+            CashFlow(1_000.0, date(2026, 1, 1)),
+            CashFlow(1_500.0, date(2027, 1, 1)),
+        ]
+    )
     with pytest.raises(ValueError):
         stream.irr()

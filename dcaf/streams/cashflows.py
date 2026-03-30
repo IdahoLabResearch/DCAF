@@ -19,14 +19,14 @@ from typing import (
     overload,
 )
 
-from dcaf._streams import BaseGroup, BaseStream
-from dcaf.escalation import (
+from dcaf.streams.base import BaseGroup, BaseStream
+from dcaf.finance.escalation import (
     ConstantRateEscalation,
     EscalationPolicy,
     _constant_discount_policy,
     _resolve_escalation_policy_override,
 )
-from dcaf.types import (
+from dcaf.shared.types import (
     DayCountConvention,
     Period,
     ProFormaCategory,
@@ -37,7 +37,8 @@ from dcaf.types import (
     parse_pro_forma_category,
     parse_tax_treatment,
 )
-from dcaf.utils import time_delta_per_period, timedelta_fractional_years, format_label
+from dcaf.shared.formatting import format_label
+from dcaf.shared.time import time_delta_per_period, timedelta_fractional_years
 
 
 class _UnsetType:
@@ -51,9 +52,9 @@ def _recurring_escalation(
     *,
     start: date,
     escalation: float,
-        escalation_period: Period,
-        amount_reference_date: date | None,
-        escalation_policy: EscalationPolicy | None,
+    escalation_period: Period,
+    amount_reference_date: date | None,
+    escalation_policy: EscalationPolicy | None,
 ) -> EscalationPolicy:
     """Normalize recurring cashflow escalation kwargs into a date-based policy."""
     policy_override = _resolve_escalation_policy_override(
@@ -1003,10 +1004,7 @@ class CashFlowStream(BaseStream[CashFlow]):
                 isinstance(pro_forma_category, _UnsetType)
                 or flow.pro_forma_category == category_value
             )
-            and (
-                isinstance(tax_treatment, _UnsetType)
-                or flow.tax_treatment == tax_value
-            )
+            and (isinstance(tax_treatment, _UnsetType) or flow.tax_treatment == tax_value)
             and (is_cash is None or flow.is_cash is is_cash)
         )
 
@@ -1303,7 +1301,7 @@ class CashFlowStream(BaseStream[CashFlow]):
         >>> scaled_costs = operating_costs.scale(0.9)
         >>> result_stream = CashFlowStream.from_streams(scaled_costs, other_flows)
         """
-        return CashFlowStream([cf.replace(amount=cf.amount*factor) for cf in self.entries])
+        return CashFlowStream([cf.replace(amount=cf.amount * factor) for cf in self.entries])
 
     def sum(self) -> float:
         """
@@ -1639,7 +1637,10 @@ def _irr_initial_guess(
     negative cashflows respectively, measured in fractional years from
     ``ref_date``.  Falls back to ``0.1`` when the centroids coincide.
     """
-    def _centroid(stream: "CashFlowStream", weight: Callable[[CashFlow], float]) -> tuple[float, float]:
+
+    def _centroid(
+        stream: "CashFlowStream", weight: Callable[[CashFlow], float]
+    ) -> tuple[float, float]:
         total = 0.0
         weighted_t = 0.0
         for cf in stream:

@@ -19,8 +19,8 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Self, assert_never, overload
 
-from dcaf.cashflows import CashFlow, CashFlowStream
-from dcaf.types import (
+from dcaf.streams.cashflows import CashFlow, CashFlowStream
+from dcaf.shared.types import (
     Period,
     ProFormaCategory,
     TaxTreatment,
@@ -28,7 +28,8 @@ from dcaf.types import (
     normalize_cashflow_classification,
     parse_period,
 )
-from dcaf.utils import time_delta_per_period, format_label
+from dcaf.shared.formatting import format_label
+from dcaf.shared.time import time_delta_per_period
 
 
 @dataclass(frozen=True)
@@ -312,13 +313,9 @@ class AmortizationBuilder:
         return self
 
     @overload
-    def interest_free(
-        self, *, from_period: int = ..., to_period: int = ...
-    ) -> Self: ...
+    def interest_free(self, *, from_period: int = ..., to_period: int = ...) -> Self: ...
     @overload
-    def interest_free(
-        self, *, from_date: date = ..., to_date: date = ...
-    ) -> Self: ...
+    def interest_free(self, *, from_date: date = ..., to_date: date = ...) -> Self: ...
     def interest_free(
         self,
         *,
@@ -450,9 +447,7 @@ class AmortizationBuilder:
                     rate = new_rate
         return _PeriodConfig(periodic_rate=rate, pays_principal=pays)
 
-    def _count_remaining_amortizing(
-        self, current: int, default_config: _PeriodConfig
-    ) -> int:
+    def _count_remaining_amortizing(self, current: int, default_config: _PeriodConfig) -> int:
         """Count amortizing periods from ``current`` (inclusive) through the end.
 
         Parameters
@@ -475,7 +470,11 @@ class AmortizationBuilder:
         return count
 
     def _compute_amounts(
-        self, balance: float, config: _PeriodConfig, period_index: int, default_config: _PeriodConfig
+        self,
+        balance: float,
+        config: _PeriodConfig,
+        period_index: int,
+        default_config: _PeriodConfig,
     ) -> tuple[float, float, float]:
         """Compute interest, principal, and total payment amounts for one period.
 
@@ -588,7 +587,9 @@ class AmortizationBuilder:
             config = self._apply_rules(i, default_config)
             interest, principal, total = self._compute_amounts(balance, config, i, default_config)
             balance -= principal
-            t, intr, princ = self._make_cashflows(i + 1, self._start_date + delta * i, interest, principal, total)
+            t, intr, princ = self._make_cashflows(
+                i + 1, self._start_date + delta * i, interest, principal, total
+            )
             total_flows.append(t)
             interest_flows.append(intr)
             principal_flows.append(princ)

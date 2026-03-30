@@ -64,8 +64,7 @@ def parse_interest_treatment(treatment: str) -> _InterestTreatmentEnum:
         return _InterestTreatmentEnum(treatment)
     except ValueError as exc:
         raise ValueError(
-            f"Unknown interest treatment '{treatment}'. "
-            "Expected one of: 'capitalize', 'pay'"
+            f"Unknown interest treatment '{treatment}'. Expected one of: 'capitalize', 'pay'"
         ) from exc
 
 
@@ -105,9 +104,7 @@ def parse_tax_treatment(
         return TaxTreatment(normalized)
     except ValueError as exc:
         valid = ", ".join(member.value for member in TaxTreatment)
-        raise ValueError(
-            f"Unknown tax treatment '{treatment}'. Expected one of: {valid}"
-        ) from exc
+        raise ValueError(f"Unknown tax treatment '{treatment}'. Expected one of: {valid}") from exc
 
 
 def normalize_cashflow_classification(

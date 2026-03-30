@@ -2,9 +2,9 @@
 
 from datetime import date
 
-from dcaf.cashflows import CashFlow, CashFlowStream
-from dcaf.tax_liability import compute_taxable_income, tax_liability
-from dcaf.types import ProFormaCategory, TaxTreatment
+from dcaf.streams.cashflows import CashFlow, CashFlowStream
+from dcaf.tax.liability import compute_taxable_income, tax_liability
+from dcaf.shared.types import ProFormaCategory, TaxTreatment
 
 
 class TestComputeTaxableIncome:

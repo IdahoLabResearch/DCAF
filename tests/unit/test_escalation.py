@@ -2,7 +2,7 @@ from datetime import date
 
 import pytest
 
-from dcaf.escalation import (
+from dcaf.finance.escalation import (
     CompositeEscalation,
     ConstantRateEscalation,
     EscalationBuilder,

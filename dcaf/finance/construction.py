@@ -6,15 +6,15 @@ from dataclasses import dataclass, field, replace as dc_replace
 from datetime import date, timedelta
 from typing import Self, cast
 
-from dcaf.cashflows import CashFlow, CashFlowStream
-from dcaf.escalation import (
+from dcaf.streams.cashflows import CashFlow, CashFlowStream
+from dcaf.finance.escalation import (
     ConstantRateEscalation,
     EscalationPolicy,
     _coerce_escalation_policy,
     _resolve_escalation_policy_override,
 )
-from dcaf._spend_curves import get_spend_curve
-from dcaf.types import (
+from dcaf.finance._spend_curves import get_spend_curve
+from dcaf.shared.types import (
     InterestTreatment,
     Period,
     ProFormaCategory,
@@ -26,7 +26,8 @@ from dcaf.types import (
     parse_interest_treatment,
     parse_period,
 )
-from dcaf.utils import time_delta_per_period, timedelta_fractional_years
+from dcaf.shared.time import time_delta_per_period, timedelta_fractional_years
+
 
 class _UnsetType:
     """Sentinel type for optional builder arguments."""
@@ -110,7 +111,7 @@ class SpendProfile:
     --------
     Create a named profile:
 
-    >>> from dcaf.construction import SpendProfile
+    >>> from dcaf.finance.construction import SpendProfile
     >>> profile = SpendProfile.curve("flat")
     >>> profile.name
     'flat'
@@ -145,7 +146,7 @@ class SpendProfile:
 
         Examples
         --------
-        >>> from dcaf.construction import SpendProfile
+        >>> from dcaf.finance.construction import SpendProfile
         >>> SpendProfile.curve("linear").name
         'linear'
         """
@@ -167,7 +168,7 @@ class SpendProfile:
 
         Examples
         --------
-        >>> from dcaf.construction import SpendProfile
+        >>> from dcaf.finance.construction import SpendProfile
         >>> profile = SpendProfile.custom(((0.0, 0.7), (0.5, 0.3), (1.0, 0.0)))
         >>> profile.schedule[0]
         (0.0, 0.7)
@@ -208,7 +209,7 @@ class ConstructionFinancing:
     --------
     Unlevered construction:
 
-    >>> from dcaf.construction import ConstructionFinancing
+    >>> from dcaf.finance.construction import ConstructionFinancing
     >>> ConstructionFinancing()
     ConstructionFinancing(
         debt_fraction=0.0,
@@ -276,7 +277,7 @@ class ConstructionFinancing:
 
         Examples
         --------
-        >>> from dcaf.construction import ConstructionFinancing
+        >>> from dcaf.finance.construction import ConstructionFinancing
         >>> financing = ConstructionFinancing.debt(0.8, interest_rate=0.05)
         >>> financing.interest_rate
         0.05
@@ -329,7 +330,7 @@ class ConstructionSpendConfig:
     Examples
     --------
     >>> from datetime import date
-    >>> from dcaf.construction import ConstructionSpendConfig, SpendProfile
+    >>> from dcaf.finance.construction import ConstructionSpendConfig, SpendProfile
     >>> config = ConstructionSpendConfig(
     ...     total_cost=1_000_000,
     ...     start_date=date(2025, 1, 1),
@@ -377,7 +378,9 @@ class _ScheduledSpend:
 def _construction_simple_escalation(config: ConstructionSpendConfig) -> ConstantRateEscalation:
     """Normalize construction escalation config into a date-based policy."""
     return ConstantRateEscalation(
-        reference_date=config.start_date if config.amount_reference_date is None else config.amount_reference_date,
+        reference_date=config.start_date
+        if config.amount_reference_date is None
+        else config.amount_reference_date,
         rate=config.escalation,
         period=cast(Period, parse_period(str(config.escalation_period)).value),
     )
@@ -432,9 +435,7 @@ def _scheduled_spend_amount(
     t_end = (period_end - config.start_date).days / total_days
     spend_fraction = _integrate_curve(config.profile.schedule, t_start, t_end)
 
-    mid_days = (
-        (current - config.start_date).days + (period_end - config.start_date).days
-    ) // 2
+    mid_days = ((current - config.start_date).days + (period_end - config.start_date).days) // 2
     mid_date = config.start_date + timedelta(days=mid_days)
     escalation_factor = escalation_policy.factor(mid_date)
     return config.total_cost * spend_fraction * escalation_factor
@@ -450,7 +451,9 @@ def _scheduled_spends(
         config.end_date,
         parse_period(str(config.period)),
     )
-    effective_policy = _construction_simple_escalation(config) if escalation_policy is None else escalation_policy
+    effective_policy = (
+        _construction_simple_escalation(config) if escalation_policy is None else escalation_policy
+    )
     spends: list[_ScheduledSpend] = []
 
     for current, period_end in periods:
@@ -595,7 +598,7 @@ class ConstructionSpendBuilder:
     Examples
     --------
     >>> from datetime import date
-    >>> from dcaf.construction import ConstructionSpendBuilder
+    >>> from dcaf.finance.construction import ConstructionSpendBuilder
     >>> stream = (
     ...     ConstructionSpendBuilder(1_000_000, date(2025, 1, 1), date(2026, 1, 1))
     ...     .curve("linear")
@@ -650,7 +653,7 @@ class ConstructionSpendBuilder:
         Examples
         --------
         >>> from datetime import date
-        >>> from dcaf.construction import ConstructionSpendBuilder, ConstructionSpendConfig
+        >>> from dcaf.finance.construction import ConstructionSpendBuilder, ConstructionSpendConfig
         >>> config = ConstructionSpendConfig(1_000_000, date(2025, 1, 1), date(2026, 1, 1))
         >>> builder = ConstructionSpendBuilder.from_config(config)
         >>> builder.config.total_cost
@@ -689,7 +692,7 @@ class ConstructionSpendBuilder:
         Examples
         --------
         >>> from datetime import date
-        >>> from dcaf.construction import ConstructionSpendBuilder
+        >>> from dcaf.finance.construction import ConstructionSpendBuilder
         >>> builder = ConstructionSpendBuilder(1_000_000, date(2025, 1, 1), date(2026, 1, 1))
         >>> builder.config.profile.name
         'flat'
@@ -713,7 +716,7 @@ class ConstructionSpendBuilder:
         Examples
         --------
         >>> from datetime import date
-        >>> from dcaf.construction import ConstructionSpendBuilder, SpendProfile
+        >>> from dcaf.finance.construction import ConstructionSpendBuilder, SpendProfile
         >>> builder = ConstructionSpendBuilder(1_000_000, date(2025, 1, 1), date(2026, 1, 1))
         >>> updated = builder.profile(SpendProfile.curve("bell"))
         >>> updated.config.profile.name
@@ -737,7 +740,7 @@ class ConstructionSpendBuilder:
         Examples
         --------
         >>> from datetime import date
-        >>> from dcaf.construction import ConstructionSpendBuilder
+        >>> from dcaf.finance.construction import ConstructionSpendBuilder
         >>> builder = ConstructionSpendBuilder(1_000_000, date(2025, 1, 1), date(2026, 1, 1))
         >>> builder.curve("linear").config.profile.name
         'linear'
@@ -760,7 +763,7 @@ class ConstructionSpendBuilder:
         Examples
         --------
         >>> from datetime import date
-        >>> from dcaf.construction import ConstructionSpendBuilder
+        >>> from dcaf.finance.construction import ConstructionSpendBuilder
         >>> builder = ConstructionSpendBuilder(1_000_000, date(2025, 1, 1), date(2026, 1, 1))
         >>> updated = builder.schedule(((0.0, 0.6), (0.5, 0.4), (1.0, 0.0)))
         >>> updated.config.profile.name is None
@@ -798,7 +801,7 @@ class ConstructionSpendBuilder:
         Examples
         --------
         >>> from datetime import date
-        >>> from dcaf.construction import ConstructionSpendBuilder
+        >>> from dcaf.finance.construction import ConstructionSpendBuilder
         >>> builder = ConstructionSpendBuilder(1_000_000, date(2025, 1, 1), date(2026, 1, 1))
         >>> updated = builder.financing(0.75, interest_rate=0.06, treatment="pay")
         >>> updated.config.financing.debt_fraction
@@ -834,8 +837,8 @@ class ConstructionSpendBuilder:
         Examples
         --------
         >>> from datetime import date
-        >>> from dcaf.construction import ConstructionSpendBuilder
-        >>> from dcaf.escalation import ConstantRateEscalation
+        >>> from dcaf.finance.construction import ConstructionSpendBuilder
+        >>> from dcaf.finance.escalation import ConstantRateEscalation
         >>> builder = ConstructionSpendBuilder(
         ...     1_000_000,
         ...     date(2025, 1, 1),
@@ -889,7 +892,7 @@ class ConstructionSpendBuilder:
         Examples
         --------
         >>> from datetime import date
-        >>> from dcaf.construction import ConstructionSpendBuilder
+        >>> from dcaf.finance.construction import ConstructionSpendBuilder
         >>> builder = ConstructionSpendBuilder(1_000_000, date(2025, 1, 1), date(2026, 1, 1))
         >>> builder.escalation(0.03).config.escalation
         0.03
@@ -929,7 +932,7 @@ class ConstructionSpendBuilder:
         Examples
         --------
         >>> from datetime import date
-        >>> from dcaf.construction import ConstructionSpendBuilder
+        >>> from dcaf.finance.construction import ConstructionSpendBuilder
         >>> stream = (
         ...     ConstructionSpendBuilder(1_000_000, date(2025, 1, 1), date(2025, 7, 1))
         ...     .curve("linear")
@@ -938,7 +941,9 @@ class ConstructionSpendBuilder:
         >>> stream[0].label
         'Construction Spend'
         """
-        return CashFlowStream(_build_cashflows(self._config, escalation_policy=self._escalation_policy))
+        return CashFlowStream(
+            _build_cashflows(self._config, escalation_policy=self._escalation_policy)
+        )
 
 
 def construction_spend_schedule(
@@ -1004,14 +1009,14 @@ def construction_spend_schedule(
     Basic usage with the implicit ``"flat"`` profile:
 
     >>> from datetime import date
-    >>> from dcaf.construction import construction_spend_schedule
+    >>> from dcaf.finance.construction import construction_spend_schedule
     >>> stream = construction_spend_schedule(1_000_000, date(2025, 1, 1), date(2026, 1, 1))
     >>> len(stream.entries) > 0
     True
 
     Usage with explicit financing and a named profile:
 
-    >>> from dcaf.construction import ConstructionFinancing
+    >>> from dcaf.finance.construction import ConstructionFinancing
     >>> financed = construction_spend_schedule(
     ...     1_000_000,
     ...     date(2025, 1, 1),

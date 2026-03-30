@@ -4,7 +4,8 @@ from datetime import date
 
 import pytest
 
-from dcaf import ProFormaCategory, TaxTreatment, vdb, vdb_schedule
+from dcaf.shared.types import ProFormaCategory, TaxTreatment
+from dcaf.tax import vdb, vdb_schedule
 
 
 def test_vdb_matches_documented_excel_example():
@@ -176,7 +177,7 @@ def test_vdb_schedule_label_with_interpolated_index():
         placed_in_service=date(2027, 1, 1),
         life=20,
         frequency="quarter",
-        label="vdb depreciation period {n}"
+        label="vdb depreciation period {n}",
     )
     assert stream.entries[0].label == "vdb depreciation period 1"
     assert stream.entries[19].label == "vdb depreciation period 20"
@@ -219,7 +220,7 @@ def test_vdb_schedule_mid_quarter_convention_uses_explicit_date_grid():
         convention="mid-quarter",
         schedule_dates=schedule_dates,
         terminal_catch_up=True,
-        label="VDB Depreciation Period {n}"
+        label="VDB Depreciation Period {n}",
     )
 
     assert [entry.date for entry in stream.entries] == list(schedule_dates[1:])

@@ -2,7 +2,8 @@ from dataclasses import FrozenInstanceError
 from datetime import date
 import pytest
 
-from dcaf import CashFlow, ProFormaCategory, TaxTreatment
+from dcaf.shared.types import ProFormaCategory, TaxTreatment
+from dcaf.streams import CashFlow
 
 
 @pytest.fixture()

@@ -9,9 +9,10 @@ Functions:
     tax_liability: Apply tax rate to taxable income to generate tax payment cashflows
 """
 
-from dcaf.cashflows import CashFlow, CashFlowStream
-from dcaf.types import ProFormaCategory, TaxTreatment, normalize_cashflow_classification
-from dcaf.utils import period_end, format_label
+from dcaf.streams.cashflows import CashFlow, CashFlowStream
+from dcaf.shared.types import ProFormaCategory, TaxTreatment, normalize_cashflow_classification
+from dcaf.shared.formatting import format_label
+from dcaf.shared.time import period_end
 
 
 def compute_taxable_income(

@@ -1,10 +1,12 @@
+"""Shared time and compounding utilities."""
+
 from datetime import date
 from functools import cache
 from typing import assert_never
 
 from dateutil.relativedelta import relativedelta
 
-from dcaf.types import DayCountConvention, Period, _PeriodEnum, parse_period
+from dcaf.shared.types import DayCountConvention, Period, _PeriodEnum, parse_period
 
 
 def _normalize_period(period: Period) -> _PeriodEnum:
@@ -53,9 +55,6 @@ def timedelta_fractional_years(
     start: date, end: date, convention: DayCountConvention = "actual/365"
 ) -> float:
     """Calculate the year fraction between two dates using the given day count convention."""
-    # For discounting purposes, we need to choose a convention for how many days are in a year. The default
-    # behavior is the standard "actual/365" convention, which assumes every year--including leap years--has
-    # 365 days.
     match convention:
         case "actual/365":
             return (end - start).days / 365.0
@@ -64,24 +63,7 @@ def timedelta_fractional_years(
 
 
 def compound_factor(rate: float, periods: float) -> float:
-    """
-    Compute a compound growth/discount factor.
-
-    Used for both discounting (``amount / compound_factor(rate, years)``)
-    and escalation (``amount * compound_factor(rate, periods)``).
-
-    Parameters
-    ----------
-    rate : float
-        The periodic rate (e.g., 0.10 for 10%).
-    periods : float
-        Number of compounding periods (can be fractional).
-
-    Returns
-    -------
-    float
-        ``(1 + rate) ** periods``.
-    """
+    """Compute a compound growth or discount factor."""
     return (1.0 + rate) ** periods
 
 
@@ -97,7 +79,9 @@ def elapsed_months(start_date: date, end_date: date) -> float:
         anchor = start_date + relativedelta(months=whole_months)
 
     next_anchor = anchor + relativedelta(months=1)
-    partial_month = (end_date - anchor).days / (next_anchor - anchor).days if end_date > anchor else 0.0
+    partial_month = (
+        (end_date - anchor).days / (next_anchor - anchor).days if end_date > anchor else 0.0
+    )
     return whole_months + partial_month
 
 
@@ -120,11 +104,6 @@ def elapsed_periods(
             return float((end_date - start_date).days)
         case _:
             assert_never(normalized_period)
-
-
-def format_label(label: str, period_number: int) -> str:
-    """Apply the shared ``{n}`` label templating convention."""
-    return label.format(n=period_number) if "{n}" in label else label
 
 
 @cache

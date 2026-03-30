@@ -4,12 +4,12 @@ from datetime import date
 
 import pytest
 
-from dcaf.cashflows import CashFlow, CashFlowStream
-from dcaf.depreciation import macrs_schedule
-from dcaf.escalation import ConstantRateEscalation
-from dcaf.generation import Generation, GenerationStream
-from dcaf.tax_incentives import itc, itc_adjusted_basis, ptc
-from dcaf.types import ProFormaCategory, TaxTreatment
+from dcaf.streams.cashflows import CashFlow, CashFlowStream
+from dcaf.tax.depreciation import macrs_schedule
+from dcaf.finance.escalation import ConstantRateEscalation
+from dcaf.streams.generation import Generation, GenerationStream
+from dcaf.tax.incentives import itc, itc_adjusted_basis, ptc
+from dcaf.shared.types import ProFormaCategory, TaxTreatment
 
 
 def _annual_factor(start: date, end: date, rate: float) -> float:
@@ -38,11 +38,13 @@ class TestITC:
 
     def test_itc_multi_year_capex(self):
         """Construction spanning 3 years → total basis sums correctly."""
-        capex = CashFlowStream([
-            _capex(-4_000_000, date(2027, 1, 1), "Year 1"),
-            _capex(-3_000_000, date(2028, 1, 1), "Year 2"),
-            _capex(-3_000_000, date(2029, 1, 1), "Year 3"),
-        ])
+        capex = CashFlowStream(
+            [
+                _capex(-4_000_000, date(2027, 1, 1), "Year 1"),
+                _capex(-3_000_000, date(2028, 1, 1), "Year 2"),
+                _capex(-3_000_000, date(2029, 1, 1), "Year 3"),
+            ]
+        )
         result = itc(capex, rate=0.30, placed_in_service=date(2030, 1, 1))
 
         assert len(result.entries) == 1
@@ -104,12 +106,14 @@ class TestPTC:
 
     def test_basic_ptc(self):
         """PTC applies only within the eligibility window."""
-        generation = GenerationStream([
-            Generation(1000.0, date(2030, 1, 1)),
-            Generation(1000.0, date(2031, 1, 1)),
-            Generation(1000.0, date(2032, 1, 1)),
-            Generation(1000.0, date(2033, 1, 1)),
-        ])
+        generation = GenerationStream(
+            [
+                Generation(1000.0, date(2030, 1, 1)),
+                Generation(1000.0, date(2031, 1, 1)),
+                Generation(1000.0, date(2032, 1, 1)),
+                Generation(1000.0, date(2033, 1, 1)),
+            ]
+        )
         result = ptc(generation, rate_per_mwh=27.5, years=2)
 
         assert result.count() == 2
@@ -117,10 +121,12 @@ class TestPTC:
 
     def test_ptc_escalation(self):
         """PTC rate escalates."""
-        generation = GenerationStream([
-            Generation(1000.0, date(2030, 1, 1)),
-            Generation(1000.0, date(2031, 1, 1)),
-        ])
+        generation = GenerationStream(
+            [
+                Generation(1000.0, date(2030, 1, 1)),
+                Generation(1000.0, date(2031, 1, 1)),
+            ]
+        )
         result = ptc(generation, rate_per_mwh=10.0, years=5, escalation=0.02)
 
         assert result.entries[0].amount == pytest.approx(10_000.0)
@@ -129,10 +135,12 @@ class TestPTC:
     def test_ptc_supports_earlier_amount_reference_date(self):
         """PTC rates can be escalated from an earlier known-value date."""
         reference_date = date(2030, 1, 1)
-        generation = GenerationStream([
-            Generation(1000.0, date(2030, 7, 1)),
-            Generation(1000.0, date(2030, 8, 1)),
-        ])
+        generation = GenerationStream(
+            [
+                Generation(1000.0, date(2030, 7, 1)),
+                Generation(1000.0, date(2030, 8, 1)),
+            ]
+        )
         result = ptc(
             generation,
             rate_per_mwh=10.0,
@@ -192,10 +200,12 @@ class TestITCAdjustedBasis:
 
     def test_adjusted_basis_multi_year_capex(self):
         """Multi-year construction: total basis is summed before adjustment."""
-        capex = CashFlowStream([
-            _capex(-60_000_000, date(2027, 1, 1)),
-            _capex(-40_000_000, date(2028, 1, 1)),
-        ])
+        capex = CashFlowStream(
+            [
+                _capex(-60_000_000, date(2027, 1, 1)),
+                _capex(-40_000_000, date(2028, 1, 1)),
+            ]
+        )
         # 100M × (1 - 0.15) = 85M
         assert itc_adjusted_basis(capex, rate=0.30) == pytest.approx(85_000_000)
 
@@ -232,15 +242,17 @@ class TestIntegration:
     def test_itc_npv(self):
         """ITC credit (positive cashflow) raises NPV relative to CAPEX alone."""
         placed = date(2030, 1, 1)
-        capex = CashFlowStream([
-            CashFlow(
-                amount=-100_000_000,
-                date=date(2028, 6, 1),
-                label="CAPEX",
-                is_cash=True,
-                pro_forma_category=ProFormaCategory.CAPITAL_COST,
-            )
-        ])
+        capex = CashFlowStream(
+            [
+                CashFlow(
+                    amount=-100_000_000,
+                    date=date(2028, 6, 1),
+                    label="CAPEX",
+                    is_cash=True,
+                    pro_forma_category=ProFormaCategory.CAPITAL_COST,
+                )
+            ]
+        )
         credit = itc(capex, rate=0.30, placed_in_service=placed)
 
         project = CashFlowStream.from_streams(capex, credit)

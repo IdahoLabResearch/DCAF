@@ -11,16 +11,16 @@ Functions:
 
 from datetime import date
 
-from dcaf.cashflows import CashFlow, CashFlowStream
-from dcaf.escalation import EscalationPolicy
-from dcaf.generation import GenerationStream, _generation_escalation
-from dcaf.types import (
+from dcaf.streams.cashflows import CashFlow, CashFlowStream
+from dcaf.finance.escalation import EscalationPolicy
+from dcaf.streams.generation import GenerationStream, _generation_escalation
+from dcaf.shared.types import (
     Period,
     ProFormaCategory,
     TaxTreatment,
     normalize_cashflow_classification,
 )
-from dcaf.utils import format_label
+from dcaf.shared.formatting import format_label
 
 
 def ptc(

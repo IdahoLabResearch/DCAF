@@ -4,7 +4,8 @@ from datetime import date
 
 import pytest
 
-from dcaf import AmortizationSchedule, ProFormaCategory, TaxTreatment
+from dcaf.finance import AmortizationSchedule
+from dcaf.shared.types import ProFormaCategory, TaxTreatment
 
 
 @pytest.fixture()

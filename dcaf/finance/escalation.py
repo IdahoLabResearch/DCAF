@@ -14,12 +14,13 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Literal, Protocol, cast, runtime_checkable
 
-from dcaf.types import DayCountConvention, Period, parse_period
-from dcaf.utils import compound_factor, elapsed_periods
+from dcaf.shared.types import DayCountConvention, Period, parse_period
+from dcaf.shared.time import compound_factor, elapsed_periods
 
 type IndexPoint = tuple[date, float]
 type IndexSeries = tuple[IndexPoint, ...]
 type IndexInterpolation = Literal["step"]
+
 
 @runtime_checkable
 class EscalationPolicy(Protocol):
@@ -130,9 +131,11 @@ def _constant_discount_policy(
         day_count_convention=convention,
     )
 
-#===================================================================
+
+# ===================================================================
 # ESCALATION POLICY IMPLEMENTATIONS
-#===================================================================
+# ===================================================================
+
 
 @dataclass(frozen=True)
 class ConstantRateEscalation:
@@ -388,14 +391,13 @@ class CompositeEscalation:
 
         for index in range(reference_index + 1, len(self.segments)):
             previous_segment = self.segments[index - 1]
-            anchor_factors[index] = (
-                anchor_factors[index - 1] * previous_segment.policy.factor(segment_starts[index])
+            anchor_factors[index] = anchor_factors[index - 1] * previous_segment.policy.factor(
+                segment_starts[index]
             )
 
         for index in range(reference_index - 1, -1, -1):
-            anchor_factors[index] = (
-                anchor_factors[index + 1]
-                / self.segments[index].policy.factor(segment_starts[index + 1])
+            anchor_factors[index] = anchor_factors[index + 1] / self.segments[index].policy.factor(
+                segment_starts[index + 1]
             )
 
         object.__setattr__(self, "_segment_anchor_factors", tuple(anchor_factors))
@@ -415,9 +417,9 @@ class CompositeEscalation:
             ``target_date``.
         """
         target_index = self._segment_index(target_date)
-        return self._segment_anchor_factors[target_index] * self.segments[target_index].policy.factor(
-            target_date
-        )
+        return self._segment_anchor_factors[target_index] * self.segments[
+            target_index
+        ].policy.factor(target_date)
 
     def _segment_index(self, target_date: date, starts: tuple[date, ...] | None = None) -> int:
         """Return the index of the segment covering ``target_date``."""
@@ -427,9 +429,11 @@ class CompositeEscalation:
             raise ValueError("CompositeEscalation does not support dates before the first segment")
         return index
 
-#===================================================================
+
+# ===================================================================
 # BUILDER API FOR ADVANCED USERS
-#===================================================================
+# ===================================================================
+
 
 @dataclass(frozen=True)
 class EscalationBuilder:
@@ -471,7 +475,9 @@ class EscalationBuilder:
     reference_date: date
     _segments: tuple[EscalationSegment, ...] = ()
 
-    def segment(self, policy: EscalationPolicy, *, start_date: date | None = None) -> "EscalationBuilder":
+    def segment(
+        self, policy: EscalationPolicy, *, start_date: date | None = None
+    ) -> "EscalationBuilder":
         """Append a policy segment to the builder.
 
         Parameters

@@ -4,9 +4,9 @@ from datetime import date
 
 import pytest
 
-from dcaf import ProFormaCategory, TaxTreatment
-from dcaf.escalation import IndexSeriesEscalation
-from dcaf.opex import fixed_opex
+from dcaf.finance import fixed_opex
+from dcaf.finance.escalation import IndexSeriesEscalation
+from dcaf.shared.types import ProFormaCategory, TaxTreatment
 
 
 def _annual_factor(start: date, end: date, rate: float) -> float:
@@ -52,7 +52,9 @@ def test_annual_escalation_is_date_based_for_monthly_opex():
         escalation=0.12,
     )
     expected_dates = [date(2025, 1, 1), date(2025, 2, 1), date(2025, 3, 1)]
-    expected_amounts = [-12_000 * _annual_factor(start, flow_date, 0.12) for flow_date in expected_dates]
+    expected_amounts = [
+        -12_000 * _annual_factor(start, flow_date, 0.12) for flow_date in expected_dates
+    ]
     for i, flow in enumerate(stream.entries):
         assert flow.date == expected_dates[i]
         assert flow.amount == pytest.approx(expected_amounts[i])
@@ -95,7 +97,9 @@ def test_escalation_policy_is_forwarded():
         escalation_policy=policy,
     )
 
-    assert [flow.amount for flow in stream.entries] == pytest.approx([-10_000.0, -10_200.0, -10_404.0])
+    assert [flow.amount for flow in stream.entries] == pytest.approx(
+        [-10_000.0, -10_200.0, -10_404.0]
+    )
 
 
 def test_non_default_frequency():

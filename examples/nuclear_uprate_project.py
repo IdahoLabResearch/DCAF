@@ -154,16 +154,21 @@ print(f"Operating years:    {analysis.timeline.operating_years:.2f}")
 print(f"Discount rate:      {discount_rate:.4%}")
 print()
 print(f"Total generation (MWh):      {analysis.generation.sum():,.0f}")
-print(f"Construction cash flow ($):  {analysis.cashflow_components['uprate:construction'].sum():,.0f}")
+print(
+    f"Construction cash flow ($):  {analysis.cashflow_components['uprate:construction'].sum():,.0f}"
+)
 print(f"Revenue cash flow ($):       {analysis.cashflow_components['uprate:revenue'].sum():,.0f}")
 print(f"PTC cash flow ($):           {analysis.cashflow_components['uprate:ptc'].sum():,.0f}")
-print(f"Debt service cash flow ($):  {analysis.cashflow_components['uprate:debt_service'].sum():,.0f}")
+print(
+    f"Debt service cash flow ($):  {analysis.cashflow_components['uprate:debt_service'].sum():,.0f}"
+)
 print()
 print(f"NPV ($):                     {npv:,.0f}")
 print(f"Discounted generation (MWh): {discounted_generation:,.0f}")
 print(
-    "Levelized cost ($/MWh):     "
-    f"{levelized_cost:,.2f}" if levelized_cost is not None else "Levelized cost ($/MWh):     n/a"
+    f"Levelized cost ($/MWh):     {levelized_cost:,.2f}"
+    if levelized_cost is not None
+    else "Levelized cost ($/MWh):     n/a"
 )
 
 pro_forma.to_csv("proforma.csv")

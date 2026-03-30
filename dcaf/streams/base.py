@@ -11,8 +11,8 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Callable, Collection, Iterable, Iterator, Protocol, Self, cast, overload
 
-from dcaf.types import Period, SupportsLessThan
-from dcaf.utils import period_start
+from dcaf.shared.types import Period, SupportsLessThan
+from dcaf.shared.time import period_start
 
 
 class _StreamProtocol[EntryT](Protocol):
@@ -42,9 +42,7 @@ class BaseStream[EntryT]:
     def _validate_stream_type(cls, stream: "BaseStream[object]") -> None:
         """Reject combining streams from different concrete domains."""
         if type(stream) is not cls:
-            raise TypeError(
-                f"Cannot combine {cls.__name__} with {type(stream).__name__}"
-            )
+            raise TypeError(f"Cannot combine {cls.__name__} with {type(stream).__name__}")
 
     def _new(self, entries: Iterable[EntryT]) -> Self:
         """Construct a new instance of the current concrete stream type."""
@@ -59,9 +57,7 @@ class BaseStream[EntryT]:
         return lambda entry: getattr(entry, attr)
 
     @classmethod
-    def from_streams(
-        cls, *iterables: "BaseStream[EntryT] | EntryT | Iterable[EntryT]"
-    ) -> Self:
+    def from_streams(cls, *iterables: "BaseStream[EntryT] | EntryT | Iterable[EntryT]") -> Self:
         """Combine stream objects, single entries, and iterables into one stream."""
         all_entries: list[EntryT] = []
 
@@ -169,7 +165,9 @@ class BaseStream[EntryT]:
             result = [entry for entry in result if getattr(entry, "date") <= end]
         return self._new(result)
 
-    def _grouped_entries_by_key[KeyT](self, fn: Callable[[EntryT], KeyT]) -> dict[KeyT, list[EntryT]]:
+    def _grouped_entries_by_key[KeyT](
+        self, fn: Callable[[EntryT], KeyT]
+    ) -> dict[KeyT, list[EntryT]]:
         """Group entries by an arbitrary key function."""
         groups: defaultdict[KeyT, list[EntryT]] = defaultdict(list)
         for entry in self.entries:
@@ -282,7 +280,10 @@ class BaseGroup[KeyT, EntryT, StreamT]:
             )
 
         return self._new(
-            {key: fn(stream) if key in transformed_keys else stream for key, stream in self.groups.items()}
+            {
+                key: fn(stream) if key in transformed_keys else stream
+                for key, stream in self.groups.items()
+            }
         )
 
     def filter_groups(self, fn: Callable[[KeyT, StreamT], bool]) -> Self:
@@ -329,8 +330,7 @@ class BaseGroup[KeyT, EntryT, StreamT]:
     def sum(self) -> dict[KeyT, float]:
         """Return the per-group sums."""
         return {
-            key: cast(_StreamProtocol[EntryT], stream).sum()
-            for key, stream in self.groups.items()
+            key: cast(_StreamProtocol[EntryT], stream).sum() for key, stream in self.groups.items()
         }
 
     def count(self) -> dict[KeyT, int]:

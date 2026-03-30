@@ -11,9 +11,9 @@ from datetime import date, timedelta
 from math import isfinite
 from typing import assert_never
 
-from dcaf._macrs_tables import MACRS_MID_QUARTER_RATES, MACRS_RATES
-from dcaf.cashflows import CashFlow, CashFlowStream
-from dcaf.types import (
+from dcaf.tax._macrs_tables import MACRS_MID_QUARTER_RATES, MACRS_RATES
+from dcaf.streams.cashflows import CashFlow, CashFlowStream
+from dcaf.shared.types import (
     MACRSConvention,
     MACRSPropertyClass,
     Period,
@@ -22,7 +22,8 @@ from dcaf.types import (
     VDBConvention,
     normalize_cashflow_classification,
 )
-from dcaf.utils import time_delta_per_period, format_label
+from dcaf.shared.formatting import format_label
+from dcaf.shared.time import time_delta_per_period
 
 
 def _validate_vdb_inputs(

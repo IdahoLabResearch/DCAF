@@ -1,16 +1,15 @@
-"""Tests for MACRS depreciation: MACRS_RATES, MACRS_MID_QUARTER_RATES, and from_macrs."""
+"""Tests for MACRS depreciation and public reference-table accessors."""
 
 from datetime import date
 
 import pytest
 
-from dcaf import (
-    MACRS_MID_QUARTER_RATES,
-    MACRS_RATES,
-    ProFormaCategory,
-    TaxTreatment,
-    macrs_schedule,
-)
+from dcaf.shared.types import ProFormaCategory, TaxTreatment
+from dcaf.tax import get_macrs_mid_quarter_rates, get_macrs_rates, macrs_schedule
+
+
+MACRS_RATES = get_macrs_rates()
+MACRS_MID_QUARTER_RATES = get_macrs_mid_quarter_rates()
 
 
 # === MACRS_RATES ===
@@ -19,6 +18,12 @@ from dcaf import (
 def test_macrs_rates_keys():
     """All six IRS property classes are present."""
     assert set(MACRS_RATES.keys()) == {3, 5, 7, 10, 15, 20}
+
+
+def test_macrs_rates_are_read_only():
+    """Public MACRS half-year tables are exposed as a read-only mapping."""
+    with pytest.raises(TypeError):
+        MACRS_RATES[3] = (1.0,)  # type: ignore[index]
 
 
 @pytest.mark.parametrize("prop_class", [3, 5, 7, 10, 15, 20])
@@ -105,6 +110,12 @@ def test_macrs_mid_quarter_rates_keys():
     assert set(MACRS_MID_QUARTER_RATES.keys()) == {3, 5, 7, 10, 15, 20}
     for prop_class in MACRS_MID_QUARTER_RATES:
         assert set(MACRS_MID_QUARTER_RATES[prop_class].keys()) == {1, 2, 3, 4}
+
+
+def test_macrs_mid_quarter_rates_are_read_only():
+    """Public MACRS mid-quarter tables are exposed as nested read-only mappings."""
+    with pytest.raises(TypeError):
+        MACRS_MID_QUARTER_RATES[3][1] = (1.0,)  # type: ignore[index]
 
 
 @pytest.mark.parametrize("prop_class", [3, 5, 7, 10, 15, 20])
