@@ -277,8 +277,12 @@ class ProjectAnalysis:
         )
         levelized_cost = None
         if discounted_generation > 0.0:
+            cost_flows = total_stream.filter(
+                lambda flow: flow.pro_forma_category
+                in (ProFormaCategory.OPERATING_COST, ProFormaCategory.CAPITAL_COST)
+            ).cash_only()
             levelized_cost = (
-                -cash_only.outflows().npv(
+                -cost_flows.outflows().npv(
                     rate=effective_rate,
                     valuation_date=effective_valuation_date,
                     convention=convention,
