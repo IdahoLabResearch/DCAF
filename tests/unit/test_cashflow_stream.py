@@ -1014,6 +1014,19 @@ def test_irr_npv_is_zero_at_irr():
     assert stream.npv(irr, date(2025, 1, 1)) == pytest.approx(0.0, abs=1e-6)
 
 
+def test_irr_initial_guess_at_domain_floor_raises_non_convergence():
+    """An underflowed centroid guess should not divide by zero at r = -1."""
+    stream = CashFlowStream(
+        [
+            CashFlow(-100.0, date(2025, 1, 1)),
+            CashFlow(1.0, date(2025, 1, 2)),
+        ]
+    )
+
+    with pytest.raises(ValueError, match="did not converge"):
+        stream.irr()
+
+
 def test_irr_no_inflows():
     """Stream with no positive cashflows raises ValueError."""
     stream = CashFlowStream(

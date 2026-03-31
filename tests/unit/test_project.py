@@ -62,7 +62,7 @@ def test_energy_project_single_asset_workflow_builds_analysis_and_metrics():
     assert metrics.levelized_cost is not None
     if metrics.xirr is not None:
         assert analysis.cashflows.cash_only().npv(metrics.xirr, date(2025, 1, 1)) == pytest.approx(
-            0.0, abs=1e-6
+            0.0, abs=1e-2
         )
 
     pro_forma = analysis.pro_forma(period="year")

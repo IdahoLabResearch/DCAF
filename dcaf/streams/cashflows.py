@@ -46,6 +46,7 @@ class _UnsetType:
 
 
 _UNSET = _UnsetType()
+_IRR_MIN_RATE = -1.0 + 1e-8
 
 
 def _recurring_escalation(
@@ -1534,7 +1535,9 @@ class CashFlowStream(BaseStream[CashFlow]):
             The day count convention for converting days to year fractions.
             Default is ``"actual/365"`` (standard economics convention).
         tol : float, optional
-            Convergence tolerance on |NPV|. Iteration stops when ``|NPV(r)| < tol``.
+            Relative convergence tolerance. Iteration stops when
+            ``|NPV(r)| < tol * Σ|CFᵢ|``, i.e. when the NPV residual is less
+            than ``tol`` as a fraction of total absolute cashflow.
             Default is ``1e-8``.
         max_iter : int, optional
             Maximum number of Newton-Raphson iterations before raising a convergence
@@ -1553,9 +1556,11 @@ class CashFlowStream(BaseStream[CashFlow]):
             impossible for the NPV to equal zero at any finite rate.
         ValueError
             If the algorithm fails to converge within ``max_iter`` iterations, or
-            if the derivative becomes effectively zero during iteration. Numerical
+            if the derivative becomes effectively zero during iteration.  Numerical
             overflow while evaluating the Newton step is treated as non-convergence
-            and raises ``ValueError`` as well.
+            and raises ``ValueError`` as well.  If the Newton step falls below
+            float64 precision before the tolerance is met, the best achievable
+            rate is returned rather than raising.
 
         Notes
         -----
@@ -1570,8 +1575,9 @@ class CashFlowStream(BaseStream[CashFlow]):
           two Newton-Raphson steps of the solution for project cashflow profiles.
         - **Newton-Raphson derivative**: ``dNPV/dr = −Σ tᵢ·CFᵢ / (1+r)^(tᵢ+1)``,
           computed in a single pass by reusing the present-value term.
-        - The rate is clamped to ``r > -1 + 1e-8`` at each step to prevent the
-          algorithm from escaping the valid domain ``(-1, ∞)``.
+        - The initial guess and each Newton step are clamped to
+          ``r > -1 + 1e-8`` to prevent the algorithm from touching the
+          singularity at ``r = -1``.
 
         Examples
         --------
@@ -1601,25 +1607,39 @@ class CashFlowStream(BaseStream[CashFlow]):
             )
 
         ref_date = cash_only.min(key=lambda cf: cf.date).date
-        rate = _irr_initial_guess(cash_only, ref_date, convention)
+        rate = max(_irr_initial_guess(cash_only, ref_date, convention), _IRR_MIN_RATE)
+
+        # Scale factor for normalizing the convergence check.  IRR is
+        # scale-invariant, but NPV scales linearly with cashflow magnitude.
+        # Without normalization the absolute tolerance becomes unreachable
+        # for large-magnitude streams (e.g. trillions of dollars) because
+        # the Newton step falls below float64 precision before |NPV| < tol.
+        scale = sum(abs(cf.amount) for cf in cash_only)
 
         for _ in range(max_iter):
             try:
                 npv, dnpv = _irr_npv_and_dnpv(cash_only, rate, ref_date, convention)
             except OverflowError as exc:
-                raise ValueError("IRR did not converge: overflow encountered during iteration.") from exc
-            if abs(npv) < tol:
+                raise ValueError(
+                    "IRR did not converge: overflow encountered during iteration."
+                ) from exc
+            if abs(npv) < tol * scale:
                 return rate
             if abs(dnpv) < 1e-12:
                 raise ValueError("IRR did not converge: zero derivative encountered.")
-            rate -= npv / dnpv
-            rate = max(rate, -1.0 + 1e-8)
+            unclamped = rate - npv / dnpv
+            if unclamped == rate:
+                # Newton step is below float64 precision — rate can't improve.
+                return rate
+            rate = max(unclamped, _IRR_MIN_RATE)
 
         try:
             npv, _ = _irr_npv_and_dnpv(cash_only, rate, ref_date, convention)
         except OverflowError as exc:
-            raise ValueError("IRR did not converge: overflow encountered during iteration.") from exc
-        if abs(npv) < tol:
+            raise ValueError(
+                "IRR did not converge: overflow encountered during iteration."
+            ) from exc
+        if abs(npv) < tol * scale:
             return rate
         raise ValueError(f"IRR did not converge after {max_iter} iterations.")
 
@@ -1643,7 +1663,9 @@ def _irr_initial_guess(
 
     where ``t_in`` and ``t_out`` are the centroid times of the positive and
     negative cashflows respectively, measured in fractional years from
-    ``ref_date``.  Falls back to ``0.1`` when the centroids coincide.
+    ``ref_date``.  Falls back to ``0.1`` when the centroids coincide,
+    when the weighted sums are degenerate (zero), or when the ratio
+    overflows during exponentiation.
     """
 
     def _centroid(
@@ -1661,10 +1683,20 @@ def _irr_initial_guess(
     sum_in, weighted_t_in = _centroid(cashflows.inflows(), lambda cf: cf.amount)
     sum_out, weighted_t_out = _centroid(cashflows.outflows(), lambda cf: abs(cf.amount))
 
+    # Degenerate centroids: zero-amount cashflows passed the inflows/outflows
+    # check but sum to zero, making the centroid time undefined.
+    if sum_in < 1e-15 or sum_out < 1e-15:
+        return 0.1
+
     dt = (weighted_t_in / sum_in) - (weighted_t_out / sum_out)
     if abs(dt) < 1e-10:
         return 0.1
-    return (sum_in / sum_out) ** (1.0 / dt) - 1.0
+
+    ratio = sum_in / sum_out
+    try:
+        return ratio ** (1.0 / dt) - 1.0
+    except OverflowError:
+        return 0.1
 
 
 def _irr_npv_and_dnpv(
