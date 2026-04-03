@@ -43,6 +43,12 @@ tests = [
 [tool.uv]
 default-groups = "all"
 
+[pytest]
+doctest_optionflags = ["ELLIPSIS"]
+
+[tool.pytest.ini_options]
+addopts = "--doctest-modules"
+
 [tool.ruff]
 target-version = "py313"
 line-length = 100

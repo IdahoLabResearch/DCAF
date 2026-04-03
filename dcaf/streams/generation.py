@@ -101,13 +101,14 @@ class Generation:
         >>> new_gen = gen.replace(label="new_gen")
 
         >>> # Increase the amount
-        >>> gen = Generation(500, date(2026, 1, 1)
+        >>> gen = Generation(500, date(2026, 1, 1))
         >>> larger_gen = gen.replace(amount_mwh=gen.amount_mwh*1.2)
 
         >>> # Perform multiple modifications
+        >>> from dateutil.relativedelta import relativedelta
         >>> old_gen = Generation(300, date(2027, 6, 1))
         >>> new_gen = old_gen.replace(
-        ...     amount = old_gen.amount_mwh - 50,
+        ...     amount_mwh = old_gen.amount_mwh - 50,
         ...     date = (old_gen.date - relativedelta(months=6)),
         ... )
         >>> # This decreases the generation amount by 50 and moves it forward 6 months
@@ -830,8 +831,11 @@ class GenerationStream(BaseStream[Generation]):
         Examples
         --------
         >>> stream.filter(lambda g: g.amount_mwh > 1000)
+        GenerationStream(...)
         >>> stream.filter(source="uprate")
+        GenerationStream(...)
         >>> stream.filter(source="unit_1", carrier="electricity")
+        GenerationStream(...)
 
         Notes
         -----
@@ -897,9 +901,13 @@ class GenerationStream(BaseStream[Generation]):
         Examples
         --------
         >>> stream.group_by(lambda g: g.date.year)
+        GenerationGroup(...)
         >>> stream.group_by(source=True)
+        GenerationGroup(...)
         >>> stream.group_by(carrier=True)
+        GenerationGroup(...)
         >>> stream.group_by(period="month")
+        GenerationGroup(...)
         """
         # We blend two API styles in one function call:
         #   1. Provide a callable function which returns the value to group by

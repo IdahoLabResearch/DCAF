@@ -110,6 +110,19 @@ class ProjectProForma:
     >>> pf = project.pro_forma()
     >>> for row in pf.rows:
     ...     print(row.name, row.amounts)
+    Revenues (...)
+    Operating Costs (...)
+    EBITDA (...)
+    Depreciation (...)
+    EBIT (...)
+    Taxes (...)
+    Tax Credits (...)
+    Capital Costs (...)
+    Free Cash Flow to the Firm (...)
+    Financing Interest (...)
+    Interest Tax Shield (...)
+    Financing Principal (...)
+    Free Cash Flow to Equity (...)
     """
 
     period: Period
@@ -129,7 +142,7 @@ class ProjectProForma:
         --------
         >>> pf = project.pro_forma()
         >>> pf.row_map()["Free Cash Flow to Equity"]
-        (100.0, 120.0, 130.0)
+        (...)
         """
         return {row.name: row.amounts for row in self.rows}
 

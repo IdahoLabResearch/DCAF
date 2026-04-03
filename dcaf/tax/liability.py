@@ -37,7 +37,7 @@ def compute_taxable_income(
 
     Example:
         >>> from datetime import date
-        >>> from dcaf import CashFlowStream, CashFlow
+        >>> from dcaf.streams import CashFlowStream, CashFlow
         >>> revenue = CashFlowStream([
         ...     CashFlow(100_000, date(2025, 6, 1), "Revenue", tax_treatment="taxable")
         ... ])
@@ -106,7 +106,7 @@ def tax_liability(
 
     Example:
         >>> from datetime import date
-        >>> from dcaf import CashFlowStream, CashFlow
+        >>> from dcaf.streams import CashFlowStream, CashFlow
         >>> taxable_income = CashFlowStream([
         ...     CashFlow(100_000, date(2025, 1, 1), "Taxable Income", is_cash=False)
         ... ])
