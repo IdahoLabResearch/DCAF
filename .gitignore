@@ -12,3 +12,6 @@ wheels/
 
 # AI 
 .claude/
+
+# Documentation artifacts
+docs/_build/
