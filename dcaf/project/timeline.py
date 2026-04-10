@@ -8,7 +8,7 @@ from datetime import date
 from dateutil.relativedelta import relativedelta
 
 from dcaf.shared.time import timedelta_fractional_years
-from dcaf.shared.types import Period
+from dcaf.shared.types import Period, TimingConvention
 
 
 @dataclass(frozen=True)
@@ -40,6 +40,7 @@ class ProjectTimeline:
     operations_start: date | None = None
     operations_end: date | None = None
     frequency: Period = "year"
+    timing: TimingConvention = "end"
 
     def __post_init__(self) -> None:
         if self.operations_start is not None and self.operations_end is not None:

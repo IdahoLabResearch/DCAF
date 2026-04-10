@@ -4,6 +4,7 @@ from dcaf.shared.formatting import format_label
 from dcaf.shared.time import (
     compound_factor,
     elapsed_periods,
+    event_date,
     hours_per_period,
     period_end,
     period_start,
@@ -21,6 +22,7 @@ from dcaf.shared.types import (
     SpendScheduleName,
     SupportsLessThan,
     TaxTreatment,
+    TimingConvention,
     VDBConvention,
 )
 
@@ -35,9 +37,11 @@ __all__ = [
     "SpendScheduleName",
     "SupportsLessThan",
     "TaxTreatment",
+    "TimingConvention",
     "VDBConvention",
     "compound_factor",
     "elapsed_periods",
+    "event_date",
     "format_label",
     "hours_per_period",
     "period_end",

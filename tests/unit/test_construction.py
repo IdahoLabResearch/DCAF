@@ -7,16 +7,19 @@ import pytest
 
 from dcaf.finance import (
     ConstantRateEscalation,
-    ConstructionFinancing,
-    ConstructionSpendBuilder,
     EscalationBuilder,
     IndexSeriesEscalation,
-    SpendProfile,
-    construction_spend_schedule,
     get_spend_profile,
     get_spend_profiles,
 )
-from dcaf.finance.construction import ConstructionSpendConfig, _validate_schedule
+from dcaf.finance.construction import (
+    ConstructionFinancing,
+    ConstructionSpendBuilder,
+    ConstructionSpendConfig,
+    SpendProfile,
+    _validate_schedule,
+    construction_spend_schedule,
+)
 from dcaf.shared.types import ProFormaCategory, TaxTreatment
 from dcaf.shared.time import timedelta_fractional_years
 from dcaf.streams import CashFlowStream
@@ -27,6 +30,7 @@ BELL_CURVE = SPEND_PROFILES["bell"]
 RAMPED_CURVE = SPEND_PROFILES["ramped"]
 TRIANGLE_CURVE = SPEND_PROFILES["triangle"]
 LINEAR_CURVE = SPEND_PROFILES["linear"]
+UPFRONT_CURVE = SPEND_PROFILES["upfront"]
 
 
 def _annual_factor(start: date, end: date, rate: float) -> float:
@@ -39,8 +43,8 @@ def _midpoint_date(start: date, end: date) -> date:
 
 @pytest.mark.parametrize(
     "curve",
-    [FLAT_CURVE, BELL_CURVE, RAMPED_CURVE, TRIANGLE_CURVE, LINEAR_CURVE],
-    ids=["flat", "bell", "ramped", "triangle", "linear"],
+    [FLAT_CURVE, BELL_CURVE, RAMPED_CURVE, TRIANGLE_CURVE, LINEAR_CURVE, UPFRONT_CURVE],
+    ids=["flat", "bell", "ramped", "triangle", "linear", "upfront"],
 )
 def test_curve_sums_to_one(curve):
     assert abs(sum(point[1] for point in curve) - 1.0) < 1e-6
@@ -48,8 +52,8 @@ def test_curve_sums_to_one(curve):
 
 @pytest.mark.parametrize(
     "curve",
-    [FLAT_CURVE, BELL_CURVE, RAMPED_CURVE, TRIANGLE_CURVE, LINEAR_CURVE],
-    ids=["flat", "bell", "ramped", "triangle", "linear"],
+    [FLAT_CURVE, BELL_CURVE, RAMPED_CURVE, TRIANGLE_CURVE, LINEAR_CURVE, UPFRONT_CURVE],
+    ids=["flat", "bell", "ramped", "triangle", "linear", "upfront"],
 )
 def test_curve_starts_at_zero_ends_at_one(curve):
     assert curve[0][0] == 0.0
@@ -67,7 +71,7 @@ def test_default_profile_is_flat_and_visible_in_signatures():
 
 @pytest.mark.parametrize(
     "name",
-    ["flat", "bell", "ramped", "triangle", "linear"],
+    ["flat", "bell", "ramped", "triangle", "linear", "upfront"],
 )
 def test_named_profiles_lookup(name):
     profile = SpendProfile.curve(name)  # type: ignore[arg-type]
@@ -78,6 +82,38 @@ def test_named_profiles_lookup(name):
 def test_get_spend_profile_matches_named_profile():
     """The public accessor exposes the same built-in schedule used by SpendProfile."""
     assert get_spend_profile("flat") == SpendProfile.curve("flat").schedule
+
+
+def test_upfront_profile_books_total_cost_on_start_date():
+    stream = construction_spend_schedule(
+        1_000_000,
+        date(2025, 1, 1),
+        date(2026, 1, 1),
+        profile="upfront",
+    )
+
+    assert len(stream.entries) == 1
+    assert stream.entries[0].date == date(2025, 1, 1)
+    assert stream.entries[0].amount == pytest.approx(-1_000_000)
+
+
+def test_upfront_financing_accrues_interest_from_start_date():
+    start_date = date(2025, 1, 1)
+    end_date = date(2026, 1, 1)
+    interest_rate = 0.12
+    stream = construction_spend_schedule(
+        1_000_000,
+        start_date,
+        end_date,
+        period="year",
+        profile="upfront",
+        financing=ConstructionFinancing.debt(1.0, interest_rate=interest_rate, treatment="pay"),
+    )
+
+    assert [entry.label for entry in stream.entries] == ["Construction Spend", "Interest Payment"]
+    assert stream.entries[0].date == start_date
+    assert stream.entries[1].date == end_date
+    assert stream.entries[1].amount == pytest.approx(-1_000_000 * interest_rate)
 
 
 def test_spend_profiles_are_read_only():
@@ -389,10 +425,12 @@ def test_construction_spend_flows_booked_at_period_end():
     )
 
     spend_flows = [cf for cf in stream.entries if cf.label == "Construction Spend"]
+    # Booking dates use calendar month-ends, capped by construction phase end
+    # (end_date - 1 day = 2025-03-31).
     assert [cf.date for cf in spend_flows] == [
-        date(2025, 2, 1),
-        date(2025, 3, 1),
-        date(2025, 4, 1),
+        date(2025, 1, 31),
+        date(2025, 2, 28),
+        date(2025, 3, 31),
     ]
 
 
@@ -405,10 +443,12 @@ def test_construction_spend_final_stub_flow_booked_at_stub_end():
     )
 
     spend_flows = [cf for cf in stream.entries if cf.label == "Construction Spend"]
+    # Booking dates use calendar month-ends, capped by construction phase end
+    # (end_date - 1 day = 2025-04-09).
     assert [cf.date for cf in spend_flows] == [
-        date(2025, 2, 15),
-        date(2025, 3, 15),
-        date(2025, 4, 10),
+        date(2025, 1, 31),
+        date(2025, 2, 28),
+        date(2025, 3, 31),
     ]
 
 
@@ -421,11 +461,13 @@ def test_month_end_monthly_schedule_stays_anchored_to_start_date():
     )
 
     spend_flows = [cf for cf in stream.entries if cf.label == "Construction Spend"]
+    # Booking dates use calendar month-ends, capped by construction phase end
+    # (end_date - 1 day = 2025-05-30).
     assert [cf.date for cf in spend_flows] == [
+        date(2025, 1, 31),
         date(2025, 2, 28),
         date(2025, 3, 31),
         date(2025, 4, 30),
-        date(2025, 5, 31),
     ]
 
 
@@ -439,10 +481,12 @@ def test_late_month_quarterly_schedule_stays_anchored_to_start_date():
     )
 
     spend_flows = [cf for cf in stream.entries if cf.label == "Construction Spend"]
+    # Booking dates use calendar quarter-ends, capped by construction phase end
+    # (end_date - 1 day = 2026-05-30).
     assert [cf.date for cf in spend_flows] == [
-        date(2025, 11, 30),
-        date(2026, 2, 28),
-        date(2026, 5, 31),
+        date(2025, 9, 30),
+        date(2025, 12, 31),
+        date(2026, 3, 31),
     ]
 
 

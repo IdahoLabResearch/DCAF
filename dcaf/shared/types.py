@@ -3,6 +3,7 @@ from typing import Any, Literal, Protocol
 
 
 type Period = Literal["day", "month", "quarter", "year"]
+type TimingConvention = Literal["end", "begin", "middle"]
 type DayCountConvention = Literal["actual/365"]
 type MACRSPropertyClass = Literal[3, 5, 7, 10, 15, 20]
 type MACRSConvention = Literal["half-year", "mid-quarter"]
@@ -10,7 +11,7 @@ type VDBConvention = Literal["none", "half-year", "mid-quarter", "best-of-half-y
 type SpendSchedulePoint = tuple[float, float]
 type SpendSchedule = tuple[SpendSchedulePoint, ...]
 type InterestTreatment = Literal["capitalize", "pay"]
-type SpendScheduleName = Literal["flat", "bell", "ramped", "triangle", "linear"]
+type SpendScheduleName = Literal["flat", "bell", "ramped", "triangle", "linear", "upfront"]
 
 
 class ProFormaCategory(StrEnum):

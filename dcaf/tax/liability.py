@@ -80,25 +80,37 @@ def tax_liability(
     label: str = "Tax Liability",
     pro_forma_category: ProFormaCategory | str | None = ProFormaCategory.TAX,
     tax_treatment: TaxTreatment | str = TaxTreatment.NONE,
+    allow_refund: bool = False,
 ) -> CashFlowStream:
     """Apply scalar tax rate to taxable income to generate tax payment cashflows.
 
     This function takes a stream of taxable income amounts and applies a tax rate to
-    generate tax liability cashflows. Only positive taxable income generates tax
-    liability; negative amounts (losses) result in zero tax in this simple model.
+    generate tax liability cashflows.
 
-    Args:
-        taxable_income_stream: Stream of taxable income amounts from compute_taxable_income()
-        tax_rate: Scalar tax rate to apply (e.g., 0.21 for 21% federal rate, or 0.26
-                  for combined 21% federal + 5% state)
-        label: Label template for tax liability flows. Use {n} for sequential numbering.
-        pro_forma_category: Pro-forma category for tax-liability flows. Defaults to ``"tax"``.
-        tax_treatment: Tax treatment for tax-liability flows. Defaults to ``"none"``.
+    Parameters
+    ----------
+    taxable_income_stream : CashFlowStream
+        Stream of taxable income amounts from :func:`compute_taxable_income`.
+    tax_rate : float
+        Scalar tax rate (e.g. ``0.21`` for 21%).
+    label : str, optional
+        Label template for tax flows. Use ``{n}`` for sequential numbering.
+    pro_forma_category : ProFormaCategory or str or None, optional
+        Pro-forma category. Default is ``"tax"``.
+    tax_treatment : TaxTreatment or str, optional
+        Tax treatment. Default is ``"none"``.
+    allow_refund : bool, optional
+        When ``False`` (default), only positive taxable income generates a tax
+        liability; losses produce zero tax. When ``True``, negative taxable
+        income generates a positive cash flow (tax refund), enabling symmetric
+        treatment for delta-to-baseline and levelized cost analyses.
 
-    Returns:
-        CashFlowStream of tax payment cashflows with negative amounts (outflows) and
-        is_cash=True. Only positive taxable income generates tax liability.
-
+    Returns
+    -------
+    CashFlowStream
+        Tax payment cashflows (negative amounts for payments, positive for
+        refunds when *allow_refund* is ``True``), with ``is_cash=True``.
+        
     Note:
         This implementation does not model tax loss carryforwards or refunds.
         Negative taxable income (losses) produce no tax liability. This differs
@@ -116,11 +128,12 @@ def tax_liability(
         >>> taxes[0].is_cash
         True
     """
-    # Filter for positive taxable income only (negative = losses, no tax owed)
-    positive_income = taxable_income_stream.inflows()
+    if allow_refund:
+        income = taxable_income_stream
+    else:
+        income = taxable_income_stream.inflows()
 
-    # Return empty stream if no positive income
-    if not positive_income:
+    if not income:
         return CashFlowStream()
 
     resolved_category, resolved_tax_treatment = normalize_cashflow_classification(
@@ -138,7 +151,7 @@ def tax_liability(
                 pro_forma_category=resolved_category,
                 tax_treatment=resolved_tax_treatment,
             )
-            for i, cf in enumerate(positive_income.entries, start=1)
+            for i, cf in enumerate(income.entries, start=1)
         ]
     )
 

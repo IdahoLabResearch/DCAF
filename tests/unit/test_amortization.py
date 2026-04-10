@@ -4,7 +4,7 @@ from datetime import date
 
 import pytest
 
-from dcaf.finance import AmortizationSchedule
+from dcaf.finance.amortization import AmortizationSchedule
 from dcaf.shared.types import ProFormaCategory, TaxTreatment
 
 

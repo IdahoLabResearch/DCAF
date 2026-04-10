@@ -30,7 +30,7 @@ docs = [
     "myst-parser>=2.0.0",
     "sphinx>=7.2.0",
     "sphinx-autodoc-typehints>=2.0.0",
-    "sphinx-rtd-theme>=2.0.0",
+    "sphinx-book-theme>=1.0.0",
 ]
 
 tests = [

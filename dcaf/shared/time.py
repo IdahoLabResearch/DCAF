@@ -1,12 +1,18 @@
 """Shared time and compounding utilities."""
 
-from datetime import date
+from datetime import date, timedelta
 from functools import cache
 from typing import assert_never
 
 from dateutil.relativedelta import relativedelta
 
-from dcaf.shared.types import DayCountConvention, Period, _PeriodEnum, parse_period
+from dcaf.shared.types import (
+    DayCountConvention,
+    Period,
+    TimingConvention,
+    _PeriodEnum,
+    parse_period,
+)
 
 
 def _normalize_period(period: Period) -> _PeriodEnum:
@@ -49,6 +55,60 @@ def period_end(dt: date, period: Period) -> date:
             return date(dt.year, 12, 31)
         case _:
             assert_never(period)
+
+
+def event_date(
+    dt: date,
+    frequency: Period,
+    timing: TimingConvention = "end",
+    phase_start: date | None = None,
+    phase_end: date | None = None,
+) -> date:
+    """Return the event booking date for a modeled period.
+
+    Parameters
+    ----------
+    dt : date
+        The period anchor date (typically the start of the modeled period window).
+    frequency : Period
+        The period granularity (e.g. ``"year"``, ``"month"``).
+    timing : TimingConvention, optional
+        ``"end"`` (default) books events at the end of the calendar period,
+        capped by *phase_end*. ``"begin"`` books events at the start of the
+        calendar period, floored by *phase_start*. ``"middle"`` books events
+        at the midpoint between the effective begin and end dates, providing
+        a better approximation for continuous spend or generation when
+        discounting.
+    phase_start : date or None, optional
+        Earliest allowable event date (e.g. construction start or operations
+        start). Used with ``"begin"`` and ``"middle"`` timing. When ``None``,
+        the calendar period start is used without flooring.
+    phase_end : date or None, optional
+        Latest allowable event date (e.g. last day of construction or
+        operations end). Used with ``"end"`` and ``"middle"`` timing. When
+        ``None``, the calendar period end is used without capping.
+
+    Returns
+    -------
+    date
+        The computed event date.
+    """
+    match timing:
+        case "end":
+            cal_end = period_end(dt, frequency)
+            return min(cal_end, phase_end) if phase_end is not None else cal_end
+        case "begin":
+            cal_start = period_start(dt, frequency)
+            return max(cal_start, phase_start) if phase_start is not None else cal_start
+        case "middle":
+            cal_start = period_start(dt, frequency)
+            cal_end = period_end(dt, frequency)
+            effective_start = max(cal_start, phase_start) if phase_start is not None else cal_start
+            effective_end = min(cal_end, phase_end) if phase_end is not None else cal_end
+            mid_days = (effective_end - effective_start).days // 2
+            return effective_start + timedelta(days=mid_days)
+        case _:
+            assert_never(timing)
 
 
 def timedelta_fractional_years(

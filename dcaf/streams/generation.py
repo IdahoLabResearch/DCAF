@@ -19,7 +19,6 @@ from typing import (
     overload,
 )
 
-from dcaf.streams.base import BaseGroup, BaseStream
 from dcaf.streams.cashflows import (
     CashFlow,
     CashFlowStream,
@@ -27,8 +26,13 @@ from dcaf.streams.cashflows import (
 from dcaf.finance.escalation import (
     ConstantRateEscalation,
     EscalationPolicy,
-    _constant_discount_policy,
     _resolve_escalation_policy_override,
+)
+from dcaf.shared._financial_math import npv
+from dcaf.shared.formatting import format_label
+from dcaf.shared.time import (
+    hours_per_period,
+    time_delta_per_period,
 )
 from dcaf.shared.types import (
     DayCountConvention,
@@ -38,11 +42,7 @@ from dcaf.shared.types import (
     TaxTreatment,
     normalize_cashflow_classification,
 )
-from dcaf.shared.formatting import format_label
-from dcaf.shared.time import (
-    hours_per_period,
-    time_delta_per_period,
-)
+from dcaf.streams.base import BaseGroup, BaseStream
 
 
 @dataclass(frozen=True)
@@ -1119,15 +1119,8 @@ class GenerationStream(BaseStream[Generation]):
         >>> stream.discounted_sum(rate=0.08, valuation_date=date(2030, 1, 1)) > 0
         True
         """
-        discount_policy = _constant_discount_policy(
-            valuation_date=valuation_date,
-            rate=rate,
-            convention=convention,
-        )
-        total = 0.0
-        for entry in self.entries:
-            total += entry.amount_mwh / discount_policy.factor(entry.date)
-        return total
+        values = ((entry.amount_mwh, entry.date) for entry in self.entries)
+        return npv(values, rate, valuation_date, convention)
 
     def to_revenue(
         self,

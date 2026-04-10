@@ -26,7 +26,11 @@ from dcaf.shared.types import (
     parse_interest_treatment,
     parse_period,
 )
-from dcaf.shared.time import time_delta_per_period, timedelta_fractional_years
+from dcaf.shared.time import (
+    period_end as calendar_period_end,
+    time_delta_per_period,
+    timedelta_fractional_years,
+)
 
 
 class _UnsetType:
@@ -137,7 +141,8 @@ class SpendProfile:
         ----------
         name : SpendScheduleName
             Name of the predefined spend curve. Supported values are ``"flat"``,
-            ``"bell"``, ``"ramped"``, ``"triangle"``, and ``"linear"``.
+            ``"bell"``, ``"ramped"``, ``"triangle"``, ``"linear"``, and
+            ``"upfront"``.
 
         Returns
         -------
@@ -445,23 +450,41 @@ def _scheduled_spends(
     escalation_policy: EscalationPolicy | None = None,
 ) -> list[_ScheduledSpend]:
     """Expand a validated config into per-period scheduled spend entries."""
+    effective_policy = (
+        _construction_simple_escalation(config) if escalation_policy is None else escalation_policy
+    )
+    if config.profile.name == "upfront":
+        return [
+            _ScheduledSpend(
+                start_date=config.start_date,
+                end_date=config.start_date,
+                booking_date=config.start_date,
+                spend_amount=config.total_cost * effective_policy.factor(config.start_date),
+            )
+        ]
+
     periods = _iter_period_boundaries(
         config.start_date,
         config.end_date,
         parse_period(str(config.period)),
     )
-    effective_policy = (
-        _construction_simple_escalation(config) if escalation_policy is None else escalation_policy
-    )
     spends: list[_ScheduledSpend] = []
 
-    for current, period_end in periods:
+    # Construction phase ends the day before end_date (which is exclusive).
+    phase_end = config.end_date - timedelta(days=1)
+
+    period_str = cast(Period, str(config.period))
+
+    for current, window_end in periods:
         spends.append(
             _ScheduledSpend(
                 start_date=current,
-                end_date=period_end,
-                booking_date=period_end,
-                spend_amount=_scheduled_spend_amount(config, current, period_end, effective_policy),
+                end_date=window_end,
+                booking_date=min(
+                    calendar_period_end(current, period_str),
+                    phase_end,
+                ),
+                spend_amount=_scheduled_spend_amount(config, current, window_end, effective_policy),
             )
         )
 
@@ -538,6 +561,10 @@ def _build_cashflows(
         config.end_date,
         _debt_servicing_period(config),
     ):
+        while draw_index < len(scheduled_draws) and scheduled_draws[draw_index][0] <= service_start:
+            debt_balance += scheduled_draws[draw_index][1]
+            draw_index += 1
+
         period_years = timedelta_fractional_years(service_start, service_end)
         interest = debt_balance * config.financing.interest_rate * period_years
         interest_flow = _construction_interest_cashflow(

@@ -75,27 +75,6 @@ project = (
         equity_fraction=EQUITY_FRACTION,
         cost_of_equity=COST_OF_EQUITY,
     )
-    .tax(rate=TAX_RATE)
-    .generation(
-        asset="uprate",
-        capacity_mw=UPRATE_CAPACITY_MW,
-        capacity_factor=CAPACITY_FACTOR,
-        carrier="electricity",
-        source="nuclear-uprate",
-        label="Uprate Generation {n}",
-    )
-    .market(
-        asset="uprate",
-        carrier="electricity",
-        sell_price_per_unit=POWER_PRICE_PER_MWH,
-        label="Electricity Revenue {n}",
-    )
-    .construction(
-        asset="uprate",
-        overnight_cost=OVERNIGHT_CAPEX,
-        spend_profile="flat",
-        period="year",
-    )
     .construction_financing(
         asset="uprate",
         debt_fraction=DEBT_FRACTION,
@@ -107,11 +86,32 @@ project = (
         term=DEBT_TERM_YEARS,
         frequency="year",
     )
+    .tax(rate=TAX_RATE)
+    .generation(
+        asset="uprate",
+        capacity_mw=UPRATE_CAPACITY_MW,
+        capacity_factor=CAPACITY_FACTOR,
+        carrier="electricity",
+        source="nuclear-uprate",
+        label="Uprate Generation",
+    )
+    .market(
+        asset="uprate",
+        carrier="electricity",
+        sell_price_per_unit=POWER_PRICE_PER_MWH,
+        label="Electricity Revenue",
+    )
+    .construction(
+        asset="uprate",
+        overnight_cost=OVERNIGHT_CAPEX,
+        spend_profile="flat",
+        period="year",
+    )
     .ptc(
         asset="uprate",
         rate_per_unit=PTC_RATE_PER_MWH,
         years=PTC_YEARS,
-        label="PTC Credit {n}",
+        label="PTC Credit",
     )
 )
 

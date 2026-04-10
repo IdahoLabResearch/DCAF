@@ -143,6 +143,12 @@ LINEAR_CURVE: SpendSchedule = (
     (1.000, 0.000000),
 )
 
+# Entire spend is booked immediately at construction start.
+UPFRONT_CURVE: SpendSchedule = (
+    (0.000, 1.000000),
+    (1.000, 0.000000),
+)
+
 # fmt: on
 
 SPEND_CURVE_REGISTRY: dict[SpendScheduleName, SpendSchedule] = {
@@ -151,6 +157,7 @@ SPEND_CURVE_REGISTRY: dict[SpendScheduleName, SpendSchedule] = {
     "ramped": RAMPED_CURVE,
     "triangle": TRIANGLE_CURVE,
     "linear": LINEAR_CURVE,
+    "upfront": UPFRONT_CURVE,
 }
 
 
