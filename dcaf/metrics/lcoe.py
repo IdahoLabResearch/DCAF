@@ -14,7 +14,6 @@ from dcaf.tax.liability import compute_taxable_income, tax_liability
 def lcoe(
     basis_stream: CashFlowStream,
     component_streams: CashFlowGroup[str],
-    replaceable_revenue_names: set[str],
     tax_rate: float | None,
     discount_rate: float,
     valuation_date: date,
@@ -23,8 +22,10 @@ def lcoe(
     """Solve for the levelized cost of energy.
 
     Finds the electricity price ($/MWh) at which the project NPV equals
-    zero by bisection over the objective
-    ``NPV(costs + price × basis_stream − recomputed_taxes) = 0``.
+    zero. All project cash flows participate except existing revenue
+    (``ProFormaCategory.REVENUE``), which is replaced by a synthetic
+    revenue stream at the trial price. Taxes are recomputed at each
+    trial price to reflect the change in taxable income.
 
     Parameters
     ----------
@@ -33,9 +34,6 @@ def lcoe(
         escalation policy.
     component_streams : CashFlowGroup[str]
         All named cashflow components of the project.
-    replaceable_revenue_names : set[str]
-        Component names whose revenue is replaced by the levelized
-        price stream during the solve.
     tax_rate : float or None
         Project tax rate for recomputing taxes at each trial price.
     discount_rate : float
@@ -59,7 +57,6 @@ def lcoe(
             price=price,
             basis_stream=basis_stream,
             component_streams=component_streams,
-            replaceable_revenue_names=replaceable_revenue_names,
             tax_rate=tax_rate,
             discount_rate=discount_rate,
             valuation_date=valuation_date,
@@ -240,7 +237,6 @@ def _lcoe_objective(
     price: float,
     basis_stream: CashFlowStream,
     component_streams: CashFlowGroup[str],
-    replaceable_revenue_names: set[str],
     tax_rate: float | None,
     discount_rate: float,
     valuation_date: date,
@@ -248,26 +244,19 @@ def _lcoe_objective(
 ) -> float:
     """Evaluate project NPV at a trial electricity *price*.
 
-    Replaces revenue components with ``price × basis_stream``,
-    recomputes taxes, and returns the NPV of the resulting total stream.
+    Strips existing revenue and tax liability from the project cash flows,
+    injects ``price × basis_stream`` as synthetic revenue, recomputes
+    taxes, and returns the cash-only NPV.
     """
-    _LCOE_CATEGORIES = frozenset(
-        {
-            ProFormaCategory.CAPITAL_COST,
-            ProFormaCategory.OPERATING_COST,
-            ProFormaCategory.TAX,
-            ProFormaCategory.TAX_CREDIT,
-            ProFormaCategory.DEPRECIATION,
-        }
-    )
-
     filtered: dict[str, CashFlowStream] = {}
     for name, stream in component_streams.items():
-        if name in replaceable_revenue_names or name == "project:tax_liability":
+        if name == "project:tax_liability":
             continue
-        included = stream.filter(lambda cf: cf.pro_forma_category in _LCOE_CATEGORIES)
-        if included.entries:
-            filtered[name] = included
+        without_revenue = stream.filter(
+            lambda cf: cf.pro_forma_category is not ProFormaCategory.REVENUE
+        )
+        if without_revenue.entries:
+            filtered[name] = without_revenue
     filtered["project:levelized_revenue"] = basis_stream.scale(price)
     taxes = _recomputed_taxes(filtered, tax_rate)
     total_stream = CashFlowStream.from_streams(*filtered.values(), taxes)

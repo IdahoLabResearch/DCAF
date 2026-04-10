@@ -308,7 +308,6 @@ class ProjectAnalysis:
             _lcoe(
                 basis_stream=levelized_revenue_basis,
                 component_streams=self.cashflow_components,
-                replaceable_revenue_names=self._replaceable_revenue_component_names(),
                 tax_rate=self.tax_rate,
                 discount_rate=effective_rate,
                 valuation_date=effective_valuation_date,
@@ -619,10 +618,6 @@ class ProjectAnalysis:
             escalation=resolved_rate,
         )
 
-    def _replaceable_revenue_component_names(self) -> set[str]:
-        if self.levelized_revenue_basis is None:
-            return set()
-        return {name for name, stream in self.levelized_revenue_basis.items() if stream.entries}
 
 __all__ = [
     "ProjectAnalysis",

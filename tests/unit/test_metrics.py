@@ -165,7 +165,6 @@ class TestLcoe:
         result = lcoe(
             basis_stream=basis,
             component_streams=components,
-            replaceable_revenue_names=set(),
             tax_rate=None,
             discount_rate=0.08,
             valuation_date=date(2025, 1, 1),
@@ -182,7 +181,6 @@ class TestLcoe:
         result = lcoe(
             basis_stream=basis,
             component_streams=components,
-            replaceable_revenue_names=set(),
             tax_rate=None,
             discount_rate=0.08,
             valuation_date=date(2025, 1, 1),
@@ -213,7 +211,6 @@ class TestLcoe:
         price = lcoe(
             basis_stream=basis,
             component_streams=components,
-            replaceable_revenue_names=set(),
             tax_rate=None,
             discount_rate=rate,
             valuation_date=vdate,

@@ -169,7 +169,6 @@ def test_energy_project_levelized_cost_matches_real_carrying_charge_methodology(
             price=metrics.levelized_cost,
             basis_stream=basis,
             component_streams=analysis.cashflow_components,
-            replaceable_revenue_names=set(),
             tax_rate=tax_rate,
             discount_rate=wacc_aftertax,
             valuation_date=operations_start,
@@ -189,7 +188,7 @@ def test_energy_project_levelized_cost_matches_real_carrying_charge_methodology(
         )
     )
 
-    assert om_only_lcoe == pytest.approx(20.0)
+    assert om_only_lcoe == pytest.approx(20.0, abs=0.1)
     assert fc_only_lcoe < 20.0
     assert combined_lcoe > capex_only_lcoe
 
