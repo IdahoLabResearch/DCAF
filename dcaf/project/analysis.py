@@ -7,19 +7,15 @@ from dataclasses import dataclass
 from datetime import date
 from math import isclose, isfinite
 from os import PathLike
-from typing import TYPE_CHECKING
 
-from dcaf.shared.types import DayCountConvention, Period, ProFormaCategory, TaxTreatment
-
+from dcaf.finance.escalation import EscalationPolicy
+from dcaf.metrics.lcoe import lcoe as _lcoe
 from dcaf.project.config import CapitalStructure
 from dcaf.project.timeline import ProjectTimeline
-from dcaf.metrics import lcoe as _lcoe
 from dcaf.streams.cashflows import CashFlow, CashFlowGroup, CashFlowStream
 from dcaf.streams.generation import GenerationStream
+from dcaf.shared.types import DayCountConvention, Period, ProFormaCategory, TaxTreatment
 from dcaf.tax.liability import compute_taxable_income, tax_liability
-
-if TYPE_CHECKING:
-    from dcaf.finance.escalation import EscalationPolicy
 
 
 def _validate_finite(value: float, name: str) -> None:
@@ -627,7 +623,6 @@ class ProjectAnalysis:
         if self.levelized_revenue_basis is None:
             return set()
         return {name for name, stream in self.levelized_revenue_basis.items() if stream.entries}
-
 
 __all__ = [
     "ProjectAnalysis",

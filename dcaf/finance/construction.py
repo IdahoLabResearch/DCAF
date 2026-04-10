@@ -26,7 +26,11 @@ from dcaf.shared.types import (
     parse_interest_treatment,
     parse_period,
 )
-from dcaf.shared.time import time_delta_per_period, timedelta_fractional_years
+from dcaf.shared.time import (
+    period_end as calendar_period_end,
+    time_delta_per_period,
+    timedelta_fractional_years,
+)
 
 
 class _UnsetType:
@@ -467,13 +471,21 @@ def _scheduled_spends(
     )
     spends: list[_ScheduledSpend] = []
 
-    for current, period_end in periods:
+    # Construction phase ends the day before end_date (which is exclusive).
+    phase_end = config.end_date - timedelta(days=1)
+
+    period_str = cast(Period, str(config.period))
+
+    for current, window_end in periods:
         spends.append(
             _ScheduledSpend(
                 start_date=current,
-                end_date=period_end,
-                booking_date=period_end,
-                spend_amount=_scheduled_spend_amount(config, current, period_end, effective_policy),
+                end_date=window_end,
+                booking_date=min(
+                    calendar_period_end(current, period_str),
+                    phase_end,
+                ),
+                spend_amount=_scheduled_spend_amount(config, current, window_end, effective_policy),
             )
         )
 

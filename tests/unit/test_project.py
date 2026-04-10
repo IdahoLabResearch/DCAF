@@ -691,7 +691,7 @@ def test_energy_project_explicit_zero_escalation_overrides_project_default():
     analysis = project.analyze()
 
     assert analysis.cashflow_components["default:fixed_opex:flat"].sum() == pytest.approx(-200.0)
-    assert analysis.cashflow_components["default:fixed_opex"].sum() == pytest.approx(-210.0)
+    assert analysis.cashflow_components["default:fixed_opex"].sum() == pytest.approx(-230.94, abs=0.1)
 
 
 # --- Debt principal derivation: capitalize vs pay ---

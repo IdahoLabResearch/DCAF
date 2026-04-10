@@ -49,10 +49,11 @@ from dcaf.shared.types import (
     ProFormaCategory,
     SpendScheduleName,
     TaxTreatment,
+    TimingConvention,
     VDBConvention,
 )
 from dcaf.shared.formatting import format_label
-from dcaf.shared.time import elapsed_periods, hours_per_period, time_delta_per_period
+from dcaf.shared.time import elapsed_periods, event_date, hours_per_period, time_delta_per_period
 
 type MarketKey = tuple[str | None, str]
 type CashFlowComponentModifier = Callable[
@@ -130,9 +131,14 @@ def _constant_annual_escalation_rate(settings: _EscalationSettings) -> float | N
 
 @dataclass(frozen=True)
 class _ScheduledPeriod:
-    """One modeled operating period with an optional partial-period fraction."""
+    """One modeled operating period with an optional partial-period fraction.
+
+    ``event_date`` is the booking date for the period, computed from the timing
+    convention and phase boundaries. It defaults to ``start`` when not provided.
+    """
 
     start: date
+    event_date: date
     fraction: float = 1.0
 
 
@@ -149,6 +155,7 @@ class _GenerationConfig:
     carrier: str = "electricity"
     source: str | None = None
     label: str = "Generation"
+    timing: TimingConvention | None = None
 
 
 @dataclass(frozen=True)
@@ -161,6 +168,7 @@ class _RecurringCostConfig:
     frequency: Period | None = None
     label: str = "Fixed OPEX"
     escalation: _EscalationSettings = field(default_factory=_EscalationSettings)
+    timing: TimingConvention | None = None
 
 
 @dataclass(frozen=True)
@@ -389,6 +397,7 @@ class EnergyProject:
         operations_start: date | None = None,
         operations_end: date | None = None,
         frequency: Period | None = None,
+        timing: TimingConvention | None = None,
         cod: date | None = None,
         operating_years: int | None = None,
     ) -> Self:
@@ -408,6 +417,11 @@ class EnergyProject:
             trailing partial period.
         frequency : Period, optional
             Default operating frequency for recurring items.
+        timing : TimingConvention, optional
+            Default event-date convention. ``"end"`` (default) books events at
+            the end of the calendar period, capped by the phase boundary.
+            ``"begin"`` books events at the start of the calendar period,
+            floored by the phase start.
         cod : date, optional
             Backward-compatible alias for ``operations_start``.
         operating_years : int, optional
@@ -469,6 +483,7 @@ class EnergyProject:
             if resolved_operations_end is None
             else resolved_operations_end,
             frequency=timeline.frequency if frequency is None else frequency,
+            timing=timeline.timing if timing is None else timing,
         )
         return self._copy(config=dc_replace(self._config, timeline=updated))
 
@@ -570,6 +585,7 @@ class EnergyProject:
         carrier: str | None = None,
         source: str | None = None,
         label: str | None = None,
+        timing: TimingConvention | None = None,
     ) -> Self:
         """Configure capacity-based generation for an asset.
 
@@ -620,6 +636,7 @@ class EnergyProject:
             carrier,
             source,
             label,
+            timing,
         )
         if stream is not None and any(arg is not None for arg in simple_args):
             raise ValueError(
@@ -646,6 +663,7 @@ class EnergyProject:
                 carrier=base.carrier if carrier is None else carrier,
                 source=base.source if source is None else source,
                 label=base.label if label is None else label,
+                timing=base.timing if timing is None else timing,
             )
         return self._with_asset(asset, dc_replace(asset_config, generation=updated_generation))
 
@@ -729,6 +747,7 @@ class EnergyProject:
         amount_reference_date: date | None = None,
         escalation_policy: EscalationPolicy | None = None,
         label: str | None = None,
+        timing: TimingConvention | None = None,
     ) -> Self:
         """Configure a named fixed operating cost item for an asset.
 
@@ -782,6 +801,7 @@ class EnergyProject:
                 amount_reference_date=amount_reference_date,
                 escalation_policy=escalation_policy,
             ),
+            timing=existing.timing if timing is None else timing,
         )
         items = dict(asset_config.fixed_opex_items)
         items[name] = updated
@@ -798,6 +818,7 @@ class EnergyProject:
         amount_reference_date: date | None = None,
         escalation_policy: EscalationPolicy | None = None,
         label: str | None = None,
+        timing: TimingConvention | None = None,
     ) -> Self:
         """Add a yearly fixed operating cost; shorthand for :meth:`fixed_opex` with ``frequency="year"``.
 
@@ -835,6 +856,7 @@ class EnergyProject:
             amount_reference_date=amount_reference_date,
             escalation_policy=escalation_policy,
             label=label,
+            timing=timing,
         )
 
     def variable_cost(
@@ -1736,12 +1758,18 @@ class EnergyProject:
             if generation.start is not None
             else self._require_timeline_date("operations_start")
         )
+        timing = generation.timing or self._config.timeline.timing
+        ops_start = self._config.timeline.operations_start
+        ops_end = self._config.timeline.operations_end
         schedule = self._operating_schedule(
             asset_name,
             "generation",
             start=start,
             periods=generation.periods,
             frequency=frequency,
+            timing=timing,
+            phase_start=ops_start,
+            phase_end=ops_end,
         )
         entries: list[Generation] = []
         hours = hours_per_period(frequency)
@@ -1756,7 +1784,7 @@ class EnergyProject:
                         * hours
                         * modeled_period.fraction
                     ),
-                    date=modeled_period.start,
+                    date=modeled_period.event_date,
                     source=source,
                     carrier=generation.carrier,
                     label=label,
@@ -1828,12 +1856,18 @@ class EnergyProject:
             if fixed.start is not None
             else self._require_timeline_date("operations_start")
         )
+        timing = fixed.timing or self._config.timeline.timing
+        ops_start = self._config.timeline.operations_start
+        ops_end = self._config.timeline.operations_end
         schedule = self._operating_schedule(
             asset_name,
             "fixed_opex",
             start=start,
             periods=fixed.periods,
             frequency=frequency,
+            timing=timing,
+            phase_start=ops_start,
+            phase_end=ops_end,
         )
         escalation = _effective_escalation(fixed.escalation, self._config.default_escalation)
         escalation_policy = _recurring_policy(start, escalation)
@@ -1844,10 +1878,10 @@ class EnergyProject:
                 CashFlow(
                     amount=(
                         -abs(fixed.amount)
-                        * escalation_policy.factor(modeled_period.start)
+                        * escalation_policy.factor(modeled_period.event_date)
                         * modeled_period.fraction
                     ),
-                    date=modeled_period.start,
+                    date=modeled_period.event_date,
                     label=label,
                     is_cash=True,
                     pro_forma_category=ProFormaCategory.OPERATING_COST,
@@ -1983,6 +2017,26 @@ class EnergyProject:
             amount_reference_date=escalation.amount_reference_date,
         )
 
+    def _remap_event_dates(
+        self,
+        stream: CashFlowStream,
+        frequency: Period,
+        phase_start: date | None,
+        phase_end: date | None,
+    ) -> CashFlowStream:
+        """Remap cashflow dates according to the project timing convention.
+
+        Applies the timeline's timing convention to each cashflow in *stream*,
+        replacing each date with the computed event date.
+        """
+        timing = self._config.timeline.timing
+        return stream.apply(
+            lambda cf: dc_replace(
+                cf,
+                date=event_date(cf.date, frequency, timing, phase_start, phase_end),
+            )
+        )
+
     def _build_depreciation(
         self,
         asset_config: _AssetConfig,
@@ -2006,30 +2060,42 @@ class EnergyProject:
         if basis == 0.0:
             return CashFlowStream()
         placed = self._require_timeline_date("operations_start")
+        ops_start = self._config.timeline.operations_start
+        ops_end = self._config.timeline.operations_end
         match asset_config.depreciation:
             case _MacrsDepreciationConfig() as config:
-                return macrs_schedule(
-                    cost_basis=basis,
-                    placed_in_service=placed,
-                    property_class=config.property_class,
-                    convention=config.convention,
-                    label=config.label,
+                return self._remap_event_dates(
+                    macrs_schedule(
+                        cost_basis=basis,
+                        placed_in_service=placed,
+                        property_class=config.property_class,
+                        convention=config.convention,
+                        label=config.label,
+                    ),
+                    frequency="year",
+                    phase_start=ops_start,
+                    phase_end=ops_end,
                 )
             case _VdbDepreciationConfig() as config:
-                return vdb_schedule(
-                    cost_basis=basis,
-                    salvage_value=config.salvage_value,
-                    placed_in_service=placed,
-                    life=config.life,
+                return self._remap_event_dates(
+                    vdb_schedule(
+                        cost_basis=basis,
+                        salvage_value=config.salvage_value,
+                        placed_in_service=placed,
+                        life=config.life,
+                        frequency=config.frequency,
+                        factor=config.factor,
+                        switch_to_straight_line=config.switch_to_straight_line,
+                        convention=config.convention,
+                        schedule_dates=config.schedule_dates,
+                        valuation_rate=config.valuation_rate,
+                        valuation_date=config.valuation_date,
+                        terminal_catch_up=config.terminal_catch_up,
+                        label=config.label,
+                    ),
                     frequency=config.frequency,
-                    factor=config.factor,
-                    switch_to_straight_line=config.switch_to_straight_line,
-                    convention=config.convention,
-                    schedule_dates=config.schedule_dates,
-                    valuation_rate=config.valuation_rate,
-                    valuation_date=config.valuation_date,
-                    terminal_catch_up=config.terminal_catch_up,
-                    label=config.label,
+                    phase_start=ops_start,
+                    phase_end=ops_end,
                 )
             case _:
                 raise AssertionError("Unexpected depreciation config")
@@ -2070,7 +2136,14 @@ class EnergyProject:
             start_date=start,
             frequency=debt.frequency,
         )
-        return CashFlowStream.from_streams(schedule.interest, schedule.principal).sort()
+        ops_start = self._config.timeline.operations_start
+        ops_end = self._config.timeline.operations_end
+        return self._remap_event_dates(
+            CashFlowStream.from_streams(schedule.interest, schedule.principal).sort(),
+            frequency=debt.frequency,
+            phase_start=ops_start,
+            phase_end=ops_end,
+        )
 
     def _derive_debt_principal(
         self,
@@ -2193,12 +2266,17 @@ class EnergyProject:
         start: date,
         periods: int | None,
         frequency: Period,
+        timing: TimingConvention = "end",
+        phase_start: date | None = None,
+        phase_end: date | None = None,
     ) -> tuple[_ScheduledPeriod, ...]:
         """Build the sequence of modeled operating periods for an asset and section.
 
         When *periods* is specified, generates exactly that many full-period
         entries. Otherwise infers the schedule from ``timeline.operations_end``,
         prorating any trailing partial period using :func:`elapsed_periods`.
+
+        *timing*, *phase_start*, and *phase_end* control event-date placement.
         """
         if periods is not None:
             if periods <= 0:
@@ -2207,7 +2285,12 @@ class EnergyProject:
             current = start
             schedule: list[_ScheduledPeriod] = []
             for _ in range(periods):
-                schedule.append(_ScheduledPeriod(start=current))
+                schedule.append(
+                    _ScheduledPeriod(
+                        start=current,
+                        event_date=event_date(current, frequency, timing, phase_start, phase_end),
+                    )
+                )
                 current += delta
             return tuple(schedule)
 
@@ -2220,15 +2303,21 @@ class EnergyProject:
                 f"for asset '{asset_name}'"
             )
 
+        # Default phase_end to operations_end when not explicitly provided.
+        effective_phase_end = phase_end if phase_end is not None else operations_end_inclusive
+
         delta = time_delta_per_period(frequency)
         current = start
         schedule = []
         while current < exclusive_end:
-            period_end = min(current + delta, exclusive_end)
+            window_end = min(current + delta, exclusive_end)
             schedule.append(
                 _ScheduledPeriod(
                     start=current,
-                    fraction=elapsed_periods(current, period_end, frequency),
+                    event_date=event_date(
+                        current, frequency, timing, phase_start, effective_phase_end
+                    ),
+                    fraction=elapsed_periods(current, window_end, frequency),
                 )
             )
             current += delta

@@ -425,10 +425,12 @@ def test_construction_spend_flows_booked_at_period_end():
     )
 
     spend_flows = [cf for cf in stream.entries if cf.label == "Construction Spend"]
+    # Booking dates use calendar month-ends, capped by construction phase end
+    # (end_date - 1 day = 2025-03-31).
     assert [cf.date for cf in spend_flows] == [
-        date(2025, 2, 1),
-        date(2025, 3, 1),
-        date(2025, 4, 1),
+        date(2025, 1, 31),
+        date(2025, 2, 28),
+        date(2025, 3, 31),
     ]
 
 
@@ -441,10 +443,12 @@ def test_construction_spend_final_stub_flow_booked_at_stub_end():
     )
 
     spend_flows = [cf for cf in stream.entries if cf.label == "Construction Spend"]
+    # Booking dates use calendar month-ends, capped by construction phase end
+    # (end_date - 1 day = 2025-04-09).
     assert [cf.date for cf in spend_flows] == [
-        date(2025, 2, 15),
-        date(2025, 3, 15),
-        date(2025, 4, 10),
+        date(2025, 1, 31),
+        date(2025, 2, 28),
+        date(2025, 3, 31),
     ]
 
 
@@ -457,11 +461,13 @@ def test_month_end_monthly_schedule_stays_anchored_to_start_date():
     )
 
     spend_flows = [cf for cf in stream.entries if cf.label == "Construction Spend"]
+    # Booking dates use calendar month-ends, capped by construction phase end
+    # (end_date - 1 day = 2025-05-30).
     assert [cf.date for cf in spend_flows] == [
+        date(2025, 1, 31),
         date(2025, 2, 28),
         date(2025, 3, 31),
         date(2025, 4, 30),
-        date(2025, 5, 31),
     ]
 
 
@@ -475,10 +481,12 @@ def test_late_month_quarterly_schedule_stays_anchored_to_start_date():
     )
 
     spend_flows = [cf for cf in stream.entries if cf.label == "Construction Spend"]
+    # Booking dates use calendar quarter-ends, capped by construction phase end
+    # (end_date - 1 day = 2026-05-30).
     assert [cf.date for cf in spend_flows] == [
-        date(2025, 11, 30),
-        date(2026, 2, 28),
-        date(2026, 5, 31),
+        date(2025, 9, 30),
+        date(2025, 12, 31),
+        date(2026, 3, 31),
     ]
 
 

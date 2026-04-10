@@ -19,7 +19,6 @@ from typing import (
     overload,
 )
 
-from dcaf.streams.base import BaseGroup, BaseStream
 from dcaf.streams.cashflows import (
     CashFlow,
     CashFlowStream,
@@ -29,6 +28,12 @@ from dcaf.finance.escalation import (
     EscalationPolicy,
     _resolve_escalation_policy_override,
 )
+from dcaf.shared._financial_math import npv
+from dcaf.shared.formatting import format_label
+from dcaf.shared.time import (
+    hours_per_period,
+    time_delta_per_period,
+)
 from dcaf.shared.types import (
     DayCountConvention,
     Period,
@@ -37,12 +42,7 @@ from dcaf.shared.types import (
     TaxTreatment,
     normalize_cashflow_classification,
 )
-from dcaf.shared.formatting import format_label
-from dcaf.shared.time import (
-    hours_per_period,
-    time_delta_per_period,
-)
-from dcaf.metrics.npv import npv
+from dcaf.streams.base import BaseGroup, BaseStream
 
 
 @dataclass(frozen=True)
