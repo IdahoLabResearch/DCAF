@@ -13,10 +13,13 @@ from dcaf.shared.types import DayCountConvention, Period, ProFormaCategory, TaxT
 
 from dcaf.project.config import CapitalStructure
 from dcaf.project.timeline import ProjectTimeline
+from dcaf.metrics import lcoe as _lcoe
+from dcaf.streams.cashflows import CashFlow, CashFlowGroup, CashFlowStream
+from dcaf.streams.generation import GenerationStream
+from dcaf.tax.liability import compute_taxable_income, tax_liability
 
 if TYPE_CHECKING:
-    from dcaf.streams.cashflows import CashFlowGroup, CashFlowStream
-    from dcaf.streams.generation import GenerationStream
+    from dcaf.finance.escalation import EscalationPolicy
 
 
 def _validate_finite(value: float, name: str) -> None:
@@ -45,7 +48,11 @@ class ProjectMetrics:
     total_generation : float
         Total energy generated across all periods, in MWh.
     discounted_generation : float
-        Present value of generation (MWh discounted at ``discount_rate``).
+        Present value of a unit-price revenue basis stream under the levelized
+        price path. Because the basis is expressed in ``$/MWh`` with a unit
+        starting price, this value is numerically equivalent to
+        present-value-weighted generation in MWh under the chosen revenue
+        escalation policy.
     levelized_cost : float or None
         Levelized cost of energy (LCOE) in $/MWh, or ``None`` when
         ``discounted_generation`` is zero.
@@ -193,6 +200,15 @@ class ProjectAnalysis:
         Tax liability stream (empty when no tax rate is configured).
     tax_rate : float or None
         Project tax rate used to compute :attr:`taxes`.
+    levelized_revenue_basis : CashFlowGroup[str] or None
+        Unit-price revenue basis streams used by the LCOE root solve when
+        market revenue is configured on the project. Each stream represents the
+        revenue produced by a ``$1/MWh`` starting price under the configured
+        market escalation policy.
+    levelized_cost_escalation_rate : float or None
+        Inferred constant annual escalation rate used to construct a synthetic
+        unit-price revenue basis when no market revenue basis is configured and
+        the caller does not supply an explicit escalation policy.
     """
 
     name: str
@@ -203,6 +219,8 @@ class ProjectAnalysis:
     taxable_income: CashFlowStream
     taxes: CashFlowStream
     tax_rate: float | None
+    levelized_revenue_basis: CashFlowGroup[str] | None = None
+    levelized_cost_escalation_rate: float | None = None
 
     @property
     def generation(self) -> GenerationStream:
@@ -214,8 +232,6 @@ class ProjectAnalysis:
             Single stream containing every generation entry from
             :attr:`generation_by_asset`.
         """
-        from dcaf.streams.generation import GenerationStream
-
         return GenerationStream.from_streams(*self.generation_by_asset.values())
 
     @property
@@ -235,6 +251,8 @@ class ProjectAnalysis:
         discount_rate: float | None = None,
         valuation_date: date | None = None,
         convention: DayCountConvention = "actual/365",
+        levelized_cost_escalation_rate: float | None = None,
+        levelized_cost_escalation_policy: EscalationPolicy | None = None,
     ) -> ProjectMetrics:
         """Compute summary metrics for the project analysis.
 
@@ -249,6 +267,17 @@ class ProjectAnalysis:
         convention : DayCountConvention, optional
             Day count convention for fractional-year calculations.
             Default is ``"actual/365"``.
+        levelized_cost_escalation_rate : float, optional
+            Constant annual escalation rate for the levelized price stream.
+            Used only when an explicit ``levelized_cost_escalation_policy`` is
+            not supplied. If omitted, DCAF first reuses the configured market
+            revenue basis when available, then falls back to the project-level
+            inferred rate.
+        levelized_cost_escalation_policy : EscalationPolicy, optional
+            Explicit escalation policy for the levelized electricity price.
+            When supplied, LCOE is solved against a synthetic unit-price
+            revenue basis built from project generation under this policy,
+            regardless of whether the project has an existing market config.
 
         Returns
         -------
@@ -266,33 +295,38 @@ class ProjectAnalysis:
         total_stream = self.cashflows
         cash_only = total_stream.cash_only()
         generation = self.generation
+        levelized_revenue_basis = self._levelized_revenue_basis_stream(
+            levelized_cost_escalation_rate=levelized_cost_escalation_rate,
+            levelized_cost_escalation_policy=levelized_cost_escalation_policy,
+        )
         discounted_generation = (
-            generation.discounted_sum(
+            levelized_revenue_basis.npv(
                 rate=effective_rate,
                 valuation_date=effective_valuation_date,
                 convention=convention,
             )
-            if generation.entries
+            if levelized_revenue_basis.entries
             else 0.0
         )
-        levelized_cost = None
-        if discounted_generation > 0.0:
-            cost_flows = total_stream.filter(
-                lambda flow: flow.pro_forma_category
-                in (ProFormaCategory.OPERATING_COST, ProFormaCategory.CAPITAL_COST)
-            ).cash_only()
-            levelized_cost = (
-                -cost_flows.outflows().npv(
-                    rate=effective_rate,
-                    valuation_date=effective_valuation_date,
-                    convention=convention,
-                )
-                / discounted_generation
+        levelized_cost = (
+            _lcoe(
+                basis_stream=levelized_revenue_basis,
+                component_streams=self.cashflow_components,
+                replaceable_revenue_names=self._replaceable_revenue_component_names(),
+                tax_rate=self.tax_rate,
+                discount_rate=effective_rate,
+                valuation_date=effective_valuation_date,
+                convention=convention,
             )
+            if levelized_revenue_basis.entries
+            else None
+        )
+
         try:
             project_irr = cash_only.irr(convention=convention)
-        except ValueError:
+        except Exception:
             project_irr = None
+
         return ProjectMetrics(
             valuation_date=effective_valuation_date,
             discount_rate=effective_rate,
@@ -313,6 +347,8 @@ class ProjectAnalysis:
         discount_rate: float | None = None,
         valuation_date: date | None = None,
         convention: DayCountConvention = "actual/365",
+        levelized_cost_escalation_rate: float | None = None,
+        levelized_cost_escalation_policy: EscalationPolicy | None = None,
     ) -> ProjectMetrics:
         """Return summary metrics for the project analysis.
 
@@ -329,6 +365,12 @@ class ProjectAnalysis:
         convention : DayCountConvention, optional
             Day count convention for fractional-year calculations.
             Default is ``"actual/365"``.
+        levelized_cost_escalation_rate : float, optional
+            Constant annual escalation rate for the levelized price stream.
+            Used only when an explicit ``levelized_cost_escalation_policy`` is
+            not supplied.
+        levelized_cost_escalation_policy : EscalationPolicy, optional
+            Explicit escalation policy for the levelized price stream.
 
         Returns
         -------
@@ -345,6 +387,8 @@ class ProjectAnalysis:
             discount_rate=discount_rate,
             valuation_date=valuation_date,
             convention=convention,
+            levelized_cost_escalation_rate=levelized_cost_escalation_rate,
+            levelized_cost_escalation_policy=levelized_cost_escalation_policy,
         )
 
     def pro_forma(self, period: Period = "year") -> ProjectProForma:
@@ -360,8 +404,6 @@ class ProjectAnalysis:
         ProjectProForma
             Pro-forma with grouped summary rows followed by component detail rows.
         """
-        from dcaf.streams.cashflows import CashFlowStream
-
         revenues = self._cashflows_for_category(ProFormaCategory.REVENUE)
         operating_costs = self._cashflows_for_category(ProFormaCategory.OPERATING_COST)
         depreciation = self._cashflows_for_category(ProFormaCategory.DEPRECIATION)
@@ -455,9 +497,6 @@ class ProjectAnalysis:
         return stream.group_by(period=period).aggregate(lambda grouped: grouped.sum())
 
     def _interest_tax_shield(self) -> CashFlowStream:
-        from dcaf.streams.cashflows import CashFlow, CashFlowStream
-        from dcaf.tax.liability import compute_taxable_income, tax_liability
-
         if self.tax_rate is None:
             return CashFlowStream()
 
@@ -532,6 +571,62 @@ class ProjectAnalysis:
         if self.cashflows.entries:
             return min(flow.date for flow in self.cashflows.entries)
         raise ValueError("valuation_date is required when the project has no dated cashflows")
+
+    def _levelized_cost_escalation_rate(self, rate: float | None) -> float:
+        resolved_rate = self.levelized_cost_escalation_rate if rate is None else rate
+        if resolved_rate is None:
+            return 0.0
+        _validate_finite(resolved_rate, "levelized_cost_escalation_rate")
+        if resolved_rate <= -1.0:
+            raise ValueError("levelized_cost_escalation_rate must be greater than -1.0")
+        return resolved_rate
+
+    def _levelized_revenue_basis_stream(
+        self,
+        *,
+        levelized_cost_escalation_rate: float | None,
+        levelized_cost_escalation_policy: EscalationPolicy | None,
+    ) -> CashFlowStream:
+        if (
+            levelized_cost_escalation_policy is not None
+            and levelized_cost_escalation_rate is not None
+        ):
+            raise ValueError(
+                "levelized_cost_escalation_policy cannot be combined with "
+                "levelized_cost_escalation_rate"
+            )
+
+        if levelized_cost_escalation_policy is not None:
+            return self.generation.to_revenue(
+                price_per_mwh=1.0,
+                escalation_policy=levelized_cost_escalation_policy,
+            )
+
+        if levelized_cost_escalation_rate is not None:
+            resolved_rate = self._levelized_cost_escalation_rate(levelized_cost_escalation_rate)
+            return self.generation.to_revenue(
+                price_per_mwh=1.0,
+                escalation=resolved_rate,
+            )
+
+        if self.levelized_revenue_basis is not None and any(
+            stream.entries for stream in self.levelized_revenue_basis.values()
+        ):
+            return self.levelized_revenue_basis.ungroup().sort()
+
+        if not self.generation.entries:
+            return CashFlowStream()
+
+        resolved_rate = self._levelized_cost_escalation_rate(None)
+        return self.generation.to_revenue(
+            price_per_mwh=1.0,
+            escalation=resolved_rate,
+        )
+
+    def _replaceable_revenue_component_names(self) -> set[str]:
+        if self.levelized_revenue_basis is None:
+            return set()
+        return {name for name, stream in self.levelized_revenue_basis.items() if stream.entries}
 
 
 __all__ = [

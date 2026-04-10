@@ -10,7 +10,7 @@ type VDBConvention = Literal["none", "half-year", "mid-quarter", "best-of-half-y
 type SpendSchedulePoint = tuple[float, float]
 type SpendSchedule = tuple[SpendSchedulePoint, ...]
 type InterestTreatment = Literal["capitalize", "pay"]
-type SpendScheduleName = Literal["flat", "bell", "ramped", "triangle", "linear"]
+type SpendScheduleName = Literal["flat", "bell", "ramped", "triangle", "linear", "upfront"]
 
 
 class ProFormaCategory(StrEnum):

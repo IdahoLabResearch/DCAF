@@ -27,7 +27,6 @@ from dcaf.streams.cashflows import (
 from dcaf.finance.escalation import (
     ConstantRateEscalation,
     EscalationPolicy,
-    _constant_discount_policy,
     _resolve_escalation_policy_override,
 )
 from dcaf.shared.types import (
@@ -43,6 +42,7 @@ from dcaf.shared.time import (
     hours_per_period,
     time_delta_per_period,
 )
+from dcaf.metrics.npv import npv
 
 
 @dataclass(frozen=True)
@@ -1111,15 +1111,8 @@ class GenerationStream(BaseStream[Generation]):
         >>> stream.discounted_sum(rate=0.08, valuation_date=date(2030, 1, 1)) > 0
         True
         """
-        discount_policy = _constant_discount_policy(
-            valuation_date=valuation_date,
-            rate=rate,
-            convention=convention,
-        )
-        total = 0.0
-        for entry in self.entries:
-            total += entry.amount_mwh / discount_policy.factor(entry.date)
-        return total
+        values = ((entry.amount_mwh, entry.date) for entry in self.entries)
+        return npv(values, rate, valuation_date, convention)
 
     def to_revenue(
         self,

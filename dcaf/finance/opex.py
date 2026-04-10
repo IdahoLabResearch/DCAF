@@ -72,7 +72,7 @@ def fixed_opex(
     Examples
     --------
     >>> from datetime import date
-    >>> from dcaf.finance import fixed_opex
+    >>> from dcaf.finance.opex import fixed_opex
     >>> stream = fixed_opex(amount=500_000, start=date(2025, 1, 1), periods=3, escalation=0.025)
     >>> [(f.date.year, f.amount) for f in stream.entries]
     [(2025, -500000.0), (2026, -512500.0), (2027, -525312.5)]

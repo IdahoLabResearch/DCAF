@@ -116,6 +116,18 @@ def _effective_escalation(
     return local if local.is_configured else default
 
 
+def _constant_annual_escalation_rate(settings: _EscalationSettings) -> float | None:
+    """Return the annual rate when *settings* resolves to a constant annual policy."""
+    if settings.policy is not None:
+        policy = settings.policy
+        if isinstance(policy, ConstantRateEscalation) and policy.period == "year":
+            return policy.rate
+        return None
+    if settings.escalation_period == "year":
+        return settings.escalation
+    return None
+
+
 @dataclass(frozen=True)
 class _ScheduledPeriod:
     """One modeled operating period with an optional partial-period fraction."""
@@ -1508,6 +1520,7 @@ class EnergyProject:
         """
         generation_by_asset: dict[str, GenerationStream] = {}
         component_streams: dict[str, CashFlowStream] = {}
+        levelized_revenue_basis: dict[str, CashFlowStream] = {}
 
         for asset_name, asset_config in self._config.assets.items():
             generation = self._build_generation(asset_name, asset_config)
@@ -1520,6 +1533,14 @@ class EnergyProject:
             revenue_stream = self._build_revenue(asset_name, asset_config, generation)
             if revenue_stream.entries:
                 component_streams[f"{asset_name}:revenue"] = revenue_stream
+            revenue_basis_stream = self._build_revenue(
+                asset_name,
+                asset_config,
+                generation,
+                price_per_mwh=1.0,
+            )
+            if revenue_basis_stream.entries:
+                levelized_revenue_basis[f"{asset_name}:revenue"] = revenue_basis_stream
 
             for cost_name, cost_config in asset_config.fixed_opex_items.items():
                 stream = self._build_fixed_opex(asset_name, cost_config)
@@ -1595,6 +1616,8 @@ class EnergyProject:
             taxable_income=taxable_income,
             taxes=taxes,
             tax_rate=self._config.tax_rate,
+            levelized_revenue_basis=CashFlowGroup(levelized_revenue_basis),
+            levelized_cost_escalation_rate=self._infer_levelized_cost_escalation_rate(),
         )
 
     def cashflows(self) -> CashFlowStream:
@@ -1626,6 +1649,8 @@ class EnergyProject:
         discount_rate: float | None = None,
         valuation_date: date | None = None,
         convention: DayCountConvention = "actual/365",
+        levelized_cost_escalation_rate: float | None = None,
+        levelized_cost_escalation_policy: EscalationPolicy | None = None,
     ) -> ProjectMetrics:
         """Compile and return summary project metrics.
 
@@ -1639,6 +1664,12 @@ class EnergyProject:
             Reference date for discounting.
         convention : DayCountConvention, optional
             Day count convention. Default is ``"actual/365"``.
+        levelized_cost_escalation_rate : float, optional
+            Annual escalation rate assumed for the levelized price stream.
+            When omitted, DCAF uses an inferred project-level rate when one
+            can be resolved.
+        levelized_cost_escalation_policy : EscalationPolicy, optional
+            Explicit escalation policy for the levelized price stream.
 
         Returns
         -------
@@ -1649,6 +1680,8 @@ class EnergyProject:
             discount_rate=discount_rate,
             valuation_date=valuation_date,
             convention=convention,
+            levelized_cost_escalation_rate=levelized_cost_escalation_rate,
+            levelized_cost_escalation_policy=levelized_cost_escalation_policy,
         )
 
     def pro_forma(self, period: Period = "year") -> ProjectProForma:
@@ -1736,6 +1769,8 @@ class EnergyProject:
         asset_name: str,
         asset_config: _AssetConfig,
         generation: GenerationStream,
+        *,
+        price_per_mwh: float | None = None,
     ) -> CashFlowStream:
         """Build the revenue stream for *asset_name* from generation and market config.
 
@@ -1751,11 +1786,14 @@ class EnergyProject:
                 market = self._config.markets.get((None, carrier))
             if market is None or market.sell_price_per_unit is None:
                 continue
+            resolved_price_per_mwh = (
+                market.sell_price_per_unit if price_per_mwh is None else price_per_mwh
+            )
             escalation = _effective_escalation(market.escalation, self._config.default_escalation)
             if escalation.policy is not None:
                 revenue_streams.append(
                     carrier_generation.to_revenue(
-                        price_per_mwh=market.sell_price_per_unit,
+                        price_per_mwh=resolved_price_per_mwh,
                         label=market.label,
                         escalation_policy=escalation.policy,
                     )
@@ -1763,7 +1801,7 @@ class EnergyProject:
                 continue
             revenue_streams.append(
                 carrier_generation.to_revenue(
-                    price_per_mwh=market.sell_price_per_unit,
+                    price_per_mwh=resolved_price_per_mwh,
                     label=market.label,
                     escalation=escalation.escalation,
                     escalation_period=escalation.escalation_period,
@@ -2092,6 +2130,46 @@ class EnergyProject:
                         "cashflow modifiers must return CashFlowStream values for every component"
                     )
         return updated
+
+    def _infer_levelized_cost_escalation_rate(self) -> float | None:
+        """Infer a shared annual escalation rate for constant-dollar LCOE when possible."""
+
+        inferred_rates: list[float] = []
+
+        def collect(local: _EscalationSettings) -> bool:
+            effective = _effective_escalation(local, self._config.default_escalation)
+            rate = _constant_annual_escalation_rate(effective)
+            if rate is None:
+                return False
+            inferred_rates.append(rate)
+            return True
+
+        for asset_config in self._config.assets.values():
+            if asset_config.construction.overnight_cost not in (None, 0.0):
+                if not collect(asset_config.construction.escalation):
+                    return None
+            for recurring_cost in asset_config.fixed_opex_items.values():
+                if recurring_cost.amount not in (None, 0.0):
+                    if not collect(recurring_cost.escalation):
+                        return None
+            if asset_config.ptc is not None and asset_config.ptc.rate_per_unit != 0.0:
+                if not collect(asset_config.ptc.escalation):
+                    return None
+
+        for market in self._config.markets.values():
+            if market.sell_price_per_unit not in (None, 0.0):
+                if not collect(market.escalation):
+                    return None
+
+        if not inferred_rates:
+            return 0.0
+
+        first_rate = inferred_rates[0]
+        if any(
+            not isclose(rate, first_rate, rel_tol=0.0, abs_tol=1e-12) for rate in inferred_rates[1:]
+        ):
+            return None
+        return first_rate
 
     def _resolved_capital_structure(self) -> CapitalStructure | None:
         """Return the capital structure with the project tax rate filled in when needed.

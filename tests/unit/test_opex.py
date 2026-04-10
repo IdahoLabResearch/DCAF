@@ -4,7 +4,7 @@ from datetime import date
 
 import pytest
 
-from dcaf.finance import fixed_opex
+from dcaf.finance.opex import fixed_opex
 from dcaf.finance.escalation import IndexSeriesEscalation
 from dcaf.shared.types import ProFormaCategory, TaxTreatment
 

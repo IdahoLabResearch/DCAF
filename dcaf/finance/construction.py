@@ -137,7 +137,8 @@ class SpendProfile:
         ----------
         name : SpendScheduleName
             Name of the predefined spend curve. Supported values are ``"flat"``,
-            ``"bell"``, ``"ramped"``, ``"triangle"``, and ``"linear"``.
+            ``"bell"``, ``"ramped"``, ``"triangle"``, ``"linear"``, and
+            ``"upfront"``.
 
         Returns
         -------
@@ -446,13 +447,23 @@ def _scheduled_spends(
     escalation_policy: EscalationPolicy | None = None,
 ) -> list[_ScheduledSpend]:
     """Expand a validated config into per-period scheduled spend entries."""
+    effective_policy = (
+        _construction_simple_escalation(config) if escalation_policy is None else escalation_policy
+    )
+    if config.profile.name == "upfront":
+        return [
+            _ScheduledSpend(
+                start_date=config.start_date,
+                end_date=config.start_date,
+                booking_date=config.start_date,
+                spend_amount=config.total_cost * effective_policy.factor(config.start_date),
+            )
+        ]
+
     periods = _iter_period_boundaries(
         config.start_date,
         config.end_date,
         parse_period(str(config.period)),
-    )
-    effective_policy = (
-        _construction_simple_escalation(config) if escalation_policy is None else escalation_policy
     )
     spends: list[_ScheduledSpend] = []
 
@@ -539,6 +550,10 @@ def _build_cashflows(
         config.end_date,
         _debt_servicing_period(config),
     ):
+        while draw_index < len(scheduled_draws) and scheduled_draws[draw_index][0] <= service_start:
+            debt_balance += scheduled_draws[draw_index][1]
+            draw_index += 1
+
         period_years = timedelta_fractional_years(service_start, service_end)
         interest = debt_balance * config.financing.interest_rate * period_years
         interest_flow = _construction_interest_cashflow(

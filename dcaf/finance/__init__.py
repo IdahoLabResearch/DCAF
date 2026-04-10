@@ -1,14 +1,15 @@
-"""Financial building blocks used by project and stream models."""
+"""Financial building blocks used by project and stream models.
+
+Escalation and spend-curve helpers are re-exported here for convenience.
+Other submodules (amortization, construction, opex) should be imported
+directly to avoid circular dependencies with ``dcaf.streams``::
+
+    from dcaf.finance.amortization import AmortizationSchedule
+    from dcaf.finance.construction import ConstructionSpendBuilder
+    from dcaf.finance.opex import fixed_opex
+"""
 
 from dcaf.finance._spend_curves import get_spend_profile, get_spend_profiles
-from dcaf.finance.amortization import AmortizationBuilder, AmortizationSchedule
-from dcaf.finance.construction import (
-    ConstructionFinancing,
-    ConstructionSpendBuilder,
-    ConstructionSpendConfig,
-    SpendProfile,
-    construction_spend_schedule,
-)
 from dcaf.finance.escalation import (
     CompositeEscalation,
     ConstantRateEscalation,
@@ -17,23 +18,14 @@ from dcaf.finance.escalation import (
     EscalationSegment,
     IndexSeriesEscalation,
 )
-from dcaf.finance.opex import fixed_opex
 
 __all__ = [
-    "AmortizationBuilder",
-    "AmortizationSchedule",
     "CompositeEscalation",
     "ConstantRateEscalation",
-    "ConstructionFinancing",
-    "ConstructionSpendBuilder",
-    "ConstructionSpendConfig",
     "EscalationBuilder",
     "EscalationPolicy",
     "EscalationSegment",
     "IndexSeriesEscalation",
-    "SpendProfile",
-    "construction_spend_schedule",
-    "fixed_opex",
     "get_spend_profile",
     "get_spend_profiles",
 ]
