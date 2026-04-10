@@ -215,13 +215,12 @@ class ConstructionFinancing:
     Unlevered construction:
 
     >>> from dcaf.finance.construction import ConstructionFinancing
-    >>> ConstructionFinancing()
-    ConstructionFinancing(
-        debt_fraction=0.0,
-        interest_rate=None,
-        interest_treatment=<...>,
-        servicing_period=None,
-    )
+    >>> from pprint import pprint
+    >>> pprint(ConstructionFinancing())
+    ConstructionFinancing(debt_fraction=0.0,
+                          interest_rate=None,
+                          interest_treatment=<_InterestTreatmentEnum.CAPITALIZE: 'capitalize'>,
+                          servicing_period=None)
 
     Debt-funded construction with paid interest:
 

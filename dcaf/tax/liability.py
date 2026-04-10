@@ -37,7 +37,7 @@ def compute_taxable_income(
 
     Example:
         >>> from datetime import date
-        >>> from dcaf import CashFlowStream, CashFlow
+        >>> from dcaf.streams import CashFlowStream, CashFlow
         >>> revenue = CashFlowStream([
         ...     CashFlow(100_000, date(2025, 6, 1), "Revenue", tax_treatment="taxable")
         ... ])
@@ -110,17 +110,23 @@ def tax_liability(
     CashFlowStream
         Tax payment cashflows (negative amounts for payments, positive for
         refunds when *allow_refund* is ``True``), with ``is_cash=True``.
+        
+    Note:
+        This implementation does not model tax loss carryforwards or refunds.
+        Negative taxable income (losses) produce no tax liability. This differs
+        from the MPR tool, where a loss generates a tax credit (refund).
 
-    Examples
-    --------
-    >>> from datetime import date
-    >>> from dcaf.streams.cashflows import CashFlowStream, CashFlow
-    >>> taxable_income = CashFlowStream([
-    ...     CashFlow(100_000, date(2025, 1, 1), "Taxable Income", is_cash=False)
-    ... ])
-    >>> taxes = tax_liability(taxable_income, tax_rate=0.21)
-    >>> taxes[0].amount  # -21,000 (negative = outflow)
-    -21000.0
+    Example:
+        >>> from datetime import date
+        >>> from dcaf.streams import CashFlowStream, CashFlow
+        >>> taxable_income = CashFlowStream([
+        ...     CashFlow(100_000, date(2025, 1, 1), "Taxable Income", is_cash=False)
+        ... ])
+        >>> taxes = tax_liability(taxable_income, tax_rate=0.21)
+        >>> taxes[0].amount  # -21,000 (negative = outflow)
+        -21000.0
+        >>> taxes[0].is_cash
+        True
     """
     if allow_refund:
         income = taxable_income_stream

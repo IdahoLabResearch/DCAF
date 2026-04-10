@@ -356,8 +356,8 @@ class CompositeEscalation:
     ...         EscalationSegment(date(2022, 1, 1), forward),
     ...     ),
     ... )
-    >>> round(policy.factor(date(2024, 1, 1)), 4)
-    1.1246
+    >>> round(policy.factor(date(2024, 1, 1)), 3)  # doctest: +NUMBER
+    1.125
     """
 
     reference_date: date

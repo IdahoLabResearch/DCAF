@@ -466,7 +466,7 @@ def vdb_schedule(
     ...     terminal_catch_up=True,
     ... )
     >>> aligned.entries[0].date
-    date(2031, 12, 31)
+    datetime.date(2031, 12, 31)
     """
     if isinstance(life, bool) or not isinstance(life, int) or life <= 0:
         raise ValueError("life must be a positive integer")

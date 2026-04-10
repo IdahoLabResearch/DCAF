@@ -101,7 +101,8 @@ def ptc(
     Basic PTC conversion over a 10-year eligibility window:
 
     >>> from datetime import date
-    >>> from dcaf import GenerationStream, ptc
+    >>> from dcaf.streams import GenerationStream
+    >>> from dcaf.tax import ptc
     >>> generation = GenerationStream.from_capacity(1000, 0.92, date(2025, 1, 1), 20)
     >>> credits = ptc(generation, rate_per_mwh=27.5, years=10)
     >>> credits.count()
@@ -115,7 +116,7 @@ def ptc(
 
     Use an earlier reference date for escalation:
 
-    >>> from dcaf import Generation
+    >>> from dcaf.streams import Generation
     >>> generation = GenerationStream([
     ...     Generation(1000.0, date(2030, 7, 1)),
     ...     Generation(1000.0, date(2030, 8, 1)),
@@ -199,7 +200,7 @@ def itc(
 
     Example:
         >>> from datetime import date
-        >>> from dcaf import CashFlowStream, CashFlow
+        >>> from dcaf.streams import CashFlowStream, CashFlow
         >>> capex = CashFlowStream([
         ...     CashFlow(
         ...         -10_000_000,
@@ -256,7 +257,7 @@ def itc_adjusted_basis(capex_stream: CashFlowStream, rate: float) -> float:
 
     Example:
         >>> from datetime import date
-        >>> from dcaf import CashFlowStream, CashFlow
+        >>> from dcaf.streams import CashFlowStream, CashFlow
         >>> capex = CashFlowStream([
         ...     CashFlow(
         ...         -100_000_000,
