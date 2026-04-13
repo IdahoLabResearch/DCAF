@@ -19,13 +19,12 @@ from typing import (
     overload,
 )
 
+from dcaf.streams.base import BaseGroup, BaseStream
 from dcaf.finance.escalation import (
     ConstantRateEscalation,
     EscalationPolicy,
     _resolve_escalation_policy_override,
 )
-from dcaf.shared._financial_math import irr as _irr
-from dcaf.shared._financial_math import npv as _npv
 from dcaf.shared.formatting import format_label
 from dcaf.shared.time import time_delta_per_period
 from dcaf.shared.types import (
@@ -39,7 +38,8 @@ from dcaf.shared.types import (
     parse_pro_forma_category,
     parse_tax_treatment,
 )
-from dcaf.streams.base import BaseGroup, BaseStream
+from dcaf.metrics.npv import npv as _npv
+from dcaf.metrics.irr import irr as _irr
 
 
 class _UnsetType:

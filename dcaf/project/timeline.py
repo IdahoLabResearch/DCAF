@@ -20,9 +20,9 @@ class ProjectTimeline:
     construction_start : date, optional
         Date on which construction begins.
     operations_start : date, optional
-        Date on which the asset enters operation. This replaces the older
-        ``cod`` terminology and is used as the default operating start date for
-        generation, fixed OPEX, debt service, depreciation, and tax incentives.
+        Date on which the asset enters operation. This is used as the default
+        operating start date for generation, fixed OPEX, debt service,
+        depreciation, and tax incentives.
     operations_end : date, optional
         Last date of operations (inclusive). When recurring operating streams do
         not specify an explicit period count, the builder infers the modeled
@@ -46,18 +46,6 @@ class ProjectTimeline:
         if self.operations_start is not None and self.operations_end is not None:
             if self.operations_end < self.operations_start:
                 raise ValueError("operations_end must not be before operations_start")
-
-    @property
-    def cod(self) -> date | None:
-        """Return ``operations_start`` using the legacy COD terminology.
-
-        Returns
-        -------
-        date or None
-            The configured operations start date, or ``None`` when it has not
-            been set.
-        """
-        return self.operations_start
 
     @property
     def operations_end_exclusive(self) -> date | None:

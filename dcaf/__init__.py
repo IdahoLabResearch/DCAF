@@ -7,21 +7,21 @@ financial primitives live in dedicated subpackages such as :mod:`dcaf.streams`,
 """
 
 from dcaf.project import (
-    CapitalStructure,
     EnergyProject,
     ProjectAnalysis,
     ProjectMetrics,
     ProjectProForma,
     ProjectProFormaRow,
-    ProjectTimeline,
+    ProjectValuation,
+    wacc,
 )
 
 __all__ = [
-    "CapitalStructure",
     "EnergyProject",
     "ProjectAnalysis",
     "ProjectMetrics",
     "ProjectProForma",
     "ProjectProFormaRow",
-    "ProjectTimeline",
+    "ProjectValuation",
+    "wacc",
 ]

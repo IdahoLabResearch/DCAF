@@ -1,8 +1,8 @@
 """High-level project builder APIs for composing DCAF analyses.
 
-This module provides an order-independent ``EnergyProject`` builder that wraps
-the lower-level DCAF primitives into a more configuration-oriented workflow.
-The builder stays immutable: each configuration method returns a new project.
+This module provides an explicit ``EnergyProject`` builder that wraps the
+lower-level DCAF primitives into a configuration-oriented workflow. The builder
+stays immutable: each configuration method returns a new project.
 
 The implementation is intentionally plural-first. Assets are keyed by name and
 market assumptions are keyed by carrier, with optional asset-specific market
@@ -21,7 +21,7 @@ from typing import Callable, Literal, Self
 from dateutil.relativedelta import relativedelta
 
 from dcaf.project.analysis import ProjectAnalysis, ProjectMetrics, ProjectProForma
-from dcaf.project.config import CapitalStructure
+from dcaf.project.config import ProjectValuation, wacc as _wacc
 from dcaf.project.timeline import ProjectTimeline
 from dcaf.finance.amortization import AmortizationSchedule
 from dcaf.streams.cashflows import CashFlow, CashFlowGroup, CashFlowStream
@@ -55,7 +55,6 @@ from dcaf.shared.types import (
 from dcaf.shared.formatting import format_label
 from dcaf.shared.time import elapsed_periods, event_date, hours_per_period, time_delta_per_period
 
-type MarketKey = tuple[str | None, str]
 type CashFlowComponentModifier = Callable[
     [CashFlowGroup[str]],
     CashFlowGroup[str] | Mapping[str, CashFlowStream],
@@ -143,12 +142,13 @@ class _ScheduledPeriod:
 
 
 @dataclass(frozen=True)
-class _GenerationConfig:
+class _CapacityGenerationConfig:
     """Configuration for capacity-based generation inputs on a single asset."""
 
-    stream: GenerationStream | None = None
-    capacity_mw: float | None = None
-    capacity_factor: float | None = None
+    capacity_mw: float
+    capacity_factor: float
+    operations_start: date | None = None
+    operations_end: date | None = None
     start: date | None = None
     periods: int | None = None
     frequency: Period | None = None
@@ -159,10 +159,24 @@ class _GenerationConfig:
 
 
 @dataclass(frozen=True)
+class _GenerationStreamConfig:
+    """Configuration for an explicit generation stream override.
+
+    Operations dates are inferred from the minimum and maximum dates in the
+    provided stream when not explicitly overridden elsewhere.
+    """
+
+    stream: GenerationStream
+
+
+type _GenerationConfig = _CapacityGenerationConfig | _GenerationStreamConfig | None
+
+
+@dataclass(frozen=True)
 class _RecurringCostConfig:
     """Configuration for a recurring (fixed) operating cost item."""
 
-    amount: float | None = None
+    amount: float
     start: date | None = None
     periods: int | None = None
     frequency: Period | None = None
@@ -175,35 +189,58 @@ class _RecurringCostConfig:
 class _VariableCostConfig:
     """Configuration for a per-unit variable cost item."""
 
-    rate_per_unit: float | None = None
+    rate_per_unit: float
     label: str = "Variable Cost"
     escalation: _EscalationSettings = field(default_factory=_EscalationSettings)
 
 
 @dataclass(frozen=True)
-class _ConstructionConfig:
+class _ConstructionScheduleConfig:
     """Configuration for construction spend schedule inputs on a single asset."""
 
-    stream: CashFlowStream | None = None
-    overnight_cost: float | None = None
-    spend_profile: SpendProfile | SpendScheduleName = "flat"
+    overnight_cost: float
+    cod_date: date | None = None
+    spend_profile: SpendProfile | SpendScheduleName | None = None
+    construction_start: date | None = None
+    construction_end: date | None = None
     period: Period = "month"
-    start: date | None = None
-    end: date | None = None
-    financing: ConstructionFinancing = field(default_factory=ConstructionFinancing)
     escalation: _EscalationSettings = field(default_factory=_EscalationSettings)
 
 
 @dataclass(frozen=True)
-class _DebtConfig:
-    """Configuration for permanent debt financing on a single asset."""
+class _ConstructionStreamConfig:
+    """Configuration for an explicit construction cash-flow stream override."""
 
-    schedule: AmortizationSchedule | CashFlowStream | None = None
-    annual_rate: float | None = None
-    term: int | None = None
-    frequency: Period = "year"
-    start: date | None = None
-    principal: float | None = None
+    stream: CashFlowStream
+
+
+type _ConstructionConfig = _ConstructionScheduleConfig | _ConstructionStreamConfig | None
+
+
+@dataclass(frozen=True)
+class _ConstructionDebtConfig:
+    """Configuration for construction-period debt and its operations-period amortization.
+
+    Captures the full debt lifecycle: what fraction of construction cost is
+    debt-funded, how interest accrues during construction, and how the resulting
+    principal is repaid during operations.
+    """
+
+    debt_fraction: float
+    construction_interest_rate: float | None = None
+    interest_treatment: InterestTreatment = "capitalize"
+    servicing_period: Period | None = None
+    amortization_rate: float = 0.0
+    amortization_term: int = 0
+    amortization_frequency: Period = "year"
+    amortization_start: date | None = None
+
+
+@dataclass(frozen=True)
+class _DebtScheduleConfig:
+    """Configuration for an explicit debt schedule override."""
+
+    schedule: AmortizationSchedule | CashFlowStream
 
 
 @dataclass(frozen=True)
@@ -249,11 +286,12 @@ class _PtcConfig:
 class _AssetConfig:
     """All configuration for a single named project asset."""
 
-    generation: _GenerationConfig = field(default_factory=_GenerationConfig)
+    generation: _GenerationConfig = None
     fixed_opex_items: dict[str, _RecurringCostConfig] = field(default_factory=dict)
     variable_cost_items: dict[str, _VariableCostConfig] = field(default_factory=dict)
-    construction: _ConstructionConfig = field(default_factory=_ConstructionConfig)
-    debt: _DebtConfig = field(default_factory=_DebtConfig)
+    construction: _ConstructionConfig = None
+    construction_debt: _ConstructionDebtConfig | None = None
+    debt_schedule: _DebtScheduleConfig | None = None
     depreciation: _DepreciationConfig = None
     itc_rate: float | None = None
     ptc: _PtcConfig | None = None
@@ -263,7 +301,7 @@ class _AssetConfig:
 class _MarketConfig:
     """Market price and escalation configuration for one energy carrier."""
 
-    sell_price_per_unit: float | None = None
+    sell_price_per_unit: float
     unit: str | None = None
     label: str = "Market Revenue"
     escalation: _EscalationSettings = field(default_factory=_EscalationSettings)
@@ -273,12 +311,15 @@ class _MarketConfig:
 class _ProjectConfig:
     """Top-level internal configuration bag for an ``EnergyProject``."""
 
-    name: str = ""
+    default_asset: str = "default"
+    frequency: Period = "year"
+    timing: TimingConvention = "end"
     timeline: ProjectTimeline = field(default_factory=ProjectTimeline)
     assets: dict[str, _AssetConfig] = field(default_factory=dict)
-    markets: dict[MarketKey, _MarketConfig] = field(default_factory=dict)
+    markets: dict[str, _MarketConfig] = field(default_factory=dict)
     tax_rate: float | None = None
-    capital_structure: CapitalStructure | None = None
+    tax_allow_refund: bool = False
+    valuation: ProjectValuation | None = None
     default_escalation: _EscalationSettings = field(default_factory=_EscalationSettings)
     custom_cashflows: dict[str, CashFlowStream] = field(default_factory=dict)
     cashflow_modifiers: tuple[CashFlowComponentModifier, ...] = ()
@@ -288,44 +329,67 @@ class EnergyProject:
     """Immutable fluent builder for composing and analyzing energy project cash flows.
 
     Each configuration method returns a new ``EnergyProject`` instance, leaving
-    the original unchanged. The builder supports a single implicit asset named
-    ``"default"`` for single-asset projects; multi-asset projects pass explicit
-    ``asset`` names to each method.
+    the original unchanged. All builder methods operate on the single asset
+    configured at construction time.
 
     Call :meth:`analyze` to compile all configured inputs into a
     :class:`ProjectAnalysis`, or use the convenience methods
-    :meth:`cashflows`, :meth:`summary`, and :meth:`pro_forma` to skip the
+    :meth:`cashflows`, :meth:`metrics`, and :meth:`pro_forma` to skip the
     intermediate result.
 
     Examples
     --------
     >>> from datetime import date
     >>> analysis = (
-    ...     EnergyProject("My Plant")
-    ...     .timeline(
-    ...         construction_start=date(2025, 1, 1),
+    ...     EnergyProject()
+    ...     .discount_rate(rate=0.08)
+    ...     .generation(
+    ...         capacity_mw=100.0,
+    ...         capacity_factor=0.35,
     ...         operations_start=date(2026, 1, 1),
-    ...         operating_years=20,
+    ...         operations_end=date(2045, 12, 31),
     ...     )
-    ...     .generation(capacity_mw=100.0, capacity_factor=0.35)
-    ...     .market(sell_price_per_unit=50.0)
-    ...     .construction(overnight_cost=200_000_000)
+    ...     .revenue_from_generation(sell_price_per_unit=50.0)
+    ...     .construction(
+    ...         overnight_cost=200_000_000,
+    ...         spend_profile="flat",
+    ...         construction_start=date(2025, 1, 1),
+    ...     )
     ...     .tax(rate=0.21)
     ...     .analyze()
     ... )
-    >>> metrics = analysis.metrics(discount_rate=0.08)
+    >>> metrics = analysis.metrics()
     """
 
-    def __init__(self, name: str = "") -> None:
+    def __init__(
+        self,
+        *,
+        asset: str = "default",
+        frequency: Period = "year",
+        timing: TimingConvention = "end",
+    ) -> None:
         """Initialize a new immutable project builder.
 
         Parameters
         ----------
-        name : str, optional
-            Project name carried into the compiled :class:`ProjectAnalysis`.
-            Default is an empty string.
+        asset : str, optional
+            Name for the single project asset. Used as a prefix for component
+            keys in the compiled :class:`ProjectAnalysis` (e.g.
+            ``"<asset>:revenue"``). Default is ``"default"``.
+        frequency : Period, optional
+            Default operating frequency for recurring items. Default is
+            ``"year"``; change only when modeling sub-annual periods.
+        timing : TimingConvention, optional
+            Default event-date convention. ``"end"`` (default) books events at
+            the end of the calendar period, capped by the phase boundary.
+            ``"begin"`` books events at the start of the calendar period,
+            floored by the phase start.
         """
-        self._config = _ProjectConfig(name=name)
+        self._config = _ProjectConfig(
+            default_asset=asset,
+            frequency=frequency,
+            timing=timing,
+        )
 
     @classmethod
     def from_config(cls, config: _ProjectConfig) -> Self:
@@ -357,190 +421,97 @@ class EnergyProject:
         return project
 
     @property
-    def name(self) -> str:
-        """Return the configured project name.
+    def valuation_config(self) -> ProjectValuation | None:
+        """Return the current valuation configuration.
 
         Returns
         -------
-        str
-            Project name stored on the builder.
-        """
-        return self._config.name
-
-    @property
-    def timeline_config(self) -> ProjectTimeline:
-        """Return the current timeline configuration.
-
-        Returns
-        -------
-        ProjectTimeline
-            Timeline assumptions currently attached to the builder.
-        """
-        return self._config.timeline
-
-    @property
-    def capital_structure_config(self) -> CapitalStructure | None:
-        """Return the current capital structure configuration.
-
-        Returns
-        -------
-        CapitalStructure or None
-            Current capital structure, or ``None`` when none has been
+        ProjectValuation or None
+            Current valuation configuration, or ``None`` when none has been
             configured.
         """
-        return self._config.capital_structure
+        return self._config.valuation
 
-    def timeline(
+    def discount_rate(
         self,
         *,
-        construction_start: date | None = None,
-        operations_start: date | None = None,
-        operations_end: date | None = None,
-        frequency: Period | None = None,
-        timing: TimingConvention | None = None,
-        cod: date | None = None,
-        operating_years: int | None = None,
+        rate: float,
     ) -> Self:
-        """Configure the project timeline.
+        """Configure the project's default discount rate.
 
         Parameters
         ----------
-        construction_start : date, optional
-            Date on which construction begins.
-        operations_start : date, optional
-            Date on which operations begin. This is the preferred replacement
-            for the older ``cod`` parameter.
-        operations_end : date, optional
-            End boundary for operations. When recurring operating inputs do not
-            specify explicit period counts, the builder infers the modeled
-            schedule from ``operations_start`` up to this date and prorates any
-            trailing partial period.
-        frequency : Period, optional
-            Default operating frequency for recurring items.
-        timing : TimingConvention, optional
-            Default event-date convention. ``"end"`` (default) books events at
-            the end of the calendar period, capped by the phase boundary.
-            ``"begin"`` books events at the start of the calendar period,
-            floored by the phase start.
-        cod : date, optional
-            Backward-compatible alias for ``operations_start``.
-        operating_years : int, optional
-            Backward-compatible helper that derives ``operations_end`` from the
-            effective operations start date.
+        rate : float
+            Project-wide default discount rate.
 
         Returns
         -------
         EnergyProject
-            New project with updated timeline assumptions.
-
-        Raises
-        ------
-        ValueError
-            If ``cod`` and ``operations_start`` disagree, ``operating_years``
-            is not positive, ``operating_years`` is provided without an
-            operations start date, or ``operations_end`` and
-            ``operating_years`` describe different operating windows.
+            New project with updated valuation assumptions.
         """
-        timeline = self._config.timeline
-        resolved_operations_start = operations_start
-        if cod is not None:
-            if resolved_operations_start is not None and cod != resolved_operations_start:
-                raise ValueError("cod and operations_start must match when both are provided")
-            resolved_operations_start = cod
-        effective_operations_start = (
-            timeline.operations_start
-            if resolved_operations_start is None
-            else resolved_operations_start
-        )
-        resolved_operations_end = operations_end
-        if operating_years is not None:
-            if operating_years <= 0:
-                raise ValueError("operating_years must be positive")
-            if effective_operations_start is None:
-                raise ValueError(
-                    "operations_start or cod is required when operating_years is provided"
-                )
-            derived_operations_end = (
-                effective_operations_start
-                + relativedelta(years=operating_years)
-                - relativedelta(days=1)
+        _validate_finite(rate, "discount_rate")
+        return self._copy(
+            config=dc_replace(
+                self._config,
+                valuation=ProjectValuation.from_discount_rate(rate),
             )
-            if (
-                resolved_operations_end is not None
-                and resolved_operations_end != derived_operations_end
-            ):
-                raise ValueError(
-                    "operations_end and operating_years must describe the same operating window"
-                )
-            resolved_operations_end = derived_operations_end
-        updated = dc_replace(
-            timeline,
-            construction_start=timeline.construction_start
-            if construction_start is None
-            else construction_start,
-            operations_start=effective_operations_start,
-            operations_end=timeline.operations_end
-            if resolved_operations_end is None
-            else resolved_operations_end,
-            frequency=timeline.frequency if frequency is None else frequency,
-            timing=timeline.timing if timing is None else timing,
         )
-        return self._copy(config=dc_replace(self._config, timeline=updated))
 
-    def capital_structure(
+    def wacc(
         self,
         *,
         debt_fraction: float,
-        cost_of_debt: float,
-        equity_fraction: float,
-        cost_of_equity: float,
-        tax_rate: float | None = None,
+        debt_cost: float,
+        equity_cost: float,
+        tax_rate: float,
+        equity_fraction: float | None = None,
     ) -> Self:
-        """Configure the project's capital structure.
+        """Configure the project's default valuation using explicit WACC inputs.
 
         Parameters
         ----------
         debt_fraction : float
-            Debt share of total capital.
-        cost_of_debt : float
-            Cost of debt.
-        equity_fraction : float
-            Equity share of total capital.
-        cost_of_equity : float
+            Debt share of total capital. Must be between 0 and 1.
+        debt_cost : float
+            Pre-tax cost of debt.
+        equity_cost : float
             Cost of equity.
-        tax_rate : float, optional
-            Tax rate used for WACC. If omitted, the project-level tax rate
-            (from ``.tax()``) is used at analysis time.
+        tax_rate : float
+            Marginal tax rate applied to the debt interest tax shield.
+        equity_fraction : float, optional
+            Equity share of total capital. Defaults to ``1 - debt_fraction``.
+            When provided explicitly, must equal ``1 - debt_fraction``.
 
         Returns
         -------
         EnergyProject
-            New project with updated capital structure assumptions.
+            New project with updated valuation assumptions.
 
         Raises
         ------
         ValueError
             If any rate or fraction is non-finite, if either capital fraction
-            is negative, or if the debt and equity fractions do not sum to
-            ``1.0``.
+            is negative, or if the fractions do not sum to ``1.0``.
         """
         return self._copy(
             config=dc_replace(
                 self._config,
-                capital_structure=CapitalStructure(
-                    debt_fraction=debt_fraction,
-                    cost_of_debt=cost_of_debt,
-                    equity_fraction=equity_fraction,
-                    cost_of_equity=cost_of_equity,
-                    tax_rate=tax_rate,
+                valuation=ProjectValuation.from_discount_rate(
+                    _wacc(
+                        debt_fraction=debt_fraction,
+                        debt_cost=debt_cost,
+                        equity_fraction=equity_fraction,
+                        equity_cost=equity_cost,
+                        tax_rate=tax_rate,
+                    )
                 ),
             )
         )
 
     def default_escalation(
         self,
-        value: float | EscalationPolicy,
         *,
+        rate: float | EscalationPolicy,
         escalation_period: Period = "year",
         amount_reference_date: date | None = None,
     ) -> Self:
@@ -548,67 +519,76 @@ class EnergyProject:
 
         Parameters
         ----------
-        value : float or EscalationPolicy
-            Annual escalation rate, or a fully configured :class:`EscalationPolicy`.
+        rate : float or EscalationPolicy
+            Annual escalation rate as a decimal (e.g. ``0.02`` for 2 %), or a
+            fully configured :class:`EscalationPolicy` for non-constant schedules.
         escalation_period : Period, optional
             Period over which the rate applies. Default is ``"year"``.
         amount_reference_date : date, optional
-            Date at which the base amount is stated. Ignored when *value* is an
-            ``EscalationPolicy``.
+            Reference date at which base amounts are stated. Ignored when *rate*
+            is an ``EscalationPolicy``.
 
         Returns
         -------
         EnergyProject
             New project with updated default escalation.
         """
-        if isinstance(value, (int, float)):
+        if isinstance(rate, (int, float)):
             settings = _EscalationSettings(
-                escalation=float(value),
+                escalation=float(rate),
                 escalation_period=escalation_period,
                 amount_reference_date=amount_reference_date,
                 explicit=True,
             )
         else:
-            settings = _EscalationSettings(policy=value, explicit=True)
+            settings = _EscalationSettings(policy=rate, explicit=True)
         return self._copy(config=dc_replace(self._config, default_escalation=settings))
 
     def generation(
         self,
-        asset: str = "default",
         *,
-        stream: GenerationStream | None = None,
-        capacity_mw: float | None = None,
-        capacity_factor: float | None = None,
+        capacity_mw: float,
+        capacity_factor: float = 1.0,
+        operations_start: date | None = None,
+        operations_end: date | None = None,
         start: date | None = None,
         periods: int | None = None,
         frequency: Period | None = None,
-        carrier: str | None = None,
+        carrier: str = "electricity",
         source: str | None = None,
         label: str | None = None,
         timing: TimingConvention | None = None,
     ) -> Self:
         """Configure capacity-based generation for an asset.
 
-        Either supply a pre-built *stream* or provide *capacity_mw* and
-        *capacity_factor* along with scheduling parameters. The two modes
-        cannot be combined.
+        The ``operations_start`` and ``operations_end`` dates define the
+        operating window for the entire project. All recurring operating
+        streams (fixed OPEX, debt service, depreciation, tax incentives) use
+        these dates as their default boundaries.
 
         Parameters
         ----------
-        asset : str, optional
-            Asset name. Default is ``"default"``.
-        stream : GenerationStream, optional
-            Pre-built generation stream. Overrides all capacity-based inputs.
-        capacity_mw : float, optional
+        capacity_mw : float
             Nameplate capacity in megawatts.
         capacity_factor : float, optional
             Fraction of full capacity realized on average (0–1).
+        operations_start : date, optional
+            Date on which the asset enters operation. Used as the default start
+            for generation, fixed OPEX, debt service, depreciation, and tax
+            incentives. Required when ``start`` and ``periods`` are not both
+            provided.
+        operations_end : date, optional
+            End boundary for operations (inclusive). When ``periods`` is not
+            provided, the builder infers the schedule from ``operations_start``
+            through ``operations_end`` and prorates any trailing partial period.
         start : date, optional
-            First period start date. Defaults to ``timeline.operations_start``.
+            First generation period start date. Defaults to ``operations_start``.
         periods : int, optional
-            Number of periods. Inferred from ``timeline.operations_end`` when omitted.
+            Number of generation periods. Inferred from ``operations_end`` when
+            omitted.
         frequency : Period, optional
-            Generation period frequency. Defaults to ``timeline.frequency``.
+            Generation period frequency. Defaults to the project-wide frequency
+            set at construction time.
         carrier : str, optional
             Energy carrier label (e.g. ``"electricity"``). Default is ``"electricity"``.
         source : str, optional
@@ -621,58 +601,58 @@ class EnergyProject:
         -------
         EnergyProject
             New project with updated generation configuration.
-
-        Raises
-        ------
-        ValueError
-            If *stream* is combined with any capacity-based keyword argument.
         """
-        simple_args = (
-            capacity_mw,
-            capacity_factor,
-            start,
-            periods,
-            frequency,
-            carrier,
-            source,
-            label,
-            timing,
-        )
-        if stream is not None and any(arg is not None for arg in simple_args):
-            raise ValueError(
-                "generation stream override cannot be combined with capacity-based inputs"
-            )
+        asset = self._config.default_asset
+        _validate_finite(capacity_mw, "capacity_mw")
+        _validate_finite(capacity_factor, "capacity_factor")
         asset_config = self._asset_config(asset)
-        if stream is not None:
-            updated_generation = _GenerationConfig(stream=stream)
-        else:
-            base = (
-                asset_config.generation
-                if asset_config.generation.stream is None
-                else _GenerationConfig()
-            )
-            updated_generation = dc_replace(
-                base,
-                capacity_mw=base.capacity_mw if capacity_mw is None else capacity_mw,
-                capacity_factor=base.capacity_factor
-                if capacity_factor is None
-                else capacity_factor,
-                start=base.start if start is None else start,
-                periods=base.periods if periods is None else periods,
-                frequency=base.frequency if frequency is None else frequency,
-                carrier=base.carrier if carrier is None else carrier,
-                source=base.source if source is None else source,
-                label=base.label if label is None else label,
-                timing=base.timing if timing is None else timing,
-            )
+        updated_generation = _CapacityGenerationConfig(
+            capacity_mw=capacity_mw,
+            capacity_factor=capacity_factor,
+            operations_start=operations_start,
+            operations_end=operations_end,
+            start=start,
+            periods=periods,
+            frequency=frequency,
+            carrier=carrier,
+            source=source,
+            label="Generation" if label is None else label,
+            timing=timing,
+        )
         return self._with_asset(asset, dc_replace(asset_config, generation=updated_generation))
 
-    def market(
+    def generation_stream(
         self,
-        carrier: str = "electricity",
         *,
-        asset: str | None = None,
-        sell_price_per_unit: float | None = None,
+        stream: GenerationStream,
+    ) -> Self:
+        """Configure a pre-built generation stream for the asset.
+
+        Operations-period dates are inferred from the minimum and maximum dates
+        in the provided stream.
+
+        Parameters
+        ----------
+        stream : GenerationStream
+            Fully specified generation stream.
+
+        Returns
+        -------
+        EnergyProject
+            New project with updated generation configuration.
+        """
+        asset = self._config.default_asset
+        asset_config = self._asset_config(asset)
+        return self._with_asset(
+            asset,
+            dc_replace(asset_config, generation=_GenerationStreamConfig(stream=stream)),
+        )
+
+    def revenue_from_generation(
+        self,
+        *,
+        sell_price_per_unit: float,
+        carrier: str = "electricity",
         unit: str | None = None,
         escalation: float | None = None,
         escalation_period: Period | None = None,
@@ -680,23 +660,26 @@ class EnergyProject:
         escalation_policy: EscalationPolicy | None = None,
         label: str | None = None,
     ) -> Self:
-        """Configure the market price for an energy carrier.
+        """Configure the revenue price for an energy carrier.
 
         Parameters
         ----------
-        carrier : str, optional
-            Energy carrier key (e.g. ``"electricity"``). Default is ``"electricity"``.
-        asset : str, optional
-            Asset name for asset-specific market overrides. When omitted the
-            market applies to all assets with the matching carrier.
-        sell_price_per_unit : float, optional
+        sell_price_per_unit : float
             Price per MWh at the amount reference date.
+        carrier : str, optional
+            Energy carrier key (e.g. ``"electricity"``). Default is
+            ``"electricity"``. Must match the ``carrier`` set on
+            :meth:`generation`.
         unit : str, optional
             Unit label for display purposes.
         escalation : float, optional
-            Annual price escalation rate.
+            Annual price escalation rate. When omitted, falls back to the
+            project-wide rate set by :meth:`default_escalation`.
+
+        Advanced
+        --------
         escalation_period : Period, optional
-            Period over which the escalation rate applies.
+            Period over which the escalation rate applies. Default is ``"year"``.
         amount_reference_date : date, optional
             Date at which ``sell_price_per_unit`` is stated.
         escalation_policy : EscalationPolicy, optional
@@ -708,21 +691,15 @@ class EnergyProject:
         Returns
         -------
         EnergyProject
-            New project with updated market configuration.
+            New project with updated revenue configuration.
         """
-        key = (asset, carrier)
-        existing = self._config.markets.get(key, _MarketConfig())
-        if sell_price_per_unit is not None:
-            _validate_finite(sell_price_per_unit, "sell_price_per_unit")
-        updated = dc_replace(
-            existing,
-            sell_price_per_unit=existing.sell_price_per_unit
-            if sell_price_per_unit is None
-            else sell_price_per_unit,
-            unit=existing.unit if unit is None else unit,
-            label=existing.label if label is None else label,
+        _validate_finite(sell_price_per_unit, "sell_price_per_unit")
+        updated = _MarketConfig(
+            sell_price_per_unit=sell_price_per_unit,
+            unit=unit,
+            label="Revenue" if label is None else label,
             escalation=_updated_escalation(
-                existing.escalation,
+                _EscalationSettings(),
                 escalation=escalation,
                 escalation_period=escalation_period,
                 amount_reference_date=amount_reference_date,
@@ -730,15 +707,14 @@ class EnergyProject:
             ),
         )
         markets = dict(self._config.markets)
-        markets[key] = updated
+        markets[carrier] = updated
         return self._copy(config=dc_replace(self._config, markets=markets))
 
     def fixed_opex(
         self,
-        asset: str = "default",
         *,
         name: str = "default",
-        amount: float | None = None,
+        amount: float,
         start: date | None = None,
         periods: int | None = None,
         frequency: Period | None = None,
@@ -749,16 +725,14 @@ class EnergyProject:
         label: str | None = None,
         timing: TimingConvention | None = None,
     ) -> Self:
-        """Configure a named fixed operating cost item for an asset.
+        """Configure a named fixed operating cost item for the asset.
 
         Parameters
         ----------
-        asset : str, optional
-            Asset name. Default is ``"default"``.
         name : str, optional
             Item name allowing multiple independent fixed-cost streams per asset.
             Default is ``"default"``.
-        amount : float, optional
+        amount : float
             Cost amount per period (sign is ignored; applied as an outflow).
         start : date, optional
             First period start date. Defaults to ``timeline.operations_start``.
@@ -767,9 +741,13 @@ class EnergyProject:
         frequency : Period, optional
             Cost period frequency. Defaults to ``timeline.frequency``.
         escalation : float, optional
-            Annual cost escalation rate.
+            Annual cost escalation rate. When omitted, falls back to the
+            project-wide rate set by :meth:`default_escalation`.
+
+        Advanced
+        --------
         escalation_period : Period, optional
-            Period over which the escalation rate applies.
+            Period over which the escalation rate applies. Default is ``"year"``.
         amount_reference_date : date, optional
             Date at which *amount* is stated.
         escalation_policy : EscalationPolicy, optional
@@ -783,87 +761,32 @@ class EnergyProject:
         EnergyProject
             New project with updated fixed OPEX configuration.
         """
-        if amount is not None:
-            _validate_finite(amount, "fixed opex amount")
+        asset = self._config.default_asset
+        _validate_finite(amount, "fixed opex amount")
         asset_config = self._asset_config(asset)
-        existing = asset_config.fixed_opex_items.get(name, _RecurringCostConfig())
-        updated = dc_replace(
-            existing,
-            amount=existing.amount if amount is None else amount,
-            start=existing.start if start is None else start,
-            periods=existing.periods if periods is None else periods,
-            frequency=existing.frequency if frequency is None else frequency,
-            label=existing.label if label is None else label,
+        updated = _RecurringCostConfig(
+            amount=amount,
+            start=start,
+            periods=periods,
+            frequency=frequency,
+            label="Fixed OPEX" if label is None else label,
             escalation=_updated_escalation(
-                existing.escalation,
+                _EscalationSettings(),
                 escalation=escalation,
                 escalation_period=escalation_period,
                 amount_reference_date=amount_reference_date,
                 escalation_policy=escalation_policy,
             ),
-            timing=existing.timing if timing is None else timing,
+            timing=timing,
         )
         items = dict(asset_config.fixed_opex_items)
         items[name] = updated
         return self._with_asset(asset, dc_replace(asset_config, fixed_opex_items=items))
 
-    def annual_opex_cost(
-        self,
-        amount: float,
-        *,
-        asset: str = "default",
-        name: str = "default",
-        escalation: float | None = None,
-        escalation_period: Period | None = None,
-        amount_reference_date: date | None = None,
-        escalation_policy: EscalationPolicy | None = None,
-        label: str | None = None,
-        timing: TimingConvention | None = None,
-    ) -> Self:
-        """Add a yearly fixed operating cost; shorthand for :meth:`fixed_opex` with ``frequency="year"``.
-
-        Parameters
-        ----------
-        amount : float
-            Annual cost amount (sign is ignored; applied as an outflow).
-        asset : str, optional
-            Asset name. Default is ``"default"``.
-        name : str, optional
-            Item name. Default is ``"default"``.
-        escalation : float, optional
-            Annual escalation rate.
-        escalation_period : Period, optional
-            Period over which the escalation rate applies.
-        amount_reference_date : date, optional
-            Date at which *amount* is stated.
-        escalation_policy : EscalationPolicy, optional
-            Fully configured escalation policy.
-        label : str, optional
-            Label template. Use ``{n}`` as a period index placeholder if desired.
-
-        Returns
-        -------
-        EnergyProject
-            New project with updated annual OPEX configuration.
-        """
-        return self.fixed_opex(
-            asset=asset,
-            name=name,
-            amount=amount,
-            frequency="year",
-            escalation=escalation,
-            escalation_period=escalation_period,
-            amount_reference_date=amount_reference_date,
-            escalation_policy=escalation_policy,
-            label=label,
-            timing=timing,
-        )
-
     def variable_cost(
         self,
-        rate_per_unit: float,
         *,
-        asset: str = "default",
+        rate_per_unit: float,
         name: str = "default",
         escalation: float | None = None,
         escalation_period: Period | None = None,
@@ -871,20 +794,22 @@ class EnergyProject:
         escalation_policy: EscalationPolicy | None = None,
         label: str | None = None,
     ) -> Self:
-        """Configure a per-MWh variable operating cost for an asset.
+        """Configure a per-MWh variable operating cost for the asset.
 
         Parameters
         ----------
         rate_per_unit : float
             Cost per MWh (sign is ignored; applied as an outflow).
-        asset : str, optional
-            Asset name. Default is ``"default"``.
         name : str, optional
             Item name. Default is ``"default"``.
         escalation : float, optional
-            Annual escalation rate.
+            Annual escalation rate. When omitted, falls back to the project-wide
+            rate set by :meth:`default_escalation`.
+
+        Advanced
+        --------
         escalation_period : Period, optional
-            Period over which the escalation rate applies.
+            Period over which the escalation rate applies. Default is ``"year"``.
         amount_reference_date : date, optional
             Date at which *rate_per_unit* is stated.
         escalation_policy : EscalationPolicy, optional
@@ -897,15 +822,14 @@ class EnergyProject:
         EnergyProject
             New project with updated variable cost configuration.
         """
+        asset = self._config.default_asset
         _validate_finite(rate_per_unit, "variable cost rate_per_unit")
         asset_config = self._asset_config(asset)
-        existing = asset_config.variable_cost_items.get(name, _VariableCostConfig())
-        updated = dc_replace(
-            existing,
+        updated = _VariableCostConfig(
             rate_per_unit=rate_per_unit,
-            label=existing.label if label is None else label,
+            label="Variable Cost" if label is None else label,
             escalation=_updated_escalation(
-                existing.escalation,
+                _EscalationSettings(),
                 escalation=escalation,
                 escalation_period=escalation_period,
                 amount_reference_date=amount_reference_date,
@@ -916,47 +840,15 @@ class EnergyProject:
         items[name] = updated
         return self._with_asset(asset, dc_replace(asset_config, variable_cost_items=items))
 
-    def operations(
-        self,
-        asset: str = "default",
-        *,
-        fixed_opex_per_year: float | None = None,
-        variable_cost_per_unit: float | None = None,
-    ) -> Self:
-        """Convenience method for setting fixed and variable operating costs together.
-
-        Parameters
-        ----------
-        asset : str, optional
-            Asset name. Default is ``"default"``.
-        fixed_opex_per_year : float, optional
-            Annual fixed operating cost amount.
-        variable_cost_per_unit : float, optional
-            Variable cost per MWh.
-
-        Returns
-        -------
-        EnergyProject
-            New project with updated operations configuration.
-        """
-        project = self
-        if fixed_opex_per_year is not None:
-            project = project.annual_opex_cost(fixed_opex_per_year, asset=asset)
-        if variable_cost_per_unit is not None:
-            project = project.variable_cost(variable_cost_per_unit, asset=asset)
-        return project
-
     def construction(
         self,
-        asset: str = "default",
         *,
-        stream: CashFlowStream | None = None,
-        overnight_cost: float | None = None,
-        total_cost: float | None = None,
+        overnight_cost: float,
+        cod_date: date | None = None,
         spend_profile: SpendProfile | SpendScheduleName | None = None,
-        period: Period | None = None,
-        start: date | None = None,
-        end: date | None = None,
+        construction_start: date | None = None,
+        construction_end: date | None = None,
+        period: Period = "month",
         escalation: float | None = None,
         escalation_period: Period | None = None,
         amount_reference_date: date | None = None,
@@ -964,31 +856,37 @@ class EnergyProject:
     ) -> Self:
         """Configure the construction spend schedule for an asset.
 
-        Either supply a pre-built *stream* or provide *overnight_cost* along
-        with scheduling parameters. The two modes cannot be combined.
+        When ``spend_profile`` is omitted the overnight cost is booked as a
+        single cash flow on the commercial operations date (``cod_date``, or
+        ``operations_start`` when not provided). When a ``spend_profile`` is
+        given, the cost is distributed over the construction period using
+        ``construction_start`` and ``construction_end``.
 
         Parameters
         ----------
-        asset : str, optional
-            Asset name. Default is ``"default"``.
-        stream : CashFlowStream, optional
-            Pre-built construction cash-flow stream.
-        overnight_cost : float, optional
+        overnight_cost : float
             Total overnight capital cost (excluding financing costs).
-        total_cost : float, optional
-            Alias for *overnight_cost*. Must match if both are provided.
+        cod_date : date, optional
+            Commercial operations date. Defaults to ``operations_start`` from
+            the generation configuration.
         spend_profile : SpendProfile or SpendScheduleName, optional
-            Spend curve shape. Default is ``"flat"``.
+            Spend curve shape. When provided, ``construction_start`` is
+            required and the cost is distributed over the construction period.
+        construction_start : date, optional
+            Construction start date. Required when ``spend_profile`` is provided.
+        construction_end : date, optional
+            Construction end date (exclusive). Defaults to ``cod_date`` (or
+            ``operations_start``) when omitted.
         period : Period, optional
             Construction sub-period frequency. Default is ``"month"``.
-        start : date, optional
-            Construction start date. Defaults to ``timeline.construction_start``.
-        end : date, optional
-            Construction end date (exclusive). Defaults to ``timeline.operations_start``.
         escalation : float, optional
-            Annual cost escalation rate during construction.
+            Annual cost escalation rate during construction. When omitted, falls
+            back to the project-wide rate set by :meth:`default_escalation`.
+
+        Advanced
+        --------
         escalation_period : Period, optional
-            Period over which the escalation rate applies.
+            Period over which the escalation rate applies. Default is ``"year"``.
         amount_reference_date : date, optional
             Date at which *overnight_cost* is stated.
         escalation_policy : EscalationPolicy, optional
@@ -998,192 +896,161 @@ class EnergyProject:
         -------
         EnergyProject
             New project with updated construction configuration.
-
-        Raises
-        ------
-        ValueError
-            If *stream* is combined with any schedule-based keyword argument,
-            or if *overnight_cost* and *total_cost* differ.
         """
-        if overnight_cost is not None and total_cost is not None and overnight_cost != total_cost:
-            raise ValueError("overnight_cost and total_cost must match when both are provided")
-        if overnight_cost is not None:
-            _validate_finite(overnight_cost, "overnight_cost")
-        if total_cost is not None:
-            _validate_finite(total_cost, "total_cost")
-        simple_args = (
-            overnight_cost,
-            total_cost,
-            spend_profile,
-            period,
-            start,
-            end,
-            escalation,
-            escalation_period,
-            amount_reference_date,
-            escalation_policy,
-        )
-        if stream is not None and any(arg is not None for arg in simple_args):
-            raise ValueError("construction stream override cannot be combined with schedule inputs")
+        asset = self._config.default_asset
+        _validate_finite(overnight_cost, "overnight_cost")
         asset_config = self._asset_config(asset)
-        if stream is not None:
-            updated = _ConstructionConfig(stream=stream)
-        else:
-            base = (
-                asset_config.construction
-                if asset_config.construction.stream is None
-                else _ConstructionConfig()
-            )
-            updated = dc_replace(
-                base,
-                overnight_cost=base.overnight_cost
-                if overnight_cost is None and total_cost is None
-                else (overnight_cost if overnight_cost is not None else total_cost),
-                spend_profile=base.spend_profile if spend_profile is None else spend_profile,
-                period=base.period if period is None else period,
-                start=base.start if start is None else start,
-                end=base.end if end is None else end,
-                escalation=_updated_escalation(
-                    base.escalation,
-                    escalation=escalation,
-                    escalation_period=escalation_period,
-                    amount_reference_date=amount_reference_date,
-                    escalation_policy=escalation_policy,
-                ),
-            )
-            updated = dc_replace(updated, financing=base.financing)
+        updated = _ConstructionScheduleConfig(
+            overnight_cost=overnight_cost,
+            cod_date=cod_date,
+            spend_profile=spend_profile,
+            construction_start=construction_start,
+            construction_end=construction_end,
+            period=period,
+            escalation=_updated_escalation(
+                _EscalationSettings(),
+                escalation=escalation,
+                escalation_period=escalation_period,
+                amount_reference_date=amount_reference_date,
+                escalation_policy=escalation_policy,
+            ),
+        )
         return self._with_asset(asset, dc_replace(asset_config, construction=updated))
 
-    def construction_financing(
+    def construction_stream(
         self,
-        asset: str = "default",
         *,
-        debt_fraction: float | None = None,
-        interest_rate: float | None = None,
-        interest_treatment: InterestTreatment | None = None,
-        servicing_period: Period | None = None,
+        stream: CashFlowStream,
     ) -> Self:
-        """Configure construction-period debt financing for an asset.
+        """Configure a pre-built construction cash-flow stream for the asset.
 
         Parameters
         ----------
-        asset : str, optional
-            Asset name. Default is ``"default"``.
-        debt_fraction : float, optional
-            Fraction of construction cost funded by debt.
-        interest_rate : float, optional
-            Annual interest rate on construction debt.
-        interest_treatment : InterestTreatment, optional
-            Whether accrued interest is ``"capitalize"``d into the basis or
-            ``"pay"``d in cash.
-        servicing_period : Period, optional
-            Period frequency for interest accrual.
+        stream : CashFlowStream
+            Fully specified construction cash-flow stream.
 
         Returns
         -------
         EnergyProject
-            New project with updated construction financing configuration.
+            New project with updated construction configuration.
+        """
+        asset = self._config.default_asset
+        asset_config = self._asset_config(asset)
+        return self._with_asset(
+            asset,
+            dc_replace(asset_config, construction=_ConstructionStreamConfig(stream=stream)),
+        )
+
+    def construction_financing(
+        self,
+        *,
+        debt_fraction: float,
+        amortization_rate: float,
+        amortization_term: int,
+        construction_interest_rate: float | None = None,
+        interest_treatment: InterestTreatment = "capitalize",
+        servicing_period: Period | None = None,
+        amortization_frequency: Period = "year",
+        amortization_start: date | None = None,
+    ) -> Self:
+        """Configure construction-period debt and its operations-period amortization.
+
+        Specifies both how construction costs are financed (debt fraction,
+        construction-period interest) and how the resulting debt principal is
+        repaid during operations (amortization rate, term, frequency). The
+        permanent-debt principal is derived automatically from construction
+        draws plus any capitalized interest.
+
+        Parameters
+        ----------
+        debt_fraction : float
+            Fraction of construction cost funded by debt (0–1).
+        amortization_rate : float
+            Annual interest rate on the permanent debt during operations.
+        amortization_term : int
+            Loan term in periods for the permanent debt.
+        construction_interest_rate : float, optional
+            Annual interest rate on construction-period debt draws. When
+            omitted, no interest accrues during construction.
+        interest_treatment : InterestTreatment, optional
+            Whether accrued construction interest is ``"capitalize"``d into the
+            permanent-debt principal or ``"pay"``d in cash. Default is
+            ``"capitalize"``.
+        servicing_period : Period, optional
+            Period frequency for construction-period interest accrual.
+        amortization_frequency : Period, optional
+            Payment frequency for permanent debt. Default is ``"year"``.
+        amortization_start : date, optional
+            First amortization payment date. Defaults to ``operations_start``.
+
+        Returns
+        -------
+        EnergyProject
+            New project with updated construction debt configuration.
 
         Raises
         ------
         ValueError
             If a construction stream override is already configured.
         """
+        asset = self._config.default_asset
         asset_config = self._asset_config(asset)
-        if asset_config.construction.stream is not None:
+        if isinstance(asset_config.construction, _ConstructionStreamConfig):
             raise ValueError(
-                "construction_financing cannot be configured when a construction "
+                "construction_debt cannot be configured when a construction "
                 "stream override is provided"
             )
-        existing = asset_config.construction.financing
-        updated_financing = ConstructionFinancing(
-            debt_fraction=existing.debt_fraction if debt_fraction is None else debt_fraction,
-            interest_rate=existing.interest_rate if interest_rate is None else interest_rate,
-            interest_treatment=existing.interest_treatment
-            if interest_treatment is None
-            else interest_treatment,
-            servicing_period=existing.servicing_period
-            if servicing_period is None
-            else servicing_period,
+        _validate_finite(amortization_rate, "amortization_rate")
+        updated = _ConstructionDebtConfig(
+            debt_fraction=debt_fraction,
+            construction_interest_rate=construction_interest_rate,
+            interest_treatment=interest_treatment,
+            servicing_period=servicing_period,
+            amortization_rate=amortization_rate,
+            amortization_term=amortization_term,
+            amortization_frequency=amortization_frequency,
+            amortization_start=amortization_start,
         )
-        updated_construction = dc_replace(asset_config.construction, financing=updated_financing)
-        return self._with_asset(asset, dc_replace(asset_config, construction=updated_construction))
+        return self._with_asset(
+            asset,
+            dc_replace(asset_config, construction_debt=updated),
+        )
 
-    def debt(
+    def debt_schedule(
         self,
-        asset: str = "default",
         *,
-        schedule: AmortizationSchedule | CashFlowStream | None = None,
-        annual_rate: float | None = None,
-        term: int | None = None,
-        frequency: Period | None = None,
-        start: date | None = None,
-        principal: float | None = None,
+        schedule: AmortizationSchedule | CashFlowStream,
     ) -> Self:
-        """Configure permanent debt service for an asset.
-
-        Either supply a pre-built *schedule* or provide *annual_rate* and *term*.
-        The two modes cannot be combined.
+        """Configure a pre-built debt schedule for the asset.
 
         Parameters
         ----------
-        asset : str, optional
-            Asset name. Default is ``"default"``.
-        schedule : AmortizationSchedule or CashFlowStream, optional
-            Pre-built debt schedule. Overrides all simple debt inputs.
-        annual_rate : float, optional
-            Annual interest rate.
-        term : int, optional
-            Loan term in periods.
-        frequency : Period, optional
-            Payment frequency. Default is ``"year"``.
-        start : date, optional
-            First payment date. Defaults to ``timeline.operations_start``.
-        principal : float, optional
-            Loan principal. Derived from construction costs and capital
-            structure when omitted.
+        schedule : AmortizationSchedule or CashFlowStream
+            Fully specified debt-service schedule.
 
         Returns
         -------
         EnergyProject
             New project with updated debt configuration.
-
-        Raises
-        ------
-        ValueError
-            If *schedule* is combined with simple debt inputs, or if
-            *annual_rate* or *term* is missing when not using a schedule.
         """
-        simple_args = (annual_rate, term, frequency, start, principal)
-        if schedule is not None and any(arg is not None for arg in simple_args):
-            raise ValueError("debt schedule override cannot be combined with simple debt inputs")
+        asset = self._config.default_asset
         asset_config = self._asset_config(asset)
-        if schedule is not None:
-            updated = _DebtConfig(schedule=schedule)
-        else:
-            base = asset_config.debt if asset_config.debt.schedule is None else _DebtConfig()
-            updated = dc_replace(
-                base,
-                annual_rate=base.annual_rate if annual_rate is None else annual_rate,
-                term=base.term if term is None else term,
-                frequency=base.frequency if frequency is None else frequency,
-                start=base.start if start is None else start,
-                principal=base.principal if principal is None else principal,
-            )
-        return self._with_asset(asset, dc_replace(asset_config, debt=updated))
+        return self._with_asset(
+            asset, dc_replace(asset_config, debt_schedule=_DebtScheduleConfig(schedule))
+        )
 
-    def tax(self, *, rate: float) -> Self:
-        """Configure the project tax rate used for taxes and default WACC resolution.
-
-        The project tax rate is used for tax liability computation and as the
-        default WACC tax component when the capital structure does not specify
-        its own ``tax_rate``. Resolution is deferred to ``analyze()`` time so
-        call order does not matter.
+    def tax(self, *, rate: float, allow_refund: bool = False) -> Self:
+        """Configure the project tax rate used for tax cash flows.
 
         Parameters
         ----------
         rate : float
             Project tax rate expressed as a decimal fraction.
+        allow_refund : bool, optional
+            When ``False`` (default), only positive taxable income generates a
+            tax liability; losses produce zero tax. When ``True``, negative
+            taxable income generates a positive cash flow (tax refund), enabling
+            symmetric treatment for delta-to-baseline and levelized cost analyses.
 
         Returns
         -------
@@ -1196,116 +1063,21 @@ class EnergyProject:
             If ``rate`` is not finite.
         """
         _validate_finite(rate, "tax rate")
-        return self._copy(config=dc_replace(self._config, tax_rate=rate))
+        return self._copy(config=dc_replace(self._config, tax_rate=rate, tax_allow_refund=allow_refund))
 
-    def depreciation(
+    def depreciation_macrs(
         self,
-        asset: str = "default",
         *,
-        method: Literal["macrs", "vdb"],
-        property_class: MACRSPropertyClass | None = None,
-        convention: MACRSConvention = "half-year",
-        life: int | None = None,
-        salvage_value: float = 0.0,
-        frequency: Period = "year",
-        factor: float = 2.0,
-        switch_to_straight_line: bool = True,
-        vdb_convention: VDBConvention = "none",
-        schedule_dates: tuple[date, ...] | None = None,
-        valuation_rate: float | None = None,
-        valuation_date: date | None = None,
-        terminal_catch_up: bool = False,
-        label: str | None = None,
-    ) -> Self:
-        """Configure depreciation for an asset using MACRS or VDB method.
-
-        Parameters
-        ----------
-        asset : str, optional
-            Asset name. Default is ``"default"``.
-        method : {"macrs", "vdb"}
-            Depreciation method.
-        property_class : MACRSPropertyClass, optional
-            Required for ``method="macrs"``. IRS property class (e.g. ``"5-year"``).
-        convention : MACRSConvention, optional
-            MACRS convention. Default is ``"half-year"``.
-        life : int, optional
-            Required for ``method="vdb"``. Asset life in periods.
-        salvage_value : float, optional
-            Salvage value for VDB. Default is ``0.0``.
-        frequency : Period, optional
-            VDB depreciation period frequency. Default is ``"year"``.
-        factor : float, optional
-            VDB declining-balance factor. Default is ``2.0`` (200% DB).
-        switch_to_straight_line : bool, optional
-            Switch to straight-line when it yields a higher deduction.
-            Default is ``True``.
-        vdb_convention : VDBConvention, optional
-            VDB half-period convention. Default is ``"none"``.
-        schedule_dates : tuple of date, optional
-            Explicit period dates for VDB.
-        valuation_rate : float, optional
-            Discount rate for VDB present-value election.
-        valuation_date : date, optional
-            Valuation date for VDB present-value election.
-        terminal_catch_up : bool, optional
-            Accumulate remaining basis in the final period. Default is ``False``.
-        label : str, optional
-            Label template for individual depreciation entries.
-
-        Returns
-        -------
-        EnergyProject
-            New project with updated depreciation configuration.
-
-        Raises
-        ------
-        ValueError
-            If *property_class* is missing for MACRS, or *life* is missing for VDB.
-        """
-        if method == "macrs":
-            if property_class is None:
-                raise ValueError("property_class is required for MACRS depreciation")
-            config: _DepreciationConfig = _MacrsDepreciationConfig(
-                property_class=property_class,
-                convention=convention,
-                label="MACRS Depreciation" if label is None else label,
-            )
-        else:
-            if life is None:
-                raise ValueError("life is required for VDB depreciation")
-            config = _VdbDepreciationConfig(
-                life=life,
-                salvage_value=salvage_value,
-                frequency=frequency,
-                factor=factor,
-                switch_to_straight_line=switch_to_straight_line,
-                convention=vdb_convention,
-                schedule_dates=schedule_dates,
-                valuation_rate=valuation_rate,
-                valuation_date=valuation_date,
-                terminal_catch_up=terminal_catch_up,
-                label="VDB Depreciation" if label is None else label,
-            )
-        asset_config = self._asset_config(asset)
-        return self._with_asset(asset, dc_replace(asset_config, depreciation=config))
-
-    def macrs_depreciation(
-        self,
         property_class: MACRSPropertyClass,
-        *,
-        asset: str = "default",
         convention: MACRSConvention = "half-year",
         label: str | None = None,
     ) -> Self:
-        """Convenience wrapper for :meth:`depreciation` with ``method="macrs"``.
+        """Configure MACRS depreciation for the asset.
 
         Parameters
         ----------
         property_class : MACRSPropertyClass
             IRS property class (e.g. ``"5-year"``).
-        asset : str, optional
-            Asset name. Default is ``"default"``.
         convention : MACRSConvention, optional
             MACRS convention. Default is ``"half-year"``.
         label : str, optional
@@ -1316,19 +1088,24 @@ class EnergyProject:
         EnergyProject
             New project with MACRS depreciation configured.
         """
-        return self.depreciation(
-            asset=asset,
-            method="macrs",
-            property_class=property_class,
-            convention=convention,
-            label=label,
+        asset = self._config.default_asset
+        asset_config = self._asset_config(asset)
+        return self._with_asset(
+            asset,
+            dc_replace(
+                asset_config,
+                depreciation=_MacrsDepreciationConfig(
+                    property_class=property_class,
+                    convention=convention,
+                    label="MACRS Depreciation" if label is None else label,
+                ),
+            ),
         )
 
-    def vdb_depreciation(
+    def depreciation_vdb(
         self,
         *,
         life: int,
-        asset: str = "default",
         salvage_value: float = 0.0,
         frequency: Period = "year",
         factor: float = 2.0,
@@ -1340,14 +1117,12 @@ class EnergyProject:
         terminal_catch_up: bool = False,
         label: str | None = None,
     ) -> Self:
-        """Convenience wrapper for :meth:`depreciation` with ``method="vdb"``.
+        """Configure VDB depreciation for the asset.
 
         Parameters
         ----------
         life : int
             Asset life in periods.
-        asset : str, optional
-            Asset name. Default is ``"default"``.
         salvage_value : float, optional
             Salvage value. Default is ``0.0``.
         frequency : Period, optional
@@ -1374,67 +1149,73 @@ class EnergyProject:
         EnergyProject
             New project with VDB depreciation configured.
         """
-        return self.depreciation(
-            asset=asset,
-            method="vdb",
-            life=life,
-            salvage_value=salvage_value,
-            frequency=frequency,
-            factor=factor,
-            switch_to_straight_line=switch_to_straight_line,
-            vdb_convention=convention,
-            schedule_dates=schedule_dates,
-            valuation_rate=valuation_rate,
-            valuation_date=valuation_date,
-            terminal_catch_up=terminal_catch_up,
-            label=label,
+        asset = self._config.default_asset
+        asset_config = self._asset_config(asset)
+        return self._with_asset(
+            asset,
+            dc_replace(
+                asset_config,
+                depreciation=_VdbDepreciationConfig(
+                    life=life,
+                    salvage_value=salvage_value,
+                    frequency=frequency,
+                    factor=factor,
+                    switch_to_straight_line=switch_to_straight_line,
+                    convention=convention,
+                    schedule_dates=schedule_dates,
+                    valuation_rate=valuation_rate,
+                    valuation_date=valuation_date,
+                    terminal_catch_up=terminal_catch_up,
+                    label="VDB Depreciation" if label is None else label,
+                ),
+            ),
         )
 
-    def itc(self, rate: float, *, asset: str = "default") -> Self:
-        """Configure an Investment Tax Credit (ITC) for an asset.
+    def investment_tax_credit(self, *, rate: float) -> Self:
+        """Configure an Investment Tax Credit (ITC) for the asset.
 
         Parameters
         ----------
         rate : float
             ITC rate as a decimal (e.g. ``0.30`` for 30 %).
-        asset : str, optional
-            Asset name. Default is ``"default"``.
 
         Returns
         -------
         EnergyProject
             New project with ITC configured.
         """
+        asset = self._config.default_asset
         _validate_finite(rate, "itc rate")
         asset_config = self._asset_config(asset)
         return self._with_asset(asset, dc_replace(asset_config, itc_rate=rate))
 
-    def ptc(
+    def production_tax_credit(
         self,
         *,
         rate_per_unit: float,
-        years: int,
-        asset: str = "default",
+        years: int = 10,
         escalation: float | None = None,
         escalation_period: Period | None = None,
         amount_reference_date: date | None = None,
         escalation_policy: EscalationPolicy | None = None,
         label: str | None = None,
     ) -> Self:
-        """Configure a Production Tax Credit (PTC) for an asset.
+        """Configure a Production Tax Credit (PTC) for the asset.
 
         Parameters
         ----------
         rate_per_unit : float
             Credit per MWh of generation.
-        years : int
+        years : int, optional
             Number of years the credit applies from operations start.
-        asset : str, optional
-            Asset name. Default is ``"default"``.
         escalation : float, optional
-            Annual escalation rate for the credit.
+            Annual escalation rate for the credit. When omitted, falls back to
+            the project-wide rate set by :meth:`default_escalation`.
+
+        Advanced
+        --------
         escalation_period : Period, optional
-            Period over which the escalation rate applies.
+            Period over which the escalation rate applies. Default is ``"year"``.
         amount_reference_date : date, optional
             Date at which *rate_per_unit* is stated.
         escalation_policy : EscalationPolicy, optional
@@ -1452,6 +1233,7 @@ class EnergyProject:
         ValueError
             If *years* is not positive.
         """
+        asset = self._config.default_asset
         if years <= 0:
             raise ValueError("PTC years must be positive")
         _validate_finite(rate_per_unit, "ptc rate_per_unit")
@@ -1461,9 +1243,7 @@ class EnergyProject:
             years=years,
             label="PTC" if label is None else label,
             escalation=_updated_escalation(
-                asset_config.ptc.escalation
-                if asset_config.ptc is not None
-                else _EscalationSettings(),
+                _EscalationSettings(),
                 escalation=escalation,
                 escalation_period=escalation_period,
                 amount_reference_date=amount_reference_date,
@@ -1472,7 +1252,7 @@ class EnergyProject:
         )
         return self._with_asset(asset, dc_replace(asset_config, ptc=updated))
 
-    def add_cashflow_stream(self, name: str, stream: CashFlowStream) -> Self:
+    def add_cashflow_stream(self, *, name: str, stream: CashFlowStream) -> Self:
         """Add a custom named cash-flow component to the project.
 
         Parameters
@@ -1491,7 +1271,7 @@ class EnergyProject:
         custom[name] = stream
         return self._copy(config=dc_replace(self._config, custom_cashflows=custom))
 
-    def modify_cashflow_components(self, modifier: CashFlowComponentModifier) -> Self:
+    def modify_cashflow_components(self, *, modifier: CashFlowComponentModifier) -> Self:
         """Register a component-level cashflow modifier.
 
         The modifier receives the compiled pre-tax cashflow component map and may
@@ -1540,27 +1320,35 @@ class EnergyProject:
             If required timeline dates are missing, asset generation
             configuration is incomplete, or debt configuration is invalid.
         """
-        generation_by_asset: dict[str, GenerationStream] = {}
+        # Assemble the internal timeline from generation/construction configs.
+        # This populates operations_start, operations_end, construction_start
+        # so downstream _build_* methods can access them via _require_timeline_date.
+        resolved = self._resolve_timeline()
+        original_config = self._config
+        self._config = dc_replace(self._config, timeline=resolved)
+
+        try:
+            return self._analyze_impl()
+        finally:
+            self._config = original_config
+
+    def _analyze_impl(self) -> ProjectAnalysis:
+        """Internal analysis implementation called after timeline resolution."""
+        generation = GenerationStream()
         component_streams: dict[str, CashFlowStream] = {}
         levelized_revenue_basis: dict[str, CashFlowStream] = {}
 
         for asset_name, asset_config in self._config.assets.items():
             generation = self._build_generation(asset_name, asset_config)
-            generation_by_asset[asset_name] = generation
 
             construction_stream = self._build_construction(asset_config)
             if construction_stream.entries:
                 component_streams[f"{asset_name}:construction"] = construction_stream
 
-            revenue_stream = self._build_revenue(asset_name, asset_config, generation)
+            revenue_stream = self._build_revenue(generation)
             if revenue_stream.entries:
                 component_streams[f"{asset_name}:revenue"] = revenue_stream
-            revenue_basis_stream = self._build_revenue(
-                asset_name,
-                asset_config,
-                generation,
-                price_per_mwh=1.0,
-            )
+            revenue_basis_stream = self._build_revenue(generation, price_per_mwh=1.0)
             if revenue_basis_stream.entries:
                 levelized_revenue_basis[f"{asset_name}:revenue"] = revenue_basis_stream
 
@@ -1622,7 +1410,11 @@ class EnergyProject:
         taxable_income = compute_taxable_income(revenue_for_tax, deductions_for_tax)
 
         taxes = (
-            tax_liability(taxable_income, tax_rate=self._config.tax_rate)
+            tax_liability(
+                taxable_income,
+                tax_rate=self._config.tax_rate,
+                allow_refund=self._config.tax_allow_refund,
+            )
             if self._config.tax_rate is not None
             else CashFlowStream()
         )
@@ -1630,10 +1422,9 @@ class EnergyProject:
             component_streams["project:tax_liability"] = taxes
 
         return ProjectAnalysis(
-            name=self._config.name,
             timeline=self._config.timeline,
-            capital_structure=self._resolved_capital_structure(),
-            generation_by_asset=generation_by_asset,
+            valuation=self._config.valuation,
+            generation=generation,
             cashflow_components=CashFlowGroup(component_streams),
             taxable_income=taxable_income,
             taxes=taxes,
@@ -1666,7 +1457,7 @@ class EnergyProject:
         """
         return self.analyze().cashflow_components
 
-    def summary(
+    def metrics(
         self,
         discount_rate: float | None = None,
         valuation_date: date | None = None,
@@ -1674,9 +1465,9 @@ class EnergyProject:
         levelized_cost_escalation_rate: float | None = None,
         levelized_cost_escalation_policy: EscalationPolicy | None = None,
     ) -> ProjectMetrics:
-        """Compile and return summary project metrics.
+        """Compile and return project metrics.
 
-        Convenience method equivalent to ``self.analyze().summary(...)``.
+        Convenience method equivalent to ``self.analyze().metrics(...)``.
 
         Parameters
         ----------
@@ -1698,7 +1489,7 @@ class EnergyProject:
         ProjectMetrics
             NPV, XIRR, total cash, generation totals, and LCOE.
         """
-        return self.analyze().summary(
+        return self.analyze().metrics(
             discount_rate=discount_rate,
             valuation_date=valuation_date,
             convention=convention,
@@ -1706,7 +1497,7 @@ class EnergyProject:
             levelized_cost_escalation_policy=levelized_cost_escalation_policy,
         )
 
-    def pro_forma(self, period: Period = "year") -> ProjectProForma:
+    def pro_forma(self, *, period: Period = "year") -> ProjectProForma:
         """Compile and return a period-aggregated pro-forma table.
 
         Convenience method equivalent to ``self.analyze().pro_forma(period)``.
@@ -1723,6 +1514,44 @@ class EnergyProject:
         """
         return self.analyze().pro_forma(period=period)
 
+    def _resolve_timeline(self) -> ProjectTimeline:
+        """Assemble an internal timeline from generation and construction configs.
+
+        Operations dates come from the generation config (capacity-based or
+        stream-based). Construction start comes from the construction config
+        when a spend profile is specified. Frequency and timing come from the
+        project-level constructor defaults.
+        """
+        operations_start: date | None = None
+        operations_end: date | None = None
+        construction_start: date | None = None
+
+        for asset_config in self._config.assets.values():
+            gen = asset_config.generation
+            if isinstance(gen, _CapacityGenerationConfig):
+                if gen.operations_start is not None:
+                    operations_start = gen.operations_start
+                if gen.operations_end is not None:
+                    operations_end = gen.operations_end
+            elif isinstance(gen, _GenerationStreamConfig):
+                if gen.stream.entries:
+                    dates = [entry.date for entry in gen.stream.entries]
+                    operations_start = min(dates)
+                    operations_end = max(dates)
+
+            con = asset_config.construction
+            if isinstance(con, _ConstructionScheduleConfig):
+                if con.construction_start is not None:
+                    construction_start = con.construction_start
+
+        return ProjectTimeline(
+            construction_start=construction_start,
+            operations_start=operations_start,
+            operations_end=operations_end,
+            frequency=self._config.frequency,
+            timing=self._config.timing,
+        )
+
     def _asset_config(self, asset: str) -> _AssetConfig:
         """Return the current configuration for *asset*, or a default if unset."""
         return self._config.assets.get(asset, _AssetConfig())
@@ -1736,18 +1565,13 @@ class EnergyProject:
     def _build_generation(self, asset_name: str, asset_config: _AssetConfig) -> GenerationStream:
         """Build the generation stream for *asset_name* from its configuration.
 
-        Returns an empty stream when no capacity inputs are configured.
-        Raises ``ValueError`` if only one of ``capacity_mw`` / ``capacity_factor`` is set.
+        Returns an empty stream when generation is unconfigured.
         """
         generation = asset_config.generation
-        if generation.stream is not None:
-            return generation.stream
-        if generation.capacity_mw is None and generation.capacity_factor is None:
+        if generation is None:
             return GenerationStream()
-        if generation.capacity_mw is None or generation.capacity_factor is None:
-            raise ValueError(
-                f"Asset '{asset_name}' generation requires both capacity_mw and capacity_factor"
-            )
+        if isinstance(generation, _GenerationStreamConfig):
+            return generation.stream
         frequency = (
             generation.frequency
             if generation.frequency is not None
@@ -1794,8 +1618,6 @@ class EnergyProject:
 
     def _build_revenue(
         self,
-        asset_name: str,
-        asset_config: _AssetConfig,
         generation: GenerationStream,
         *,
         price_per_mwh: float | None = None,
@@ -1803,16 +1625,13 @@ class EnergyProject:
         """Build the revenue stream for *asset_name* from generation and market config.
 
         Returns an empty stream when generation is empty or no market price is set.
-        Asset-specific market overrides take precedence over carrier-level defaults.
         """
         if not generation.entries:
             return CashFlowStream()
         revenue_streams: list[CashFlowStream] = []
         for carrier, carrier_generation in generation.group_by(carrier=True).items():
-            market = self._config.markets.get((asset_name, carrier))
+            market = self._config.markets.get(carrier)
             if market is None:
-                market = self._config.markets.get((None, carrier))
-            if market is None or market.sell_price_per_unit is None:
                 continue
             resolved_price_per_mwh = (
                 market.sell_price_per_unit if price_per_mwh is None else price_per_mwh
@@ -1843,11 +1662,9 @@ class EnergyProject:
     def _build_fixed_opex(self, asset_name: str, fixed: _RecurringCostConfig) -> CashFlowStream:
         """Build a fixed OPEX cash-flow stream from *fixed* configuration.
 
-        Returns an empty stream when no amount is configured. Each period's
-        amount is scaled by the escalation factor and the partial-period fraction.
+        Each period's amount is scaled by the escalation factor and the
+        partial-period fraction.
         """
-        if fixed.amount is None:
-            return CashFlowStream()
         frequency = (
             fixed.frequency if fixed.frequency is not None else self._config.timeline.frequency
         )
@@ -1897,9 +1714,9 @@ class EnergyProject:
     ) -> CashFlowStream:
         """Build a variable cost stream by applying *variable* rate to generation.
 
-        Returns an empty stream when no rate or generation is available.
+        Returns an empty stream when generation is unavailable.
         """
-        if variable.rate_per_unit is None or not generation.entries:
+        if not generation.entries:
             return CashFlowStream()
         escalation = _effective_escalation(variable.escalation, self._config.default_escalation)
         if escalation.policy is not None:
@@ -1920,27 +1737,53 @@ class EnergyProject:
         """Build the construction spend stream from asset construction configuration.
 
         Returns the pre-built stream directly when a stream override is provided.
-        Otherwise derives the schedule from overnight cost, dates, and financing.
+        When no spend profile is given, books the overnight cost as a single
+        cash flow on the COD date. Otherwise distributes the cost over the
+        construction period using the spend schedule.
         """
         construction = asset_config.construction
-        if construction.stream is not None:
-            if construction.financing != ConstructionFinancing():
+        if construction is None:
+            return CashFlowStream()
+        if isinstance(construction, _ConstructionStreamConfig):
+            if asset_config.construction_debt is not None:
                 raise ValueError(
-                    "construction stream overrides cannot be combined with construction financing"
+                    "construction stream overrides cannot be combined with construction debt"
                 )
             return construction.stream
-        if construction.overnight_cost is None:
-            return CashFlowStream()
-        start = (
-            construction.start
-            if construction.start is not None
-            else self._require_timeline_date("construction_start")
-        )
-        end = (
-            construction.end
-            if construction.end is not None
+
+        # Resolve COD date: explicit > operations_start
+        cod = (
+            construction.cod_date
+            if construction.cod_date is not None
             else self._require_timeline_date("operations_start")
         )
+
+        # Overnight-only path: no spend profile, book as single cash flow at COD
+        if construction.spend_profile is None:
+            return CashFlowStream(
+                [
+                    CashFlow(
+                        amount=-abs(construction.overnight_cost),
+                        date=cod,
+                        label="Construction",
+                        is_cash=True,
+                        pro_forma_category=ProFormaCategory.CAPITAL_COST,
+                    )
+                ]
+            )
+
+        # Spend-profile path: distribute cost over construction period
+        start = (
+            construction.construction_start
+            if construction.construction_start is not None
+            else self._require_timeline_date("construction_start")
+        )
+        end = construction.construction_end if construction.construction_end is not None else cod
+
+        # Convert _ConstructionDebtConfig to ConstructionFinancing for the
+        # lower-level construction_spend_schedule function.
+        financing = self._construction_financing(asset_config.construction_debt)
+
         escalation = _effective_escalation(construction.escalation, self._config.default_escalation)
         if escalation.policy is not None:
             return construction_spend_schedule(
@@ -1949,7 +1792,7 @@ class EnergyProject:
                 end_date=end,
                 period=construction.period,
                 profile=construction.spend_profile,
-                financing=construction.financing,
+                financing=financing,
                 escalation_policy=escalation.policy,
             )
         return construction_spend_schedule(
@@ -1958,10 +1801,24 @@ class EnergyProject:
             end_date=end,
             period=construction.period,
             profile=construction.spend_profile,
-            financing=construction.financing,
+            financing=financing,
             escalation=escalation.escalation,
             escalation_period=escalation.escalation_period,
             amount_reference_date=escalation.amount_reference_date,
+        )
+
+    @staticmethod
+    def _construction_financing(
+        debt_config: _ConstructionDebtConfig | None,
+    ) -> ConstructionFinancing:
+        """Convert a construction debt config to a ConstructionFinancing for the spend schedule."""
+        if debt_config is None:
+            return ConstructionFinancing()
+        return ConstructionFinancing(
+            debt_fraction=debt_config.debt_fraction,
+            interest_rate=debt_config.construction_interest_rate,
+            interest_treatment=debt_config.interest_treatment,
+            servicing_period=debt_config.servicing_period,
         )
 
     def _build_itc(
@@ -2105,82 +1962,60 @@ class EnergyProject:
         asset_config: _AssetConfig,
         construction_stream: CashFlowStream,
     ) -> CashFlowStream:
-        debt = asset_config.debt
-        if debt.schedule is not None:
-            if isinstance(debt.schedule, AmortizationSchedule):
+        """Build the debt service stream from construction debt or schedule config.
+
+        Handles two paths: construction-debt-based amortization (principal
+        derived from construction draws) and explicit schedule overrides.
+        Returns an empty stream when no debt is configured.
+        """
+        # Explicit schedule override takes precedence
+        if asset_config.debt_schedule is not None:
+            sched = asset_config.debt_schedule
+            if isinstance(sched.schedule, AmortizationSchedule):
                 return CashFlowStream.from_streams(
-                    debt.schedule.interest,
-                    debt.schedule.principal,
+                    sched.schedule.interest,
+                    sched.schedule.principal,
                 ).sort()
-            return debt.schedule
-        if debt.annual_rate is None and debt.term is None and debt.principal is None:
+            return sched.schedule
+
+        # Construction-debt path
+        debt = asset_config.construction_debt
+        if debt is None:
             return CashFlowStream()
-        if debt.annual_rate is None or debt.term is None:
+        if debt.amortization_term <= 0:
+            raise ValueError("amortization_term must be positive")
+
+        # Derive principal from construction draws
+        if not construction_stream.entries:
             raise ValueError(
-                "debt requires both annual_rate and term when not using a schedule override"
+                "construction_debt requires a construction schedule to derive "
+                "the debt principal — call construction() first"
             )
-        if debt.term <= 0:
-            raise ValueError("debt term must be positive")
-        principal = debt.principal
-        if principal is None:
-            principal = self._derive_debt_principal(asset_config, construction_stream)
+        capex = construction_stream.filter(pro_forma_category=ProFormaCategory.CAPITAL_COST)
+        debt_draws = abs(capex.cash_only().sum()) * debt.debt_fraction
+        capitalized_interest = abs(capex.filter(is_cash=False).sum())
+        principal = debt_draws + capitalized_interest
+
         start = (
-            debt.start
-            if debt.start is not None
+            debt.amortization_start
+            if debt.amortization_start is not None
             else self._require_timeline_date("operations_start")
         )
         schedule = AmortizationSchedule.build(
             principal=principal,
-            annual_rate=debt.annual_rate,
-            term=debt.term,
+            annual_rate=debt.amortization_rate,
+            term=debt.amortization_term,
             start_date=start,
-            frequency=debt.frequency,
+            frequency=debt.amortization_frequency,
         )
         ops_start = self._config.timeline.operations_start
         ops_end = self._config.timeline.operations_end
         return self._remap_event_dates(
             CashFlowStream.from_streams(schedule.interest, schedule.principal).sort(),
-            frequency=debt.frequency,
+            frequency=debt.amortization_frequency,
             phase_start=ops_start,
             phase_end=ops_end,
         )
-
-    def _derive_debt_principal(
-        self,
-        asset_config: _AssetConfig,
-        construction_stream: CashFlowStream,
-    ) -> float:
-        """Derive the permanent debt principal from construction costs and financing.
-
-        The formula depends on the construction financing ``interest_treatment``:
-
-        - ``"capitalize"``: Interest accrued during construction is added to the
-          cost basis and rolled into the permanent debt principal.
-          ``principal = cash_capex * debt_fraction + capitalized_interest``
-        - ``"pay"``: Interest was paid in cash during construction and does not
-          increase the permanent debt principal.
-          ``principal = cash_capex * debt_fraction``
-        """
-        if not construction_stream.entries:
-            raise ValueError("debt principal cannot be derived without a construction schedule")
-        debt_fraction = asset_config.construction.financing.debt_fraction
-        if debt_fraction == 0.0 and self._config.capital_structure is not None:
-            debt_fraction = self._config.capital_structure.debt_fraction
-        if debt_fraction == 0.0:
-            raise ValueError(
-                "debt principal cannot be derived without construction_financing debt_fraction "
-                "or project capital_structure debt_fraction"
-            )
-
-        capex = construction_stream.filter(pro_forma_category=ProFormaCategory.CAPITAL_COST)
-        cash_basis = abs(capex.cash_only().sum())
-        principal = cash_basis * debt_fraction
-
-        if asset_config.construction.financing.interest_treatment == "capitalize":
-            capitalized_interest = abs(capex.filter(is_cash=False).sum())
-            principal += capitalized_interest
-
-        return principal
 
     def _apply_cashflow_modifiers(
         self,
@@ -2218,11 +2053,14 @@ class EnergyProject:
             return True
 
         for asset_config in self._config.assets.values():
-            if asset_config.construction.overnight_cost not in (None, 0.0):
+            if (
+                isinstance(asset_config.construction, _ConstructionScheduleConfig)
+                and asset_config.construction.overnight_cost != 0.0
+            ):
                 if not collect(asset_config.construction.escalation):
                     return None
             for recurring_cost in asset_config.fixed_opex_items.values():
-                if recurring_cost.amount not in (None, 0.0):
+                if recurring_cost.amount != 0.0:
                     if not collect(recurring_cost.escalation):
                         return None
             if asset_config.ptc is not None and asset_config.ptc.rate_per_unit != 0.0:
@@ -2230,7 +2068,7 @@ class EnergyProject:
                     return None
 
         for market in self._config.markets.values():
-            if market.sell_price_per_unit not in (None, 0.0):
+            if market.sell_price_per_unit != 0.0:
                 if not collect(market.escalation):
                     return None
 
@@ -2243,20 +2081,6 @@ class EnergyProject:
         ):
             return None
         return first_rate
-
-    def _resolved_capital_structure(self) -> CapitalStructure | None:
-        """Return the capital structure with the project tax rate filled in when needed.
-
-        When the capital structure has no explicit ``tax_rate`` and the project has
-        one, returns a copy with the project ``tax_rate`` injected so WACC can be
-        resolved without requiring a separate call.
-        """
-        capital_structure = self._config.capital_structure
-        if capital_structure is None:
-            return None
-        if capital_structure.tax_rate is not None or self._config.tax_rate is None:
-            return capital_structure
-        return dc_replace(capital_structure, tax_rate=self._config.tax_rate)
 
     def _operating_schedule(
         self,

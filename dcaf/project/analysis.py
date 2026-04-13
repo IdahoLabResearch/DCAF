@@ -7,15 +7,19 @@ from dataclasses import dataclass
 from datetime import date
 from math import isclose, isfinite
 from os import PathLike
+from typing import TYPE_CHECKING
 
-from dcaf.finance.escalation import EscalationPolicy
-from dcaf.metrics.lcoe import lcoe as _lcoe
-from dcaf.project.config import CapitalStructure
-from dcaf.project.timeline import ProjectTimeline
-from dcaf.streams.cashflows import CashFlow, CashFlowGroup, CashFlowStream
-from dcaf.streams.generation import GenerationStream
 from dcaf.shared.types import DayCountConvention, Period, ProFormaCategory, TaxTreatment
+from dcaf.project.config import ProjectValuation
+from dcaf.project.timeline import ProjectTimeline
+from dcaf.metrics import lcoe as _lcoe
+from dcaf.streams.cashflows import CashFlow, CashFlowStream
 from dcaf.tax.liability import compute_taxable_income, tax_liability
+
+if TYPE_CHECKING:
+    from dcaf.finance.escalation import EscalationPolicy
+    from dcaf.streams.cashflows import CashFlowGroup
+    from dcaf.streams.generation import GenerationStream
 
 
 def _validate_finite(value: float, name: str) -> None:
@@ -193,14 +197,13 @@ class ProjectAnalysis:
 
     Attributes
     ----------
-    name : str
-        Project name inherited from the builder.
     timeline : ProjectTimeline
         Timeline assumptions used during analysis.
-    capital_structure : CapitalStructure or None
-        Resolved capital structure (with tax rate filled in when available).
-    generation_by_asset : dict[str, GenerationStream]
-        Physical generation for each named asset.
+    valuation : ProjectValuation or None
+        Default valuation configuration used when metrics are computed without
+        an explicit ``discount_rate`` override.
+    generation : GenerationStream
+        Physical generation for the project asset.
     cashflow_components : CashFlowGroup[str]
         All named cash-flow components, including taxes.
     taxable_income : CashFlowStream
@@ -220,28 +223,15 @@ class ProjectAnalysis:
         the caller does not supply an explicit escalation policy.
     """
 
-    name: str
     timeline: ProjectTimeline
-    capital_structure: CapitalStructure | None
-    generation_by_asset: dict[str, GenerationStream]
+    valuation: ProjectValuation | None
+    generation: GenerationStream
     cashflow_components: CashFlowGroup[str]
     taxable_income: CashFlowStream
     taxes: CashFlowStream
     tax_rate: float | None
     levelized_revenue_basis: CashFlowGroup[str] | None = None
     levelized_cost_escalation_rate: float | None = None
-
-    @property
-    def generation(self) -> GenerationStream:
-        """Return the combined generation stream across all assets.
-
-        Returns
-        -------
-        GenerationStream
-            Single stream containing every generation entry from
-            :attr:`generation_by_asset`.
-        """
-        return GenerationStream.from_streams(*self.generation_by_asset.values())
 
     @property
     def cashflows(self) -> CashFlowStream:
@@ -268,8 +258,8 @@ class ProjectAnalysis:
         Parameters
         ----------
         discount_rate : float, optional
-            Rate used for NPV and LCOE calculations. Defaults to the project
-            WACC when a capital structure is configured.
+            Rate used for NPV and LCOE calculations. Defaults to the project's
+            configured valuation when available.
         valuation_date : date, optional
             Reference date for discounting. Defaults to the construction start
             date or the earliest cash-flow date.
@@ -348,55 +338,6 @@ class ProjectAnalysis:
             total_generation=generation.sum(),
             discounted_generation=discounted_generation,
             levelized_cost=levelized_cost,
-        )
-
-    def summary(
-        self,
-        discount_rate: float | None = None,
-        valuation_date: date | None = None,
-        convention: DayCountConvention = "actual/365",
-        levelized_cost_escalation_rate: float | None = None,
-        levelized_cost_escalation_policy: EscalationPolicy | None = None,
-    ) -> ProjectMetrics:
-        """Return summary metrics for the project analysis.
-
-        This method is a backward-compatible alias for :meth:`metrics`.
-
-        Parameters
-        ----------
-        discount_rate : float, optional
-            Rate used for NPV and LCOE calculations. Defaults to the project
-            WACC when a capital structure is configured.
-        valuation_date : date, optional
-            Reference date for discounting. Defaults to the construction start
-            date or the earliest cash-flow date.
-        convention : DayCountConvention, optional
-            Day count convention for fractional-year calculations.
-            Default is ``"actual/365"``.
-        levelized_cost_escalation_rate : float, optional
-            Constant annual escalation rate for the levelized price stream.
-            Used only when an explicit ``levelized_cost_escalation_policy`` is
-            not supplied.
-        levelized_cost_escalation_policy : EscalationPolicy, optional
-            Explicit escalation policy for the levelized price stream.
-
-        Returns
-        -------
-        ProjectMetrics
-            NPV, XIRR, total cash, generation totals, and LCOE.
-
-        Raises
-        ------
-        ValueError
-            If ``discount_rate`` cannot be resolved or ``valuation_date``
-            cannot be inferred.
-        """
-        return self.metrics(
-            discount_rate=discount_rate,
-            valuation_date=valuation_date,
-            convention=convention,
-            levelized_cost_escalation_rate=levelized_cost_escalation_rate,
-            levelized_cost_escalation_policy=levelized_cost_escalation_policy,
         )
 
     def pro_forma(self, period: Period = "year") -> ProjectProForma:
@@ -561,15 +502,13 @@ class ProjectAnalysis:
         if rate is not None:
             _validate_finite(rate, "discount_rate")
             return rate
-        if self.capital_structure is not None:
-            try:
-                return self.capital_structure.wacc
-            except ValueError as exc:
-                raise ValueError(
-                    "discount_rate is required when capital_structure.wacc cannot be resolved; "
-                    "set a tax rate on the capital structure or pass discount_rate explicitly"
-                ) from exc
-        raise ValueError("discount_rate is required when capital_structure is not configured")
+        if self.valuation is not None:
+            return self.valuation.discount_rate
+        raise ValueError(
+            "discount_rate is required when project valuation is not configured; "
+            "set it with EnergyProject.discount_rate(...), EnergyProject.wacc(...), "
+            "or pass metrics(discount_rate=...) explicitly"
+        )
 
     def _valuation_date(self, valuation_date: date | None) -> date:
         if valuation_date is not None:
@@ -604,12 +543,14 @@ class ProjectAnalysis:
                 "levelized_cost_escalation_rate"
             )
 
+        # use the provided escalation policy to create the basis stream
         if levelized_cost_escalation_policy is not None:
             return self.generation.to_revenue(
                 price_per_mwh=1.0,
                 escalation_policy=levelized_cost_escalation_policy,
             )
 
+        # use the provided constant escalation rate to create the basis stream
         if levelized_cost_escalation_rate is not None:
             resolved_rate = self._levelized_cost_escalation_rate(levelized_cost_escalation_rate)
             return self.generation.to_revenue(
@@ -617,11 +558,13 @@ class ProjectAnalysis:
                 escalation=resolved_rate,
             )
 
+        #
         if self.levelized_revenue_basis is not None and any(
             stream.entries for stream in self.levelized_revenue_basis.values()
         ):
             return self.levelized_revenue_basis.ungroup().sort()
 
+        #
         if not self.generation.entries:
             return CashFlowStream()
 

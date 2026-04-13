@@ -33,11 +33,7 @@ class TestNpv:
 
         stream_npv = stream.npv(0.1, date(2026, 1, 31))
 
-        values = [
-            (flow.amount, flow.date)
-            for flow in stream.entries
-            if flow.is_cash
-        ]
+        values = [(flow.amount, flow.date) for flow in stream.entries if flow.is_cash]
         standalone = npv(values, rate=0.1, valuation_date=date(2026, 1, 31))
 
         assert standalone == pytest.approx(stream_npv, abs=1e-8)
@@ -83,46 +79,56 @@ class TestNpv:
 class TestIrr:
     def test_simple_two_cashflow(self):
         """Invest $1000, receive $1100 after one non-leap year = 10% IRR."""
-        stream = CashFlowStream([
-            CashFlow(-1000.0, date(2025, 1, 1)),
-            CashFlow(1100.0, date(2026, 1, 1)),
-        ])
+        stream = CashFlowStream(
+            [
+                CashFlow(-1000.0, date(2025, 1, 1)),
+                CashFlow(1100.0, date(2026, 1, 1)),
+            ]
+        )
         assert irr(stream) == pytest.approx(0.1, abs=1e-8)
 
     def test_multi_cashflow(self):
         """IRR of a 3-cashflow project matches quadratic formula solution."""
-        stream = CashFlowStream([
-            CashFlow(-10_000.0, date(2025, 1, 1)),
-            CashFlow(5_000.0, date(2026, 1, 1)),
-            CashFlow(7_000.0, date(2027, 1, 1)),
-        ])
+        stream = CashFlowStream(
+            [
+                CashFlow(-10_000.0, date(2025, 1, 1)),
+                CashFlow(5_000.0, date(2026, 1, 1)),
+                CashFlow(7_000.0, date(2027, 1, 1)),
+            ]
+        )
         result = irr(stream)
         assert result == pytest.approx(0.12321245982864881, abs=1e-8)
 
     def test_npv_is_zero_at_irr(self):
         """NPV at the IRR should be approximately zero."""
-        stream = CashFlowStream([
-            CashFlow(-50_000.0, date(2025, 1, 1)),
-            CashFlow(15_000.0, date(2026, 1, 1)),
-            CashFlow(20_000.0, date(2027, 1, 1)),
-            CashFlow(25_000.0, date(2028, 1, 1)),
-        ])
+        stream = CashFlowStream(
+            [
+                CashFlow(-50_000.0, date(2025, 1, 1)),
+                CashFlow(15_000.0, date(2026, 1, 1)),
+                CashFlow(20_000.0, date(2027, 1, 1)),
+                CashFlow(25_000.0, date(2028, 1, 1)),
+            ]
+        )
         rate = irr(stream)
         assert stream.npv(rate, date(2025, 1, 1)) == pytest.approx(0.0, abs=1e-6)
 
     def test_no_inflows_raises(self):
-        stream = CashFlowStream([
-            CashFlow(-1000.0, date(2025, 1, 1)),
-            CashFlow(-500.0, date(2026, 1, 1)),
-        ])
+        stream = CashFlowStream(
+            [
+                CashFlow(-1000.0, date(2025, 1, 1)),
+                CashFlow(-500.0, date(2026, 1, 1)),
+            ]
+        )
         with pytest.raises(ValueError, match="inflow"):
             irr(stream)
 
     def test_no_outflows_raises(self):
-        stream = CashFlowStream([
-            CashFlow(1000.0, date(2025, 1, 1)),
-            CashFlow(500.0, date(2026, 1, 1)),
-        ])
+        stream = CashFlowStream(
+            [
+                CashFlow(1000.0, date(2025, 1, 1)),
+                CashFlow(500.0, date(2026, 1, 1)),
+            ]
+        )
         with pytest.raises(ValueError, match="outflow"):
             irr(stream)
 
@@ -132,21 +138,25 @@ class TestIrr:
 
     def test_excludes_non_cash(self):
         """Non-cash flows are excluded; all-inflow cash view raises."""
-        stream = CashFlowStream([
-            CashFlow(-5_000.0, date(2025, 1, 1), is_cash=False),
-            CashFlow(1_000.0, date(2026, 1, 1)),
-            CashFlow(1_500.0, date(2027, 1, 1)),
-        ])
+        stream = CashFlowStream(
+            [
+                CashFlow(-5_000.0, date(2025, 1, 1), is_cash=False),
+                CashFlow(1_000.0, date(2026, 1, 1)),
+                CashFlow(1_500.0, date(2027, 1, 1)),
+            ]
+        )
         with pytest.raises(ValueError):
             irr(stream)
 
     def test_matches_stream_method(self):
         """Standalone irr matches CashFlowStream.irr."""
-        stream = CashFlowStream([
-            CashFlow(-10_000.0, date(2025, 1, 1)),
-            CashFlow(5_000.0, date(2026, 1, 1)),
-            CashFlow(7_000.0, date(2027, 1, 1)),
-        ])
+        stream = CashFlowStream(
+            [
+                CashFlow(-10_000.0, date(2025, 1, 1)),
+                CashFlow(5_000.0, date(2026, 1, 1)),
+                CashFlow(7_000.0, date(2027, 1, 1)),
+            ]
+        )
         assert irr(stream) == stream.irr()
 
 
@@ -159,9 +169,19 @@ class TestLcoe:
     def test_empty_basis_returns_none(self):
         """Empty basis stream yields None."""
         basis = CashFlowStream([])
-        components = CashFlowGroup({"cost": CashFlowStream([
-            CashFlow(-1000.0, date(2025, 1, 1), pro_forma_category=ProFormaCategory.CAPITAL_COST),
-        ])})
+        components = CashFlowGroup(
+            {
+                "cost": CashFlowStream(
+                    [
+                        CashFlow(
+                            -1000.0,
+                            date(2025, 1, 1),
+                            pro_forma_category=ProFormaCategory.CAPITAL_COST,
+                        ),
+                    ]
+                )
+            }
+        )
         result = lcoe(
             basis_stream=basis,
             component_streams=components,
@@ -173,10 +193,11 @@ class TestLcoe:
 
     def test_zero_cost_project(self):
         """A project with no costs should have LCOE of zero."""
-        basis = CashFlowStream([
-            CashFlow(1.0, date(2025, 1, 1), is_cash=True,
-                     tax_treatment=TaxTreatment.TAXABLE),
-        ])
+        basis = CashFlowStream(
+            [
+                CashFlow(1.0, date(2025, 1, 1), is_cash=True, tax_treatment=TaxTreatment.TAXABLE),
+            ]
+        )
         components = CashFlowGroup({})
         result = lcoe(
             basis_stream=basis,
@@ -193,13 +214,15 @@ class TestLcoe:
         rate = 0.08
 
         cost = CashFlow(
-            -10_000.0, vdate,
+            -10_000.0,
+            vdate,
             pro_forma_category=ProFormaCategory.CAPITAL_COST,
             tax_treatment=TaxTreatment.NONE,
         )
         basis_entries = [
             CashFlow(
-                100.0, date(2025 + i, 7, 1),
+                100.0,
+                date(2025 + i, 7, 1),
                 is_cash=True,
                 tax_treatment=TaxTreatment.TAXABLE,
             )

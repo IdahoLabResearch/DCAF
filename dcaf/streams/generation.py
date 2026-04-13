@@ -28,7 +28,6 @@ from dcaf.finance.escalation import (
     EscalationPolicy,
     _resolve_escalation_policy_override,
 )
-from dcaf.shared._financial_math import npv
 from dcaf.shared.formatting import format_label
 from dcaf.shared.time import (
     hours_per_period,
@@ -43,6 +42,7 @@ from dcaf.shared.types import (
     normalize_cashflow_classification,
 )
 from dcaf.streams.base import BaseGroup, BaseStream
+from dcaf.metrics.npv import npv
 
 
 @dataclass(frozen=True)

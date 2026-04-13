@@ -23,8 +23,9 @@ Additional modeling assumptions
   nuclear asset.
 - The PTC is modeled using an illustrative base value of $27.50/MWh for the
   first 10 operating years, stated in 2025 dollars.
-- A 21% tax rate is included so project WACC resolves from the capital
-  structure and taxes are included in the analysis.
+- A 21% tax rate is included for taxes.
+- WACC is computed from the financing inputs and used as the discount rate for
+  metrics. It is not part of the project configuration itself.
 """
 
 from datetime import date
@@ -53,62 +54,43 @@ TAX_RATE = 0.21
 
 PTC_RATE_PER_MWH = 27.50
 PTC_YEARS = 10
-DEBT_TERM_YEARS = 35
+DEBT_TERM_YEARS = 20
 
 
 # PROJECT DEFINITION
 project = (
-    EnergyProject("Nuclear Uprate Example")
-    .timeline(
-        construction_start=CONSTRUCTION_START,
-        operations_start=OPERATIONS_START,
-        operations_end=OPERATIONS_END,
-        frequency="year",
-    )
+    EnergyProject()
     .default_escalation(
-        ESCALATION_RATE,
+        rate=ESCALATION_RATE,
         amount_reference_date=REFERENCE_DATE,
     )
-    .capital_structure(
-        debt_fraction=DEBT_FRACTION,
-        cost_of_debt=COST_OF_DEBT,
-        equity_fraction=EQUITY_FRACTION,
-        cost_of_equity=COST_OF_EQUITY,
-    )
-    .construction_financing(
-        asset="uprate",
-        debt_fraction=DEBT_FRACTION,
-        interest_rate=COST_OF_DEBT,
-    )
-    .debt(
-        asset="uprate",
-        annual_rate=COST_OF_DEBT,
-        term=DEBT_TERM_YEARS,
-        frequency="year",
-    )
-    .tax(rate=TAX_RATE)
     .generation(
-        asset="uprate",
         capacity_mw=UPRATE_CAPACITY_MW,
         capacity_factor=CAPACITY_FACTOR,
+        operations_start=OPERATIONS_START,
+        operations_end=OPERATIONS_END,
         carrier="electricity",
         source="nuclear-uprate",
         label="Uprate Generation",
     )
-    .market(
-        asset="uprate",
-        carrier="electricity",
+    .construction(
+        overnight_cost=OVERNIGHT_CAPEX,
+        spend_profile="flat",
+        construction_start=CONSTRUCTION_START,
+        period="year",
+    )
+    .construction_financing(
+        debt_fraction=DEBT_FRACTION,
+        construction_interest_rate=COST_OF_DEBT,
+        amortization_rate=COST_OF_DEBT,
+        amortization_term=DEBT_TERM_YEARS,
+    )
+    .tax(rate=TAX_RATE)
+    .revenue_from_generation(
         sell_price_per_unit=POWER_PRICE_PER_MWH,
         label="Electricity Revenue",
     )
-    .construction(
-        asset="uprate",
-        overnight_cost=OVERNIGHT_CAPEX,
-        spend_profile="flat",
-        period="year",
-    )
-    .ptc(
-        asset="uprate",
+    .production_tax_credit(
         rate_per_unit=PTC_RATE_PER_MWH,
         years=PTC_YEARS,
         label="PTC Credit",
@@ -119,11 +101,7 @@ project = (
 analysis = project.analyze()
 pro_forma = analysis.pro_forma(period="year")
 
-# FIXME: we need to be careful with what discount rate is actually being used for which calculation,
-# not just using the WACC if it's available. There's nuance to this.
-discount_rate = (
-    analysis.capital_structure.wacc if analysis.capital_structure is not None else COST_OF_EQUITY
-)
+discount_rate = analysis.valuation.discount_rate if analysis.valuation is not None else COST_OF_EQUITY
 valuation_date = CONSTRUCTION_START
 # TODO: wrap LCOE calculation to get similar ergonomics as NPV and IRR
 cashflows = analysis.cashflows.cash_only()
@@ -146,7 +124,6 @@ levelized_cost = (
     else None
 )
 
-print(project.name)
 print(f"Construction start: {CONSTRUCTION_START.isoformat()}")
 print(f"Operations start:   {OPERATIONS_START.isoformat()}")
 print(f"Operations end:     {OPERATIONS_END.isoformat()}")
@@ -155,12 +132,12 @@ print(f"Discount rate:      {discount_rate:.4%}")
 print()
 print(f"Total generation (MWh):      {analysis.generation.sum():,.0f}")
 print(
-    f"Construction cash flow ($):  {analysis.cashflow_components['uprate:construction'].sum():,.0f}"
+    f"Construction cash flow ($):  {analysis.cashflow_components['default:construction'].sum():,.0f}"
 )
-print(f"Revenue cash flow ($):       {analysis.cashflow_components['uprate:revenue'].sum():,.0f}")
-print(f"PTC cash flow ($):           {analysis.cashflow_components['uprate:ptc'].sum():,.0f}")
+print(f"Revenue cash flow ($):       {analysis.cashflow_components['default:revenue'].sum():,.0f}")
+print(f"PTC cash flow ($):           {analysis.cashflow_components['default:ptc'].sum():,.0f}")
 print(
-    f"Debt service cash flow ($):  {analysis.cashflow_components['uprate:debt_service'].sum():,.0f}"
+    f"Debt service cash flow ($):  {analysis.cashflow_components['default:debt_service'].sum():,.0f}"
 )
 print()
 print(f"NPV ($):                     {npv:,.0f}")
@@ -170,5 +147,3 @@ print(
     if levelized_cost is not None
     else "Levelized cost ($/MWh):     n/a"
 )
-
-pro_forma.to_csv("proforma.csv")

@@ -1,9 +1,11 @@
 """Defines helpful fixtures for running doctests in the streams directory."""
+
 from datetime import date
 import pytest
 
 from dcaf.streams import CashFlow, CashFlowStream, Generation, GenerationStream
 from dcaf.shared.types import ProFormaCategory
+
 
 @pytest.fixture(autouse=True)
 def create_streams(request, doctest_namespace):

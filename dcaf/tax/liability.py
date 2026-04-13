@@ -110,7 +110,7 @@ def tax_liability(
     CashFlowStream
         Tax payment cashflows (negative amounts for payments, positive for
         refunds when *allow_refund* is ``True``), with ``is_cash=True``.
-        
+
     Note:
         This implementation does not model tax loss carryforwards or refunds.
         Negative taxable income (losses) produce no tax liability. This differs

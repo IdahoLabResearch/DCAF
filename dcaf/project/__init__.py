@@ -7,15 +7,14 @@ from dcaf.project.analysis import (
     ProjectProFormaRow,
 )
 from dcaf.project.builder import EnergyProject
-from dcaf.project.config import CapitalStructure
-from dcaf.project.timeline import ProjectTimeline
+from dcaf.project.config import ProjectValuation, wacc
 
 __all__ = [
-    "CapitalStructure",
     "EnergyProject",
     "ProjectAnalysis",
     "ProjectMetrics",
     "ProjectProForma",
     "ProjectProFormaRow",
-    "ProjectTimeline",
+    "ProjectValuation",
+    "wacc",
 ]

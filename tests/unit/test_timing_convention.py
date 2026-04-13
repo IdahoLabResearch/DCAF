@@ -77,9 +77,7 @@ class TestEventDate:
         phase_start = date(2027, 2, 1)
         phase_end = date(2027, 5, 17)
         # Effective range: 2027-02-01 to 2027-05-17 = 105 days, mid = 52 days
-        result = event_date(
-            dt, "year", "middle", phase_start=phase_start, phase_end=phase_end
-        )
+        result = event_date(dt, "year", "middle", phase_start=phase_start, phase_end=phase_end)
         expected = date(2027, 2, 1) + timedelta(days=52)
         assert result == expected
 
@@ -89,9 +87,7 @@ class TestEventDate:
         phase_start = date(2025, 6, 15)
         # Calendar year: Jan 1 – Dec 31, but floored to Jun 15
         # Effective: Jun 15 – Dec 31 = 199 days, mid = 99 days
-        result = event_date(
-            dt, "year", "middle", phase_start=phase_start
-        )
+        result = event_date(dt, "year", "middle", phase_start=phase_start)
         expected = date(2025, 6, 15) + timedelta(days=99)
         assert result == expected
 
@@ -125,20 +121,20 @@ class TestConstructionTimingEndOfPeriod:
         Expected dates: 2025-12-31, 2026-12-31, 2027-05-17.
         """
         project = (
-            EnergyProject("timing-test")
-            .timeline(
-                construction_start=date(2025, 2, 1),
+            EnergyProject()
+            .generation(
+                capacity_mw=100,
+                capacity_factor=0.9,
                 operations_start=date(2027, 5, 18),
                 operations_end=date(2030, 12, 31),
-                frequency="year",
             )
             .construction(
                 overnight_cost=3_000_000,
                 spend_profile="flat",
+                construction_start=date(2025, 2, 1),
                 period="year",
             )
-            .generation(capacity_mw=100, capacity_factor=0.9)
-            .market(sell_price_per_unit=50.0)
+            .revenue_from_generation(sell_price_per_unit=50.0)
         )
         analysis = project.analyze()
         capex_stream = analysis.cashflow_components["default:construction"]
@@ -161,17 +157,21 @@ class TestOperationsTimingEndOfPeriod:
     @pytest.fixture
     def project(self):
         return (
-            EnergyProject("ops-timing")
-            .timeline(
-                construction_start=date(2029, 1, 1),
+            EnergyProject()
+            .generation(
+                capacity_mw=100,
+                capacity_factor=0.9,
                 operations_start=date(2030, 6, 15),
                 operations_end=date(2032, 3, 10),
-                frequency="year",
             )
-            .construction(overnight_cost=1000, spend_profile="upfront", period="year")
-            .generation(capacity_mw=100, capacity_factor=0.9)
-            .market(sell_price_per_unit=50.0)
-            .annual_opex_cost(1_000_000)
+            .construction(
+                overnight_cost=1000,
+                spend_profile="upfront",
+                construction_start=date(2029, 1, 1),
+                period="year",
+            )
+            .revenue_from_generation(sell_price_per_unit=50.0)
+            .fixed_opex(amount=1_000_000, frequency="year")
         )
 
     def test_generation_dates_end_of_period(self, project):
@@ -213,17 +213,20 @@ class TestBeginOfPeriodTiming:
 
     def test_generation_dates_begin_timing(self):
         project = (
-            EnergyProject("begin-timing")
-            .timeline(
-                construction_start=date(2024, 1, 1),
+            EnergyProject(timing="begin")
+            .generation(
+                capacity_mw=100,
+                capacity_factor=0.9,
                 operations_start=date(2025, 2, 1),
                 operations_end=date(2027, 5, 17),
-                frequency="year",
-                timing="begin",
             )
-            .construction(overnight_cost=1000, spend_profile="upfront", period="year")
-            .generation(capacity_mw=100, capacity_factor=0.9)
-            .market(sell_price_per_unit=50.0)
+            .construction(
+                overnight_cost=1000,
+                spend_profile="upfront",
+                construction_start=date(2024, 1, 1),
+                period="year",
+            )
+            .revenue_from_generation(sell_price_per_unit=50.0)
         )
         analysis = project.analyze()
         gen_dates = [g.date for g in analysis.generation.entries]
@@ -239,18 +242,21 @@ class TestBeginOfPeriodTiming:
 
     def test_fixed_opex_dates_begin_timing(self):
         project = (
-            EnergyProject("begin-opex")
-            .timeline(
-                construction_start=date(2024, 1, 1),
+            EnergyProject(timing="begin")
+            .generation(
+                capacity_mw=100,
+                capacity_factor=0.9,
                 operations_start=date(2025, 3, 15),
                 operations_end=date(2027, 12, 31),
-                frequency="year",
-                timing="begin",
             )
-            .construction(overnight_cost=1000, spend_profile="upfront", period="year")
-            .generation(capacity_mw=100, capacity_factor=0.9)
-            .market(sell_price_per_unit=50.0)
-            .annual_opex_cost(500_000)
+            .construction(
+                overnight_cost=1000,
+                spend_profile="upfront",
+                construction_start=date(2024, 1, 1),
+                period="year",
+            )
+            .revenue_from_generation(sell_price_per_unit=50.0)
+            .fixed_opex(amount=500_000, frequency="year")
         )
         analysis = project.analyze()
         opex_stream = analysis.cashflow_components["default:fixed_opex"]
@@ -276,17 +282,20 @@ class TestMiddleOfPeriodTiming:
 
     def test_generation_dates_middle_timing(self):
         project = (
-            EnergyProject("middle-timing")
-            .timeline(
-                construction_start=date(2024, 1, 1),
+            EnergyProject(timing="middle")
+            .generation(
+                capacity_mw=100,
+                capacity_factor=0.9,
                 operations_start=date(2025, 1, 1),
                 operations_end=date(2027, 12, 31),
-                frequency="year",
-                timing="middle",
             )
-            .construction(overnight_cost=1000, spend_profile="upfront", period="year")
-            .generation(capacity_mw=100, capacity_factor=0.9)
-            .market(sell_price_per_unit=50.0)
+            .construction(
+                overnight_cost=1000,
+                spend_profile="upfront",
+                construction_start=date(2024, 1, 1),
+                period="year",
+            )
+            .revenue_from_generation(sell_price_per_unit=50.0)
         )
         analysis = project.analyze()
         gen_dates = [g.date for g in analysis.generation.entries]
@@ -297,17 +306,20 @@ class TestMiddleOfPeriodTiming:
 
     def test_middle_timing_partial_first_and_last_period(self):
         project = (
-            EnergyProject("middle-partial")
-            .timeline(
-                construction_start=date(2024, 1, 1),
+            EnergyProject(timing="middle")
+            .generation(
+                capacity_mw=100,
+                capacity_factor=0.9,
                 operations_start=date(2025, 4, 1),
                 operations_end=date(2027, 9, 15),
-                frequency="year",
-                timing="middle",
             )
-            .construction(overnight_cost=1000, spend_profile="upfront", period="year")
-            .generation(capacity_mw=100, capacity_factor=0.9)
-            .market(sell_price_per_unit=50.0)
+            .construction(
+                overnight_cost=1000,
+                spend_profile="upfront",
+                construction_start=date(2024, 1, 1),
+                period="year",
+            )
+            .revenue_from_generation(sell_price_per_unit=50.0)
         )
         analysis = project.analyze()
         gen_dates = [g.date for g in analysis.generation.entries]
@@ -329,27 +341,31 @@ class TestPerComponentTimingOverride:
 
     def test_generation_begin_with_project_end(self):
         project = (
-            EnergyProject("override-test")
-            .timeline(
-                construction_start=date(2024, 1, 1),
+            EnergyProject(timing="end")
+            .generation(
+                capacity_mw=100,
+                capacity_factor=0.9,
                 operations_start=date(2025, 4, 1),
                 operations_end=date(2027, 12, 31),
-                frequency="year",
-                timing="end",
+                timing="begin",
             )
-            .construction(overnight_cost=1000, spend_profile="upfront", period="year")
-            .generation(capacity_mw=100, capacity_factor=0.9, timing="begin")
-            .market(sell_price_per_unit=50.0)
-            .annual_opex_cost(100_000)
+            .construction(
+                overnight_cost=1000,
+                spend_profile="upfront",
+                construction_start=date(2024, 1, 1),
+                period="year",
+            )
+            .revenue_from_generation(sell_price_per_unit=50.0)
+            .fixed_opex(amount=100_000, frequency="year")
         )
         analysis = project.analyze()
 
         # Generation uses "begin" (override)
         gen_dates = [g.date for g in analysis.generation.entries]
         assert gen_dates == [
-            date(2025, 4, 1),   # max(2025-01-01, 2025-04-01) = 2025-04-01
-            date(2026, 1, 1),   # max(2026-01-01, 2025-04-01) = 2026-01-01
-            date(2027, 1, 1),   # max(2027-01-01, 2025-04-01) = 2027-01-01
+            date(2025, 4, 1),  # max(2025-01-01, 2025-04-01) = 2025-04-01
+            date(2026, 1, 1),  # max(2026-01-01, 2025-04-01) = 2026-01-01
+            date(2027, 1, 1),  # max(2027-01-01, 2025-04-01) = 2027-01-01
         ]
 
         # OPEX uses "end" (project default)
@@ -372,17 +388,21 @@ class TestDepreciationRemapping:
 
     def test_macrs_dates_remapped_to_year_end(self):
         project = (
-            EnergyProject("dep-remap")
-            .timeline(
-                construction_start=date(2024, 1, 1),
+            EnergyProject()
+            .generation(
+                capacity_mw=100,
+                capacity_factor=0.9,
                 operations_start=date(2025, 6, 15),
                 operations_end=date(2040, 12, 31),
-                frequency="year",
             )
-            .construction(overnight_cost=1_000_000, spend_profile="upfront", period="year")
-            .generation(capacity_mw=100, capacity_factor=0.9)
-            .market(sell_price_per_unit=50.0)
-            .macrs_depreciation(5)
+            .construction(
+                overnight_cost=1_000_000,
+                spend_profile="upfront",
+                construction_start=date(2024, 1, 1),
+                period="year",
+            )
+            .revenue_from_generation(sell_price_per_unit=50.0)
+            .macrs_depreciation(property_class=5)
         )
         analysis = project.analyze()
         dep_stream = analysis.cashflow_components["default:depreciation"]
@@ -397,31 +417,44 @@ class TestDepreciationRemapping:
 
 
 class TestDebtRemapping:
-    """Debt service dates remapped per timing convention."""
+    """Debt service dates remapped per timing convention.
 
-    def test_monthly_debt_dates_remapped_to_month_ends(self):
+    Construction-debt amortization schedules (built internally) get their
+    dates remapped according to the project timing convention. Explicit
+    debt_schedule overrides are passed through as-is.
+    """
+
+    def test_construction_debt_amortization_dates_remapped(self):
         project = (
-            EnergyProject("debt-remap")
-            .timeline(
-                construction_start=date(2024, 1, 1),
+            EnergyProject()
+            .generation(
+                capacity_mw=100,
+                capacity_factor=0.9,
                 operations_start=date(2025, 3, 15),
                 operations_end=date(2030, 12, 31),
-                frequency="year",
             )
-            .construction(overnight_cost=1_000_000, spend_profile="upfront", period="year")
-            .generation(capacity_mw=100, capacity_factor=0.9)
-            .market(sell_price_per_unit=50.0)
-            .debt(annual_rate=0.05, term=6, frequency="month", principal=500_000)
+            .construction(
+                overnight_cost=1_000_000,
+                spend_profile="upfront",
+                construction_start=date(2024, 1, 1),
+                period="year",
+            )
+            .revenue_from_generation(sell_price_per_unit=50.0)
+            .construction_debt(
+                debt_fraction=0.5,
+                amortization_rate=0.05,
+                amortization_term=3,
+                amortization_frequency="year",
+            )
         )
         analysis = project.analyze()
         debt_stream = analysis.cashflow_components["default:debt_service"]
-        # Each payment has interest + principal entries (2 per period).
         unique_dates = sorted(set(cf.date for cf in debt_stream.entries))
-        # First payment at 2025-03-15, remapped to min(month-end, ops_end):
-        # 2025-03-15 → min(2025-03-31, 2030-12-31) = 2025-03-31
-        assert unique_dates[0] == date(2025, 3, 31)
-        # Second payment at 2025-04-15 → 2025-04-30
-        assert unique_dates[1] == date(2025, 4, 30)
+        # Amortization starts at operations_start (2025-03-15).
+        # With "end" timing, remapped to min(year-end, ops_end):
+        assert unique_dates[0] == date(2025, 12, 31)
+        assert unique_dates[1] == date(2026, 12, 31)
+        assert unique_dates[2] == date(2027, 12, 31)
 
 
 # ---------------------------------------------------------------------------
@@ -434,15 +467,20 @@ class TestNoOperationsEnd:
 
     def test_explicit_periods_use_calendar_end_uncapped(self):
         project = (
-            EnergyProject("no-ops-end")
-            .timeline(
-                construction_start=date(2024, 1, 1),
+            EnergyProject()
+            .generation(
+                capacity_mw=100,
+                capacity_factor=0.9,
                 operations_start=date(2025, 6, 1),
-                frequency="year",
+                periods=3,
             )
-            .construction(overnight_cost=1000, spend_profile="upfront", period="year")
-            .generation(capacity_mw=100, capacity_factor=0.9, periods=3)
-            .market(sell_price_per_unit=50.0)
+            .construction(
+                overnight_cost=1000,
+                spend_profile="upfront",
+                construction_start=date(2024, 1, 1),
+                period="year",
+            )
+            .revenue_from_generation(sell_price_per_unit=50.0)
         )
         analysis = project.analyze()
         gen_dates = [g.date for g in analysis.generation.entries]
