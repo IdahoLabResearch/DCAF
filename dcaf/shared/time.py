@@ -23,7 +23,14 @@ def _normalize_period(period: Period) -> _PeriodEnum:
 
 
 def period_start(dt: date, period: Period) -> date:
-    """Return the start date of the period containing *dt*."""
+    """Return the start date of the period containing *dt*.
+
+    Examples
+    --------
+    >>> from datetime import date
+    >>> period_start(date(2025, 5, 17), "quarter")
+    datetime.date(2025, 4, 1)
+    """
     normalized_period = _normalize_period(period)
     match normalized_period:
         case _PeriodEnum.DAY:
@@ -40,7 +47,14 @@ def period_start(dt: date, period: Period) -> date:
 
 
 def period_end(dt: date, period: Period) -> date:
-    """Return the last date of the period containing *dt*."""
+    """Return the last date of the period containing *dt*.
+
+    Examples
+    --------
+    >>> from datetime import date
+    >>> period_end(date(2025, 5, 17), "quarter")
+    datetime.date(2025, 6, 30)
+    """
     match period:
         case "day":
             return dt
@@ -92,6 +106,18 @@ def event_date(
     -------
     date
         The computed event date.
+
+    Examples
+    --------
+    >>> from datetime import date
+    >>> event_date(
+    ...     date(2025, 1, 1),
+    ...     frequency="month",
+    ...     timing="middle",
+    ...     phase_start=date(2025, 1, 10),
+    ...     phase_end=date(2025, 1, 25),
+    ... )
+    datetime.date(2025, 1, 17)
     """
     match timing:
         case "end":
@@ -114,7 +140,14 @@ def event_date(
 def timedelta_fractional_years(
     start: date, end: date, convention: DayCountConvention = "actual/365"
 ) -> float:
-    """Calculate the year fraction between two dates using the given day count convention."""
+    """Calculate the year fraction between two dates using the given day count convention.
+
+    Examples
+    --------
+    >>> from datetime import date
+    >>> round(timedelta_fractional_years(date(2025, 1, 1), date(2025, 7, 2)), 4)
+    0.4986
+    """
     match convention:
         case "actual/365":
             return (end - start).days / 365.0
@@ -123,7 +156,13 @@ def timedelta_fractional_years(
 
 
 def compound_factor(rate: float, periods: float) -> float:
-    """Compute a compound growth or discount factor."""
+    """Compute a compound growth or discount factor.
+
+    Examples
+    --------
+    >>> round(compound_factor(0.08, 5), 4)
+    1.4693
+    """
     return (1.0 + rate) ** periods
 
 
@@ -151,7 +190,14 @@ def elapsed_periods(
     period: Period,
     convention: DayCountConvention = "actual/365",
 ) -> float:
-    """Return the fractional number of periods between two dates."""
+    """Return the fractional number of periods between two dates.
+
+    Examples
+    --------
+    >>> from datetime import date
+    >>> elapsed_periods(date(2025, 1, 15), date(2025, 4, 15), "month")
+    3.0
+    """
     normalized_period = _normalize_period(period)
     match normalized_period:
         case _PeriodEnum.YEAR:

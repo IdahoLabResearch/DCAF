@@ -327,6 +327,15 @@ def macrs_schedule(
     Returns
     -------
     CashFlowStream
+
+    Examples
+    --------
+    >>> from datetime import date
+    >>> stream = macrs_schedule(1_000_000, date(2030, 1, 1), 5)
+    >>> [(cf.date, cf.amount) for cf in stream[:3]]
+    [(datetime.date(2030, 1, 1), -200000.0), (datetime.date(2031, 1, 1), -320000.0), (datetime.date(2032, 1, 1), -192000.0)]
+    >>> round(sum(cf.amount for cf in stream), 2)
+    -1000000.0
     """
     match convention:
         case "half-year":

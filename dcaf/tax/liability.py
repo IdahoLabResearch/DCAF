@@ -26,27 +26,37 @@ def compute_taxable_income(
     and calculates the net taxable income for each period. The result is an accrual-based
     stream (is_cash=False) representing taxable income, not actual cash flows.
 
-    Args:
-        revenue_stream: Stream of taxable revenue cashflows.
-        deductible_stream: Stream of tax-deductible cashflows.
-        label: Label template for taxable income flows. Use {n} for sequential numbering.
+    Parameters
+    ----------
+    revenue_stream : CashFlowStream
+        Stream of taxable revenue cashflows.
+    deductible_stream : CashFlowStream
+        Stream of tax-deductible cashflows.
+    label : str, optional
+        Label template for taxable income flows. Use ``{n}`` for sequential numbering.
 
-    Returns:
-        CashFlowStream of taxable income amounts (can be positive or negative for losses),
-        with is_cash=False and dates set to period end (December 31 for annual).
+    Returns
+    -------
+    CashFlowStream
+        Taxable income amounts, which may be positive or negative, with
+        ``is_cash=False`` and dates aligned to year end.
 
-    Example:
+    Examples
+    --------
         >>> from datetime import date
-        >>> from dcaf.streams import CashFlowStream, CashFlow
+        >>> from dcaf.shared.types import TaxTreatment
+        >>> from dcaf.streams import CashFlow, CashFlowStream
         >>> revenue = CashFlowStream([
-        ...     CashFlow(100_000, date(2025, 6, 1), "Revenue", tax_treatment="taxable")
+        ...     CashFlow(100_000, date(2025, 6, 1), tax_treatment=TaxTreatment.TAXABLE),
+        ...     CashFlow(120_000, date(2026, 6, 1), tax_treatment=TaxTreatment.TAXABLE),
         ... ])
         >>> deductions = CashFlowStream([
-        ...     CashFlow(-20_000, date(2025, 3, 1), "Expense", tax_treatment="deductible")
+        ...     CashFlow(-20_000, date(2025, 3, 1), tax_treatment=TaxTreatment.DEDUCTIBLE),
+        ...     CashFlow(-30_000, date(2026, 3, 1), tax_treatment=TaxTreatment.DEDUCTIBLE),
         ... ])
         >>> taxable_income = compute_taxable_income(revenue, deductions)
-        >>> taxable_income[0].amount  # 100,000 + (-20,000) = 80,000
-        80000.0
+        >>> [(cf.date, cf.amount, cf.is_cash) for cf in taxable_income]
+        [(datetime.date(2025, 12, 31), 80000.0, False), (datetime.date(2026, 12, 31), 90000.0, False)]
     """
     # Combine both streams
     combined = CashFlowStream.from_streams(revenue_stream, deductible_stream)
@@ -111,22 +121,23 @@ def tax_liability(
         Tax payment cashflows (negative amounts for payments, positive for
         refunds when *allow_refund* is ``True``), with ``is_cash=True``.
 
-    Note:
-        This implementation does not model tax loss carryforwards or refunds.
-        Negative taxable income (losses) produce no tax liability. This differs
-        from the MPR tool, where a loss generates a tax credit (refund).
+    Notes
+    -----
+    This implementation does not model tax loss carryforwards or refunds.
+    Negative taxable income (losses) produce no tax liability unless
+    ``allow_refund=True``.
 
-    Example:
+    Examples
+    --------
         >>> from datetime import date
-        >>> from dcaf.streams import CashFlowStream, CashFlow
+        >>> from dcaf.streams import CashFlow, CashFlowStream
         >>> taxable_income = CashFlowStream([
-        ...     CashFlow(100_000, date(2025, 1, 1), "Taxable Income", is_cash=False)
+        ...     CashFlow(80_000, date(2025, 12, 31), "Taxable Income 1", is_cash=False),
+        ...     CashFlow(90_000, date(2026, 12, 31), "Taxable Income 2", is_cash=False),
         ... ])
         >>> taxes = tax_liability(taxable_income, tax_rate=0.21)
-        >>> taxes[0].amount  # -21,000 (negative = outflow)
-        -21000.0
-        >>> taxes[0].is_cash
-        True
+        >>> [(cf.date, cf.amount) for cf in taxes]
+        [(datetime.date(2025, 12, 31), -16800.0), (datetime.date(2026, 12, 31), -18900.0)]
     """
     if allow_refund:
         income = taxable_income_stream

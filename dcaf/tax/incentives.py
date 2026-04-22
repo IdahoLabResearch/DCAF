@@ -198,7 +198,8 @@ def itc(
         CashFlowStream containing a single ITC credit cashflow (positive amount, is_cash=True).
         Returns an empty stream if capex_stream is empty or rate is zero.
 
-    Example:
+    Examples
+    --------
         >>> from datetime import date
         >>> from dcaf.streams import CashFlowStream, CashFlow
         >>> capex = CashFlowStream([
@@ -208,10 +209,17 @@ def itc(
         ...         "Construction CAPEX",
         ...         pro_forma_category="capital_cost",
         ...     )
+        ...     ,
+        ...     CashFlow(
+        ...         -2_000_000,
+        ...         date(2029, 3, 1),
+        ...         "Supplemental CAPEX",
+        ...         pro_forma_category="capital_cost",
+        ...     )
         ... ])
         >>> credit = itc(capex, rate=0.30, placed_in_service=date(2030, 1, 1))
-        >>> credit[0].amount  # 10,000,000 * 0.30 = 3,000,000
-        3000000.0
+        >>> [(cf.date, cf.amount) for cf in credit]
+        [(datetime.date(2030, 1, 1), 3600000.0)]
     """
     if not capex_stream.entries or rate == 0.0:
         return CashFlowStream()
@@ -255,7 +263,8 @@ def itc_adjusted_basis(capex_stream: CashFlowStream, rate: float) -> float:
     Returns:
         Adjusted depreciable basis as a float. Returns 0.0 if capex_stream is empty.
 
-    Example:
+    Examples
+    --------
         >>> from datetime import date
         >>> from dcaf.streams import CashFlowStream, CashFlow
         >>> capex = CashFlowStream([
@@ -265,9 +274,16 @@ def itc_adjusted_basis(capex_stream: CashFlowStream, rate: float) -> float:
         ...         "CAPEX",
         ...         pro_forma_category="capital_cost",
         ...     )
+        ...     ,
+        ...     CashFlow(
+        ...         -20_000_000,
+        ...         date(2029, 3, 1),
+        ...         "CAPEX Additions",
+        ...         pro_forma_category="capital_cost",
+        ...     )
         ... ])
-        >>> itc_adjusted_basis(capex, rate=0.30)  # 100M * (1 - 0.15) = 85M
-        85000000.0
+        >>> itc_adjusted_basis(capex, rate=0.30)
+        102000000.0
     """
     if not capex_stream.entries:
         return 0.0

@@ -35,8 +35,8 @@ def test_energy_project_single_asset_workflow_builds_analysis_and_metrics():
         .fixed_opex(amount=100.0, frequency="year")
         .variable_cost(rate_per_unit=10.0)
         .revenue_from_generation(sell_price_per_unit=50.0)
-        .macrs_depreciation(property_class=5)
-        .itc(rate=0.10)
+        .depreciation_macrs(property_class=5)
+        .investment_tax_credit(rate=0.10)
         .tax(rate=0.21)
     )
 
@@ -126,8 +126,8 @@ def test_energy_project_levelized_cost_matches_real_carrying_charge_methodology(
                         rate=annual_inflation,
                     ),
                 )
-                .macrs_depreciation(property_class=15)
-                .itc(rate=0.0)
+                .depreciation_macrs(property_class=15)
+                .investment_tax_credit(rate=0.0)
             )
         if annual_opex != 0.0:
             project = project.fixed_opex(
@@ -303,7 +303,7 @@ def test_energy_project_derives_debt_principal_from_construction():
             construction_start=date(2025, 1, 1),
             period="year",
         )
-        .construction_debt(
+        .construction_financing(
             debt_fraction=0.5,
             amortization_rate=0.10,
             amortization_term=1,
@@ -720,7 +720,7 @@ def test_energy_project_debt_principal_capitalize_vs_pay():
                 construction_start=date(2025, 1, 1),
                 period="month",
             )
-            .construction_debt(
+            .construction_financing(
                 debt_fraction=0.5,
                 construction_interest_rate=0.10,
                 interest_treatment=interest_treatment,
@@ -846,7 +846,7 @@ def test_energy_project_operations_end_is_inclusive():
 def test_energy_project_construction_debt_rejects_when_stream_override_present():
     stream = CashFlowStream([CashFlow(-500.0, date(2025, 6, 1), label="Custom")])
     with pytest.raises(ValueError, match="construction_debt cannot be configured"):
-        EnergyProject().construction_stream(stream=stream).construction_debt(
+        EnergyProject().construction_stream(stream=stream).construction_financing(
             debt_fraction=0.5,
             amortization_rate=0.05,
             amortization_term=10,

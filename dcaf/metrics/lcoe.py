@@ -48,6 +48,50 @@ def lcoe(
     float or None
         Levelized cost in $/MWh, or ``None`` when the basis stream is
         empty or the objective is not monotonically increasing in price.
+
+    Examples
+    --------
+    >>> from datetime import date
+    >>> from dcaf.shared.types import ProFormaCategory, TaxTreatment
+    >>> from dcaf.streams import CashFlow, CashFlowGroup, CashFlowStream, Generation, GenerationStream
+    >>> basis_stream = GenerationStream([
+    ...     Generation(1000.0, date(2026, 12, 31)),
+    ...     Generation(1000.0, date(2027, 12, 31)),
+    ... ]).to_revenue(price_per_mwh=1.0, tax_treatment=TaxTreatment.TAXABLE)
+    >>> component_streams = CashFlowGroup({
+    ...     "capex": CashFlowStream([
+    ...         CashFlow(
+    ...             -1500.0,
+    ...             date(2025, 1, 1),
+    ...             pro_forma_category=ProFormaCategory.CAPITAL_COST,
+    ...         )
+    ...     ]),
+    ...     "opex": CashFlowStream([
+    ...         CashFlow(
+    ...             -200.0,
+    ...             date(2026, 12, 31),
+    ...             pro_forma_category=ProFormaCategory.OPERATING_COST,
+    ...             tax_treatment=TaxTreatment.DEDUCTIBLE,
+    ...         ),
+    ...         CashFlow(
+    ...             -200.0,
+    ...             date(2027, 12, 31),
+    ...             pro_forma_category=ProFormaCategory.OPERATING_COST,
+    ...             tax_treatment=TaxTreatment.DEDUCTIBLE,
+    ...         ),
+    ...     ]),
+    ... })
+    >>> round(
+    ...     lcoe(
+    ...         basis_stream,
+    ...         component_streams,
+    ...         tax_rate=None,
+    ...         discount_rate=0.08,
+    ...         valuation_date=date(2025, 1, 1),
+    ...     ),
+    ...     2,
+    ... )
+    1.11
     """
     if not basis_stream.entries:
         return None
@@ -71,7 +115,7 @@ def _solve_levelized_cost(objective: Callable[[float], float]) -> float | None:
 
     Probes ``price=0`` and ``price=1`` to verify the objective is
     increasing, expands the bracket until a sign change is found, then
-    calls :func:`brent_root` for superlinear convergence.
+    calls :func:`_brent_root` for superlinear convergence.
 
     Returns ``None`` if the objective is not monotonically increasing
     or the bracket cannot be found within 100 doublings.
@@ -113,10 +157,10 @@ def _solve_levelized_cost(objective: Callable[[float], float]) -> float | None:
         else:
             return None
 
-    return brent_root(objective, a, b, fa, fb)
+    return _brent_root(objective, a, b, fa, fb)
 
 
-def brent_root(
+def _brent_root(
     func: Callable[[float], float],
     a: float,
     b: float,

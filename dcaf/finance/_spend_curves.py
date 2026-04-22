@@ -185,6 +185,11 @@ def get_spend_profile(name: SpendScheduleName) -> SpendSchedule:
     ------
     KeyError
         If ``name`` is not a known built-in profile.
+
+    Examples
+    --------
+    >>> get_spend_profile("triangle")[:3]
+    ((0.0, 0.01), (0.025, 0.01), (0.05, 0.02))
     """
     try:
         return SPEND_CURVE_REGISTRY[name]
@@ -199,5 +204,10 @@ def get_spend_profiles() -> MappingProxyType[SpendScheduleName, SpendSchedule]:
     -------
     MappingProxyType[SpendScheduleName, SpendSchedule]
         Read-only mapping of profile names to immutable breakpoint schedules.
+
+    Examples
+    --------
+    >>> sorted(get_spend_profiles().keys())
+    ['bell', 'flat', 'linear', 'ramped', 'triangle', 'upfront']
     """
     return MappingProxyType(dict(SPEND_CURVE_REGISTRY))

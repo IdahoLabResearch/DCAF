@@ -402,7 +402,7 @@ class TestDepreciationRemapping:
                 period="year",
             )
             .revenue_from_generation(sell_price_per_unit=50.0)
-            .macrs_depreciation(property_class=5)
+            .depreciation_macrs(property_class=5)
         )
         analysis = project.analyze()
         dep_stream = analysis.cashflow_components["default:depreciation"]
@@ -440,7 +440,7 @@ class TestDebtRemapping:
                 period="year",
             )
             .revenue_from_generation(sell_price_per_unit=50.0)
-            .construction_debt(
+            .construction_financing(
                 debt_fraction=0.5,
                 amortization_rate=0.05,
                 amortization_term=3,

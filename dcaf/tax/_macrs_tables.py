@@ -87,6 +87,11 @@ def get_macrs_rates() -> MappingProxyType[int, tuple[float, ...]]:
     -------
     MappingProxyType[int, tuple[float, ...]]
         Read-only mapping from MACRS property class to annual rate tuple.
+
+    Examples
+    --------
+    >>> get_macrs_rates()[5]
+    (0.2, 0.32, 0.192, 0.1152, 0.1152, 0.0576)
     """
     return MappingProxyType(dict(MACRS_RATES))
 
@@ -100,6 +105,11 @@ def get_macrs_mid_quarter_rates() -> MappingProxyType[
     -------
     MappingProxyType[int, MappingProxyType[int, tuple[float, ...]]]
         Read-only mapping from property class to quarter-specific rate tables.
+
+    Examples
+    --------
+    >>> get_macrs_mid_quarter_rates()[5][4][:3]
+    (0.05, 0.38, 0.228)
     """
     return MappingProxyType(
         {

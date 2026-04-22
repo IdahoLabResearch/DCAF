@@ -49,6 +49,18 @@ def irr(
     ValueError
         If the stream has no cash flows, all flows share the same sign,
         or the algorithm fails to converge.
+
+    Examples
+    --------
+    >>> from datetime import date
+    >>> from dcaf.streams import CashFlow, CashFlowStream
+    >>> stream = CashFlowStream([
+    ...     CashFlow(-1000.0, date(2025, 1, 1)),
+    ...     CashFlow(600.0, date(2026, 1, 1)),
+    ...     CashFlow(600.0, date(2027, 1, 1)),
+    ... ])
+    >>> round(irr(stream), 4)
+    0.1307
     """
     cash_only = stream.cash_only()
     if not cash_only.inflows() or not cash_only.outflows():
