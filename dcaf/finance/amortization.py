@@ -225,6 +225,91 @@ class AmortizationSchedule:
         ).build()
 
 
+def amortize(
+    principal: float,
+    annual_rate: float,
+    term: int,
+    start_date: date,
+    frequency: Period = "month",
+    label: str = "Debt Service",
+    interest_label: str = "Interest",
+    principal_label: str = "Principal",
+    interest_pro_forma_category: ProFormaCategory | str | None = (
+        ProFormaCategory.FINANCING_INTEREST
+    ),
+    interest_tax_treatment: TaxTreatment | str = TaxTreatment.DEDUCTIBLE,
+    principal_pro_forma_category: ProFormaCategory | str | None = (
+        ProFormaCategory.FINANCING_PRINCIPAL
+    ),
+    principal_tax_treatment: TaxTreatment | str = TaxTreatment.NONE,
+) -> AmortizationSchedule:
+    """Build a standard fixed-payment amortization schedule.
+
+    Equivalent to ``AmortizationSchedule.build()``. Prefer
+    ``AmortizationSchedule.builder()`` when interest-only periods, interest-free
+    windows, or mid-schedule rate changes are required.
+
+    Parameters
+    ----------
+    principal : float
+        Loan principal amount.
+    annual_rate : float
+        Annual interest rate as a decimal (e.g., ``0.05`` for 5%).
+    term : int
+        Number of payment periods.
+    start_date : date
+        Date of the first payment.
+    frequency : Period, optional
+        Payment frequency. Default is ``"month"``.
+    label : str, optional
+        Template for total payment labels. ``{n}`` is replaced with the period number.
+    interest_label : str, optional
+        Template for interest payment labels. ``{n}`` is replaced with the period number.
+    principal_label : str, optional
+        Template for principal payment labels. ``{n}`` is replaced with the period number.
+    interest_pro_forma_category : ProFormaCategory or str or None, optional
+        Pro-forma category applied to interest cashflows.
+        Default is ``ProFormaCategory.FINANCING_INTEREST``.
+    interest_tax_treatment : TaxTreatment or str, optional
+        Tax treatment applied to interest cashflows. Default is ``TaxTreatment.DEDUCTIBLE``.
+    principal_pro_forma_category : ProFormaCategory or str or None, optional
+        Pro-forma category applied to principal cashflows.
+        Default is ``ProFormaCategory.FINANCING_PRINCIPAL``.
+    principal_tax_treatment : TaxTreatment or str, optional
+        Tax treatment applied to principal cashflows. Default is ``TaxTreatment.NONE``.
+
+    Returns
+    -------
+    AmortizationSchedule
+        Decomposed debt service schedule with ``total``, ``interest``, and
+        ``principal`` ``CashFlowStream`` objects.
+
+    Examples
+    --------
+    A 30-year mortgage at 5% annual rate with monthly payments:
+
+    >>> from datetime import date
+    >>> from dcaf.finance.amortization import amortize
+    >>> schedule = amortize(100_000.0, 0.05, 360, date(2026, 1, 1))
+    >>> round(abs(schedule.total.entries[0].amount), 2)
+    536.82
+    """
+    return AmortizationSchedule.build(
+        principal=principal,
+        annual_rate=annual_rate,
+        term=term,
+        start_date=start_date,
+        frequency=frequency,
+        label=label,
+        interest_label=interest_label,
+        principal_label=principal_label,
+        interest_pro_forma_category=interest_pro_forma_category,
+        interest_tax_treatment=interest_tax_treatment,
+        principal_pro_forma_category=principal_pro_forma_category,
+        principal_tax_treatment=principal_tax_treatment,
+    )
+
+
 class AmortizationBuilder:
     """Fluent builder for configuring and generating amortization schedules.
 

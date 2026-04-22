@@ -4,7 +4,7 @@ Escalation and spend-curve helpers are re-exported here for convenience.
 Other submodules (amortization, construction, opex) should be imported
 directly to avoid circular dependencies with ``dcaf.streams``::
 
-    from dcaf.finance.amortization import AmortizationSchedule
+    from dcaf.finance.amortization import amortize, AmortizationSchedule
     from dcaf.finance.construction import ConstructionSpendBuilder
     from dcaf.finance.opex import fixed_opex
 """

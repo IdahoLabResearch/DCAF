@@ -4,7 +4,7 @@ from datetime import date
 
 import pytest
 
-from dcaf.finance.amortization import AmortizationSchedule
+from dcaf.finance.amortization import AmortizationSchedule, amortize
 from dcaf.shared.types import ProFormaCategory, TaxTreatment
 
 
@@ -453,3 +453,38 @@ def test_index_interpolation_in_labels():
     principal_flows = schedule.principal.entries
     assert principal_flows[0].label == "principal year 1"
     assert principal_flows[2].label == "principal year 3"
+
+
+# === amortize() function ===
+
+
+def test_amortize_returns_amortization_schedule():
+    """amortize() returns an AmortizationSchedule."""
+    result = amortize(100_000.0, 0.05, 120, date(2026, 1, 1))
+    assert isinstance(result, AmortizationSchedule)
+
+
+def test_amortize_matches_build():
+    """amortize() produces identical output to AmortizationSchedule.build()."""
+    kwargs = dict(
+        principal=100_000.0,
+        annual_rate=0.05,
+        term=120,
+        start_date=date(2026, 1, 1),
+        frequency="month",
+    )
+    via_function = amortize(**kwargs)
+    via_classmethod = AmortizationSchedule.build(**kwargs)
+
+    for fn_flow, cm_flow in zip(
+        via_function.total.entries, via_classmethod.total.entries, strict=True
+    ):
+        assert fn_flow.amount == cm_flow.amount
+        assert fn_flow.date == cm_flow.date
+
+
+def test_amortize_known_value():
+    """$100k at 5% annual, monthly, 360 periods -> payment ~$536.82."""
+    schedule = amortize(100_000.0, 0.05, 360, date(2026, 1, 1))
+    payment = abs(schedule.total.entries[0].amount)
+    assert abs(payment - 536.82) < 0.01
