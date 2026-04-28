@@ -126,7 +126,7 @@ class TestConstructionTimingEndOfPeriod:
                 capacity_mw=100,
                 capacity_factor=0.9,
                 operations_start=date(2027, 5, 18),
-                operations_end=date(2030, 12, 31),
+                operations_end=date(2031, 1, 1),
             )
             .construction(
                 overnight_cost=3_000_000,
@@ -162,7 +162,7 @@ class TestOperationsTimingEndOfPeriod:
                 capacity_mw=100,
                 capacity_factor=0.9,
                 operations_start=date(2030, 6, 15),
-                operations_end=date(2032, 3, 10),
+                operations_end=date(2032, 3, 11),
             )
             .construction(
                 overnight_cost=1000,
@@ -218,7 +218,7 @@ class TestBeginOfPeriodTiming:
                 capacity_mw=100,
                 capacity_factor=0.9,
                 operations_start=date(2025, 2, 1),
-                operations_end=date(2027, 5, 17),
+                operations_end=date(2027, 5, 18),
             )
             .construction(
                 overnight_cost=1000,
@@ -247,7 +247,7 @@ class TestBeginOfPeriodTiming:
                 capacity_mw=100,
                 capacity_factor=0.9,
                 operations_start=date(2025, 3, 15),
-                operations_end=date(2027, 12, 31),
+                operations_end=date(2028, 1, 1),
             )
             .construction(
                 overnight_cost=1000,
@@ -287,7 +287,7 @@ class TestMiddleOfPeriodTiming:
                 capacity_mw=100,
                 capacity_factor=0.9,
                 operations_start=date(2025, 1, 1),
-                operations_end=date(2027, 12, 31),
+                operations_end=date(2028, 1, 1),
             )
             .construction(
                 overnight_cost=1000,
@@ -311,7 +311,7 @@ class TestMiddleOfPeriodTiming:
                 capacity_mw=100,
                 capacity_factor=0.9,
                 operations_start=date(2025, 4, 1),
-                operations_end=date(2027, 9, 15),
+                operations_end=date(2027, 9, 16),
             )
             .construction(
                 overnight_cost=1000,
@@ -346,7 +346,7 @@ class TestPerComponentTimingOverride:
                 capacity_mw=100,
                 capacity_factor=0.9,
                 operations_start=date(2025, 4, 1),
-                operations_end=date(2027, 12, 31),
+                operations_end=date(2028, 1, 1),
                 timing="begin",
             )
             .construction(
@@ -393,7 +393,7 @@ class TestDepreciationRemapping:
                 capacity_mw=100,
                 capacity_factor=0.9,
                 operations_start=date(2025, 6, 15),
-                operations_end=date(2040, 12, 31),
+                operations_end=date(2041, 1, 1),
             )
             .construction(
                 overnight_cost=1_000_000,
@@ -431,7 +431,7 @@ class TestDebtRemapping:
                 capacity_mw=100,
                 capacity_factor=0.9,
                 operations_start=date(2025, 3, 15),
-                operations_end=date(2030, 12, 31),
+                operations_end=date(2031, 1, 1),
             )
             .construction(
                 overnight_cost=1_000_000,

@@ -24,6 +24,7 @@ from dcaf.project.analysis import ProjectAnalysis, ProjectMetrics, ProjectProFor
 from dcaf.project.config import ProjectValuation, wacc as _wacc
 from dcaf.project.timeline import ProjectTimeline
 from dcaf.finance.amortization import AmortizationSchedule
+from dcaf.finance.outage import construction_outage as _construction_outage_helper
 from dcaf.streams.cashflows import CashFlow, CashFlowGroup, CashFlowStream
 from dcaf.finance.construction import (
     ConstructionFinancing,
@@ -65,6 +66,26 @@ def _validate_finite(value: float, name: str) -> None:
     """Raise ``ValueError`` if *value* is not finite (inf or NaN)."""
     if not isfinite(value):
         raise ValueError(f"{name} must be finite")
+
+
+def _validate_non_negative(value: float, name: str) -> None:
+    """Raise ``ValueError`` if *value* is negative or not finite."""
+    _validate_finite(value, name)
+    if value < 0.0:
+        raise ValueError(f"{name} must be non-negative")
+
+
+def _validate_outage_dates(start: date, end: date) -> None:
+    """Validate an inclusive-start, exclusive-end outage interval."""
+    if end <= start:
+        raise ValueError("outage end must be after outage start")
+
+
+def _validate_capacity_reduction(capacity_reduction: float) -> None:
+    """Validate a fractional outage capacity reduction."""
+    _validate_finite(capacity_reduction, "capacity_reduction")
+    if not 0.0 <= capacity_reduction <= 1.0:
+        raise ValueError("capacity_reduction must be between 0 and 1")
 
 
 @dataclass(frozen=True)
@@ -170,6 +191,44 @@ class _GenerationStreamConfig:
 
 
 type _GenerationConfig = _CapacityGenerationConfig | _GenerationStreamConfig | None
+
+
+@dataclass(frozen=True)
+class _GenerationOutageConfig:
+    """Configuration for an outage that reduces modeled generation."""
+
+    name: str
+    start: date
+    end: date
+    capacity_mw: float | None = None
+    capacity_factor: float | None = None
+    capacity_reduction: float = 1.0
+    timing: TimingConvention | None = None
+    source: str | None = None
+    carrier: str | None = None
+    label: str = "Generation Outage"
+
+
+@dataclass(frozen=True)
+class _ConstructionOutageConfig:
+    """Configuration for construction-outage economics on unmodeled baseline generation."""
+
+    name: str
+    start: date
+    end: date
+    capacity_mw: float
+    capacity_factor: float
+    capacity_reduction: float = 1.0
+    timing: TimingConvention | None = None
+    carrier: str = "electricity"
+    source: str = "construction-outage"
+    sell_price_per_unit: float | None = None
+    fixed_cost: float = 0.0
+    cost_per_day: float = 0.0
+    lost_revenue_label: str = "Outage Lost Revenue"
+    fixed_cost_label: str = "Outage Fixed Cost"
+    daily_cost_label: str = "Outage Replacement Power"
+    escalation: _EscalationSettings = field(default_factory=_EscalationSettings)
 
 
 @dataclass(frozen=True)
@@ -287,6 +346,8 @@ class _AssetConfig:
     """All configuration for a single named project asset."""
 
     generation: _GenerationConfig = None
+    generation_outages: tuple[_GenerationOutageConfig, ...] = ()
+    construction_outages: dict[str, _ConstructionOutageConfig] = field(default_factory=dict)
     fixed_opex_items: dict[str, _RecurringCostConfig] = field(default_factory=dict)
     variable_cost_items: dict[str, _VariableCostConfig] = field(default_factory=dict)
     construction: _ConstructionConfig = None
@@ -347,7 +408,7 @@ class EnergyProject:
     ...         capacity_mw=100.0,
     ...         capacity_factor=0.35,
     ...         operations_start=date(2026, 1, 1),
-    ...         operations_end=date(2045, 12, 31),
+    ...         operations_end=date(2046, 1, 1),
     ...     )
     ...     .revenue_from_generation(sell_price_per_unit=50.0)
     ...     .construction(
@@ -578,9 +639,11 @@ class EnergyProject:
             incentives. Required when ``start`` and ``periods`` are not both
             provided.
         operations_end : date, optional
-            End boundary for operations (inclusive). When ``periods`` is not
-            provided, the builder infers the schedule from ``operations_start``
-            through ``operations_end`` and prorates any trailing partial period.
+            Exclusive end boundary for operations (the first day after
+            operations cease). When ``periods`` is not provided, the builder
+            infers the schedule from ``operations_start`` through (but not
+            including) ``operations_end`` and prorates any trailing partial
+            period.
         start : date, optional
             First generation period start date. Defaults to ``operations_start``.
         periods : int, optional
@@ -646,6 +709,210 @@ class EnergyProject:
         return self._with_asset(
             asset,
             dc_replace(asset_config, generation=_GenerationStreamConfig(stream=stream)),
+        )
+
+    def generation_outage(
+        self,
+        *,
+        start: date,
+        end: date,
+        name: str = "default",
+        capacity_mw: float | None = None,
+        capacity_factor: float | None = None,
+        capacity_reduction: float = 1.0,
+        timing: TimingConvention | None = None,
+        source: str | None = None,
+        carrier: str | None = None,
+        label: str | None = None,
+    ) -> Self:
+        """Configure an outage that reduces modeled project generation.
+
+        The outage is represented internally as ordinary negative
+        ``Generation``. It is therefore included in :attr:`ProjectAnalysis.generation`
+        and naturally affects generation-derived revenue, variable costs, PTC,
+        total generation, discounted generation, and LCOE.
+
+        Parameters
+        ----------
+        start : date
+            Inclusive outage start date.
+        end : date
+            Exclusive outage end date.
+        name : str, optional
+            User-facing outage name for labels and diagnostics.
+        capacity_mw : float, optional
+            Capacity affected by the outage. Defaults to the configured
+            capacity-based generation capacity when available.
+        capacity_factor : float, optional
+            Counterfactual capacity factor during the outage. Defaults to the
+            configured capacity-based generation capacity factor when available.
+        capacity_reduction : float, optional
+            Fraction of affected capacity unavailable during the outage.
+        timing : TimingConvention, optional
+            Booking date convention for the negative generation entry. Defaults
+            to the outage generation timing or project timing.
+        source : str, optional
+            Source identifier for the outage generation entry. Defaults to the
+            generation source.
+        carrier : str, optional
+            Energy carrier. Defaults to the generation carrier.
+        label : str, optional
+            Label for the negative generation entry.
+
+        Returns
+        -------
+        EnergyProject
+            New project with the outage registered.
+        """
+        _validate_outage_dates(start, end)
+        if capacity_mw is not None:
+            _validate_non_negative(capacity_mw, "capacity_mw")
+        if capacity_factor is not None:
+            _validate_non_negative(capacity_factor, "capacity_factor")
+        _validate_capacity_reduction(capacity_reduction)
+
+        asset = self._config.default_asset
+        asset_config = self._asset_config(asset)
+        outage = _GenerationOutageConfig(
+            name=name,
+            start=start,
+            end=end,
+            capacity_mw=capacity_mw,
+            capacity_factor=capacity_factor,
+            capacity_reduction=capacity_reduction,
+            timing=timing,
+            source=source,
+            carrier=carrier,
+            label="Generation Outage" if label is None else label,
+        )
+        return self._with_asset(
+            asset,
+            dc_replace(
+                asset_config,
+                generation_outages=(*asset_config.generation_outages, outage),
+            ),
+        )
+
+    def construction_outage(
+        self,
+        *,
+        start: date,
+        end: date,
+        capacity_mw: float,
+        capacity_factor: float,
+        name: str = "default",
+        capacity_reduction: float = 1.0,
+        timing: TimingConvention | None = None,
+        carrier: str = "electricity",
+        source: str = "construction-outage",
+        sell_price_per_unit: float | None = None,
+        fixed_cost: float = 0.0,
+        cost_per_day: float = 0.0,
+        escalation: float | None = None,
+        escalation_period: Period | None = None,
+        amount_reference_date: date | None = None,
+        escalation_policy: EscalationPolicy | None = None,
+        lost_revenue_label: str | None = None,
+        fixed_cost_label: str | None = None,
+        daily_cost_label: str | None = None,
+    ) -> Self:
+        """Configure construction-outage economics on unmodeled baseline generation.
+
+        Models the typical nuclear-uprate scenario where a refueling outage on
+        the existing baseline plant is extended to perform uprate work. The
+        baseline plant is not part of the project's modeled generation, but the
+        outage's lost revenue and any replacement-power costs are economic
+        impacts of the project. Lost generation is represented internally as
+        negative ``Generation`` and converted to operating-cost cashflows; the
+        compiled analysis generation stream is not changed.
+
+        Lost revenue, fixed cost, and per-day cost appear as **distinct
+        cashflows** in the resulting component, so each shows up as a separate
+        line item in pro-forma output.
+
+        Parameters
+        ----------
+        start, end : date
+            Inclusive outage start and exclusive outage end.
+        capacity_mw : float
+            Baseline capacity affected by the outage.
+        capacity_factor : float
+            Counterfactual capacity factor during the outage.
+        name : str, optional
+            Component name suffix used in the compiled analysis.
+        capacity_reduction : float, optional
+            Fraction of affected capacity unavailable during the outage.
+        timing : TimingConvention, optional
+            Booking-date convention for generated cashflows.
+        carrier : str, optional
+            Market carrier used for price lookup when ``sell_price_per_unit`` is omitted.
+        source : str, optional
+            Source identifier for the internal negative generation.
+        sell_price_per_unit : float, optional
+            Explicit outage price per MWh. When omitted, the configured market
+            price for ``carrier`` is used.
+        fixed_cost : float, optional
+            Additional one-time outage cost. Sign is ignored.
+        cost_per_day : float, optional
+            Additional outage cost per calendar day. Sign is ignored.
+        lost_revenue_label, fixed_cost_label, daily_cost_label : str, optional
+            Per-flow labels for the three cashflow components.
+
+        Advanced
+        --------
+        escalation_period, amount_reference_date, escalation_policy
+            Escalation settings used when ``sell_price_per_unit`` is explicit.
+            Otherwise the configured market escalation is used.
+
+        Returns
+        -------
+        EnergyProject
+            New project with the construction outage registered.
+        """
+        _validate_outage_dates(start, end)
+        _validate_non_negative(capacity_mw, "capacity_mw")
+        _validate_non_negative(capacity_factor, "capacity_factor")
+        _validate_capacity_reduction(capacity_reduction)
+        if sell_price_per_unit is not None:
+            _validate_finite(sell_price_per_unit, "sell_price_per_unit")
+        _validate_finite(fixed_cost, "fixed_cost")
+        _validate_finite(cost_per_day, "cost_per_day")
+
+        asset = self._config.default_asset
+        asset_config = self._asset_config(asset)
+        outage = _ConstructionOutageConfig(
+            name=name,
+            start=start,
+            end=end,
+            capacity_mw=capacity_mw,
+            capacity_factor=capacity_factor,
+            capacity_reduction=capacity_reduction,
+            timing=timing,
+            carrier=carrier,
+            source=source,
+            sell_price_per_unit=sell_price_per_unit,
+            fixed_cost=fixed_cost,
+            cost_per_day=cost_per_day,
+            lost_revenue_label="Outage Lost Revenue"
+            if lost_revenue_label is None
+            else lost_revenue_label,
+            fixed_cost_label="Outage Fixed Cost" if fixed_cost_label is None else fixed_cost_label,
+            daily_cost_label="Outage Replacement Power"
+            if daily_cost_label is None
+            else daily_cost_label,
+            escalation=_updated_escalation(
+                _EscalationSettings(),
+                escalation=escalation,
+                escalation_period=escalation_period,
+                amount_reference_date=amount_reference_date,
+                escalation_policy=escalation_policy,
+            ),
+        )
+        outages = dict(asset_config.construction_outages)
+        outages[name] = outage
+        return self._with_asset(
+            asset,
+            dc_replace(asset_config, construction_outages=outages),
         )
 
     def revenue_from_generation(
@@ -1063,7 +1330,9 @@ class EnergyProject:
             If ``rate`` is not finite.
         """
         _validate_finite(rate, "tax rate")
-        return self._copy(config=dc_replace(self._config, tax_rate=rate, tax_allow_refund=allow_refund))
+        return self._copy(
+            config=dc_replace(self._config, tax_rate=rate, tax_allow_refund=allow_refund)
+        )
 
     def depreciation_macrs(
         self,
@@ -1372,6 +1641,16 @@ class EnergyProject:
                     )
                     component_streams[key] = stream
 
+            for outage_name, outage_config in asset_config.construction_outages.items():
+                stream = self._build_construction_outage(outage_config)
+                if stream.entries:
+                    key = (
+                        f"{asset_name}:construction_outage"
+                        if outage_name == "default"
+                        else f"{asset_name}:construction_outage:{outage_name}"
+                    )
+                    component_streams[key] = stream
+
             itc_stream = self._build_itc(asset_config, construction_stream)
             if itc_stream.entries:
                 component_streams[f"{asset_name}:itc"] = itc_stream
@@ -1537,7 +1816,10 @@ class EnergyProject:
                 if gen.stream.entries:
                     dates = [entry.date for entry in gen.stream.entries]
                     operations_start = min(dates)
-                    operations_end = max(dates)
+                    # operations_end is exclusive; the latest entry date is
+                    # within the operating window, so the boundary is the
+                    # following day.
+                    operations_end = max(dates) + relativedelta(days=1)
 
             con = asset_config.construction
             if isinstance(con, _ConstructionScheduleConfig):
@@ -1569,52 +1851,174 @@ class EnergyProject:
         """
         generation = asset_config.generation
         if generation is None:
+            if asset_config.generation_outages:
+                raise ValueError(
+                    f"generation_outage requires generation to be configured for asset "
+                    f"{asset_name!r}"
+                )
             return GenerationStream()
         if isinstance(generation, _GenerationStreamConfig):
-            return generation.stream
-        frequency = (
-            generation.frequency
-            if generation.frequency is not None
-            else self._config.timeline.frequency
+            base_generation = generation.stream
+        else:
+            frequency = (
+                generation.frequency
+                if generation.frequency is not None
+                else self._config.timeline.frequency
+            )
+            start = (
+                generation.start
+                if generation.start is not None
+                else self._require_timeline_date("operations_start")
+            )
+            timing = generation.timing or self._config.timeline.timing
+            ops_start = self._config.timeline.operations_start
+            ops_end = self._config.timeline.operations_end
+            schedule = self._operating_schedule(
+                asset_name,
+                "generation",
+                start=start,
+                periods=generation.periods,
+                frequency=frequency,
+                timing=timing,
+                phase_start=ops_start,
+                phase_end=ops_end,
+            )
+            entries: list[Generation] = []
+            hours = hours_per_period(frequency)
+            source = asset_name if generation.source is None else generation.source
+            for index, modeled_period in enumerate(schedule, start=1):
+                label = format_label(generation.label, index)
+                entries.append(
+                    Generation(
+                        amount_mwh=(
+                            generation.capacity_mw
+                            * generation.capacity_factor
+                            * hours
+                            * modeled_period.fraction
+                        ),
+                        date=modeled_period.event_date,
+                        source=source,
+                        carrier=generation.carrier,
+                        label=label,
+                    )
+                )
+            base_generation = GenerationStream(entries)
+
+        outage_generation = self._build_generation_outages(asset_name, asset_config)
+        if not outage_generation.entries:
+            return base_generation
+        return GenerationStream.from_streams(base_generation, outage_generation).sort()
+
+    def _build_generation_outages(
+        self,
+        asset_name: str,
+        asset_config: _AssetConfig,
+    ) -> GenerationStream:
+        """Build negative generation entries for configured modeled outages."""
+        if not asset_config.generation_outages:
+            return GenerationStream()
+
+        generation = asset_config.generation
+        capacity_defaults: _CapacityGenerationConfig | None = (
+            generation if isinstance(generation, _CapacityGenerationConfig) else None
         )
-        start = (
-            generation.start
-            if generation.start is not None
-            else self._require_timeline_date("operations_start")
-        )
-        timing = generation.timing or self._config.timeline.timing
         ops_start = self._config.timeline.operations_start
         ops_end = self._config.timeline.operations_end
-        schedule = self._operating_schedule(
-            asset_name,
-            "generation",
-            start=start,
-            periods=generation.periods,
-            frequency=frequency,
-            timing=timing,
-            phase_start=ops_start,
-            phase_end=ops_end,
-        )
-        entries: list[Generation] = []
-        hours = hours_per_period(frequency)
-        source = asset_name if generation.source is None else generation.source
-        for index, modeled_period in enumerate(schedule, start=1):
-            label = format_label(generation.label, index)
-            entries.append(
-                Generation(
-                    amount_mwh=(
-                        generation.capacity_mw
-                        * generation.capacity_factor
-                        * hours
-                        * modeled_period.fraction
-                    ),
-                    date=modeled_period.event_date,
-                    source=source,
-                    carrier=generation.carrier,
-                    label=label,
+
+        outage_streams: list[GenerationStream] = []
+        for outage in asset_config.generation_outages:
+            if ops_start is not None and outage.start < ops_start:
+                raise ValueError(
+                    f"generation_outage {outage.name!r} for asset {asset_name!r} "
+                    "starts before operations_start"
+                )
+            if ops_end is not None and outage.end > ops_end:
+                raise ValueError(
+                    f"generation_outage {outage.name!r} for asset {asset_name!r} "
+                    "ends after operations_end"
+                )
+
+            capacity_mw = outage.capacity_mw
+            if capacity_mw is None and capacity_defaults is not None:
+                capacity_mw = capacity_defaults.capacity_mw
+            if capacity_mw is None:
+                raise ValueError(
+                    f"generation_outage {outage.name!r} requires capacity_mw "
+                    "when capacity-based generation is not configured"
+                )
+
+            capacity_factor = outage.capacity_factor
+            if capacity_factor is None and capacity_defaults is not None:
+                capacity_factor = capacity_defaults.capacity_factor
+            if capacity_factor is None:
+                raise ValueError(
+                    f"generation_outage {outage.name!r} requires capacity_factor "
+                    "when capacity-based generation is not configured"
+                )
+
+            source = outage.source
+            carrier = outage.carrier
+            timing = outage.timing
+            if capacity_defaults is not None:
+                source = source if source is not None else capacity_defaults.source or asset_name
+                carrier = carrier if carrier is not None else capacity_defaults.carrier
+                timing = timing or capacity_defaults.timing
+
+            outage_streams.append(
+                GenerationStream.from_outage(
+                    capacity_mw=capacity_mw,
+                    capacity_factor=capacity_factor,
+                    start=outage.start,
+                    end=outage.end,
+                    capacity_reduction=outage.capacity_reduction,
+                    timing=timing or self._config.timeline.timing,
+                    source="" if source is None else source,
+                    carrier="electricity" if carrier is None else carrier,
+                    label=outage.label,
                 )
             )
-        return GenerationStream(entries)
+        return GenerationStream.from_streams(*outage_streams)
+
+    def _build_construction_outage(
+        self,
+        outage: _ConstructionOutageConfig,
+    ) -> CashFlowStream:
+        """Build operating-cost cashflows for a construction outage on baseline generation."""
+        if outage.sell_price_per_unit is None:
+            market = self._config.markets.get(outage.carrier)
+            if market is None:
+                raise ValueError(
+                    f"construction_outage {outage.name!r} requires sell_price_per_unit "
+                    f"or a configured market for carrier {outage.carrier!r}"
+                )
+            price_per_mwh = market.sell_price_per_unit
+            escalation = _effective_escalation(market.escalation, self._config.default_escalation)
+        else:
+            price_per_mwh = outage.sell_price_per_unit
+            escalation = _effective_escalation(outage.escalation, self._config.default_escalation)
+
+        return _construction_outage_helper(
+            capacity_mw=outage.capacity_mw,
+            capacity_factor=outage.capacity_factor,
+            start=outage.start,
+            end=outage.end,
+            sell_price_per_unit=price_per_mwh,
+            capacity_reduction=outage.capacity_reduction,
+            fixed_cost=outage.fixed_cost,
+            cost_per_day=outage.cost_per_day,
+            timing=outage.timing or self._config.timeline.timing,
+            source=outage.source,
+            carrier=outage.carrier,
+            lost_revenue_label=outage.lost_revenue_label,
+            fixed_cost_label=outage.fixed_cost_label,
+            daily_cost_label=outage.daily_cost_label,
+            pro_forma_category=ProFormaCategory.OPERATING_COST,
+            tax_treatment=TaxTreatment.DEDUCTIBLE,
+            escalation=escalation.escalation,
+            escalation_period=escalation.escalation_period,
+            amount_reference_date=escalation.amount_reference_date,
+            escalation_policy=escalation.policy,
+        )
 
     def _build_revenue(
         self,
@@ -1884,13 +2288,16 @@ class EnergyProject:
         """Remap cashflow dates according to the project timing convention.
 
         Applies the timeline's timing convention to each cashflow in *stream*,
-        replacing each date with the computed event date.
+        replacing each date with the computed event date. ``phase_end`` is the
+        exclusive end of the phase and is converted to the inclusive last
+        allowable date for :func:`event_date`.
         """
         timing = self._config.timeline.timing
+        phase_end_inclusive = phase_end - relativedelta(days=1) if phase_end is not None else None
         return stream.apply(
             lambda cf: dc_replace(
                 cf,
-                date=event_date(cf.date, frequency, timing, phase_start, phase_end),
+                date=event_date(cf.date, frequency, timing, phase_start, phase_end_inclusive),
             )
         )
 
@@ -2100,8 +2507,12 @@ class EnergyProject:
         entries. Otherwise infers the schedule from ``timeline.operations_end``,
         prorating any trailing partial period using :func:`elapsed_periods`.
 
-        *timing*, *phase_start*, and *phase_end* control event-date placement.
+        *timing*, *phase_start*, and *phase_end* (all exclusive ends) control
+        event-date placement. ``phase_end`` is converted to the inclusive
+        last-allowable date when forwarded to :func:`event_date`.
         """
+        phase_end_inclusive = phase_end - relativedelta(days=1) if phase_end is not None else None
+
         if periods is not None:
             if periods <= 0:
                 raise ValueError(f"{section} periods must be positive for asset '{asset_name}'")
@@ -2112,23 +2523,25 @@ class EnergyProject:
                 schedule.append(
                     _ScheduledPeriod(
                         start=current,
-                        event_date=event_date(current, frequency, timing, phase_start, phase_end),
+                        event_date=event_date(
+                            current, frequency, timing, phase_start, phase_end_inclusive
+                        ),
                     )
                 )
                 current += delta
             return tuple(schedule)
 
-        operations_end_inclusive = self._require_timeline_date("operations_end")
-        # Convert inclusive end to exclusive boundary for schedule computation.
-        exclusive_end = operations_end_inclusive + relativedelta(days=1)
+        exclusive_end = self._require_timeline_date("operations_end")
         if exclusive_end <= start:
             raise ValueError(
-                f"timeline.operations_end must not be before the {section} start "
+                f"timeline.operations_end must be after the {section} start "
                 f"for asset '{asset_name}'"
             )
 
-        # Default phase_end to operations_end when not explicitly provided.
-        effective_phase_end = phase_end if phase_end is not None else operations_end_inclusive
+        operations_end_inclusive = exclusive_end - relativedelta(days=1)
+        effective_phase_end = (
+            phase_end_inclusive if phase_end_inclusive is not None else operations_end_inclusive
+        )
 
         delta = time_delta_per_period(frequency)
         current = start

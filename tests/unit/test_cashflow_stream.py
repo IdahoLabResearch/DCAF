@@ -825,9 +825,9 @@ def test_cash_only(_create_cf_stream):
 
 
 def test_date_range_both_bounds(_create_cf_stream):
-    """Tests date_range with both start and end."""
+    """Tests date_range with both start (inclusive) and end (exclusive)."""
     cf_stream, flows = _create_cf_stream
-    result = cf_stream.date_range(start=date(2026, 1, 31), end=date(2026, 4, 1))
+    result = cf_stream.date_range(start=date(2026, 1, 31), end=date(2026, 4, 2))
     assert result.entries == [flows[1], flows[2]]
 
 
@@ -839,9 +839,9 @@ def test_date_range_start_only(_create_cf_stream):
 
 
 def test_date_range_end_only(_create_cf_stream):
-    """Tests date_range with only end bound."""
+    """Tests date_range with only end bound (exclusive)."""
     cf_stream, flows = _create_cf_stream
-    result = cf_stream.date_range(end=date(2026, 1, 31))
+    result = cf_stream.date_range(end=date(2026, 2, 1))
     assert result.entries == [flows[0], flows[1]]
 
 

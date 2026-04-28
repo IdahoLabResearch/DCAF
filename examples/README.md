@@ -16,8 +16,12 @@ capacity, overnight capital cost, sell price, and a tax rate. No escalation, no
 construction timeline, no financing structure, no labels. This is appropriate for
 quick feasibility studies or sensitivity sweeps where exact timing does not matter.
 
+A single `.construction_outage(...)` call models a 10-day extension to a
+baseline-plant refueling outage during construction.
+
 **What it demonstrates:** the minimum viable `EnergyProject` configuration; the
-`analysis.metrics()` convenience method for NPV and LCOE.
+`analysis.metrics()` convenience method for NPV and LCOE; the simplest form of
+outage modeling.
 
 ---
 
@@ -26,12 +30,14 @@ quick feasibility studies or sensitivity sweeps where exact timing does not matt
 The same `EnergyProject` builder with all configuration options engaged: a dated
 construction timeline, a bell-curve spend profile, escalation tied to a reference
 date, debt/equity financing with a multi-year amortization term, carrier and source
-annotations, and per-component cash flow introspection. This is the recommended
+annotations, two named construction outages with mobilization and replacement-power
+costs, and per-component cash flow introspection. This is the recommended
 starting point for most production analyses.
 
 **What it demonstrates:** the full breadth of `EnergyProject` configuration;
-`default_escalation`, `construction_financing`, asset annotations, and manual NPV /
-LCOE computation from `analysis.cashflows` and `analysis.generation`.
+`default_escalation`, `construction_financing`, asset annotations, multiple named
+`construction_outage` invocations with custom labels, and manual NPV / LCOE
+computation from `analysis.cashflows` and `analysis.generation`.
 
 ---
 
@@ -47,6 +53,7 @@ financial sub-system functions:
 | Debt service | `AmortizationSchedule.build` |
 | Generation | `GenerationStream.from_capacity` |
 | Revenue | `GenerationStream.to_revenue` |
+| Construction outages | `construction_outage` |
 | Depreciation | `macrs_schedule` |
 | Tax credits | `ptc` |
 | Taxes | `compute_taxable_income` + `tax_liability` |
@@ -66,7 +73,7 @@ manual taxable income assembly from revenue, credits, depreciation, and interest
 ## `nuclear_uprate_project_builders.py` — Mid-level builder classes, advanced config
 
 Also bypasses `EnergyProject`, but focuses on the fluent builder APIs rather than the
-direct function API used in the midlevel example. Three features are highlighted:
+direct function API used in the midlevel example. Four features are highlighted:
 
 **Custom construction spend profile** — a three-phase piecewise schedule is passed to
 `ConstructionSpendBuilder.schedule()`, allocating 15% of spend to the engineering and
@@ -85,10 +92,17 @@ per-MWh credit ($15/MWh for the first 5 operating years). Both components are
 assembled directly as `CashFlow` objects, with explicit `pro_forma_category` and
 `tax_treatment` fields, rather than delegating to `itc()` or `ptc()`.
 
+**Construction-outage decomposition** — `generator_outage()` is invoked alongside
+`construction_outage()` to obtain both the physical-quantity (negative MWh)
+representation and the financial (lost-revenue + replacement-cost) representation
+of the same outage event. The cashflow form is wired into the deductions stream so
+its tax shield is captured.
+
 **What it demonstrates:** `ConstructionSpendBuilder` chaining; custom `SpendProfile`
 via `SpendProfile.custom()`; `AmortizationBuilder` rules (`interest_free`,
 `rate_change`); total capitalized cost derivation from a constructed stream;
-hand-assembled `CashFlow` objects for non-standard incentive structures.
+hand-assembled `CashFlow` objects for non-standard incentive structures; combined
+use of `generator_outage` and `construction_outage` for outage modeling.
 
 ---
 
@@ -106,8 +120,10 @@ APIs produce under the hood.
 
 **What it demonstrates:** direct `CashFlow` and `Generation` dataclass construction
 with explicit `pro_forma_category` and `tax_treatment` fields; manual escalation via
-compound factor; the PMT formula for level-payment debt service; `CashFlowStream.from_streams`
-for assembly; `.cash_only()`, `.inflows()`, `.outflows()`, `.npv()`, and `.discounted_sum()`
+compound factor; the PMT formula for level-payment debt service; manual outage
+cashflow assembly (lost MWh × price plus fixed and per-day costs) mirroring what
+`construction_outage()` produces internally; `CashFlowStream.from_streams` for
+assembly; `.cash_only()`, `.inflows()`, `.outflows()`, `.npv()`, and `.discounted_sum()`
 for valuation.
 
 ---
@@ -120,11 +136,15 @@ the construction start date:
 
 | Example | NPV |
 |---------|-----|
-| `_simple` | ~$318 M (no financing, no escalation) |
-| `_full` (high-level) | ~$56 M (full financing and escalation) |
-| `_midlevel` | ~$205 M (MACRS deductions lower tax burden vs. high-level) |
-| `_builders` | ~$181 M (custom incentive; lower debt cost reduces service vs. midlevel) |
-| `_primitives` | ~−$19 M (no depreciation deduction; escalation on revenue only) |
+| `_simple` | ~$307 M (no financing, no escalation) |
+| `_full` (high-level) | ~$37 M (full financing and escalation) |
+| `_midlevel` | ~$186 M (MACRS deductions lower tax burden vs. high-level) |
+| `_builders` | ~$162 M (custom incentive; lower debt cost reduces service vs. midlevel) |
+| `_primitives` | ~−$36 M (no depreciation deduction; escalation on revenue only) |
+
+All five examples include construction-outage modeling (10-day extensions to two
+baseline refueling outages during construction). The outage line items are
+visible in each example's per-component cashflow output.
 
 The divergence is intentional — it reflects the modeling choices made at each level,
 not errors. The primitives example in particular omits depreciation deductions and

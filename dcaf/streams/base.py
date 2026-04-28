@@ -157,12 +157,16 @@ class BaseStream[EntryT]:
         return self._filter_where(matches)
 
     def date_range(self, start: date | None = None, end: date | None = None) -> Self:
-        """Filter entries by inclusive date bounds."""
+        """Filter entries to the half-open ``[start, end)`` interval.
+
+        ``start`` is inclusive; ``end`` is exclusive. Either bound may be
+        omitted to leave that side unbounded.
+        """
         result = self.entries
         if start is not None:
             result = [entry for entry in result if getattr(entry, "date") >= start]
         if end is not None:
-            result = [entry for entry in result if getattr(entry, "date") <= end]
+            result = [entry for entry in result if getattr(entry, "date") < end]
         return self._new(result)
 
     def _grouped_entries_by_key[KeyT](

@@ -8,7 +8,8 @@ from various sources and energy carriers.
 
 import datetime as dt
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
+from math import isfinite
 from typing import (
     Any,
     Callable,
@@ -16,6 +17,7 @@ from typing import (
     Iterable,
     Iterator,
     Literal,
+    assert_never,
     overload,
 )
 
@@ -39,6 +41,7 @@ from dcaf.shared.types import (
     ProFormaCategory,
     SupportsLessThan,
     TaxTreatment,
+    TimingConvention,
     normalize_cashflow_classification,
 )
 from dcaf.streams.base import BaseGroup, BaseStream
@@ -150,6 +153,46 @@ def _generation_escalation(
         rate=escalation,
         period=escalation_period,
     )
+
+
+def _validate_outage_inputs(
+    *,
+    capacity_mw: float,
+    capacity_factor: float,
+    start: date,
+    end: date,
+    capacity_reduction: float,
+) -> None:
+    """Validate common outage interval and capacity inputs."""
+    if end <= start:
+        raise ValueError("outage end must be after outage start")
+    for name, value in (
+        ("capacity_mw", capacity_mw),
+        ("capacity_factor", capacity_factor),
+        ("capacity_reduction", capacity_reduction),
+    ):
+        if not isfinite(value):
+            raise ValueError(f"{name} must be finite")
+    if capacity_mw < 0.0:
+        raise ValueError("capacity_mw must be non-negative")
+    if capacity_factor < 0.0:
+        raise ValueError("capacity_factor must be non-negative")
+    if not 0.0 <= capacity_reduction <= 1.0:
+        raise ValueError("capacity_reduction must be between 0 and 1")
+
+
+def _outage_event_date(*, start: date, end: date, timing: TimingConvention) -> date:
+    """Return the booking date for an inclusive-start, exclusive-end outage interval."""
+    inclusive_end = end - timedelta(days=1)
+    match timing:
+        case "begin":
+            return start
+        case "middle":
+            return start + timedelta(days=(inclusive_end - start).days // 2)
+        case "end":
+            return inclusive_end
+        case _:
+            assert_never(timing)
 
 
 @dataclass
@@ -563,6 +606,99 @@ class GenerationStream(BaseStream[Generation]):
         return cls(entries)
 
     @classmethod
+    def from_outage(
+        cls,
+        *,
+        capacity_mw: float,
+        capacity_factor: float,
+        start: date,
+        end: date,
+        capacity_reduction: float = 1.0,
+        timing: TimingConvention = "end",
+        source: str = "",
+        carrier: str = "electricity",
+        label: str = "Generation Outage",
+    ) -> "GenerationStream":
+        """
+        Create a negative generation stream for an explicit outage interval.
+
+        The returned stream is a normal ``GenerationStream`` containing one
+        ``Generation`` entry with negative MWh. It is intended for delta-style
+        modeling where lost production can be passed through existing
+        generation-to-cashflow methods such as :meth:`to_revenue` and
+        :meth:`to_cost`.
+
+        Parameters
+        ----------
+        capacity_mw : float
+            Capacity affected by the outage in MW.
+        capacity_factor : float
+            Counterfactual capacity factor that would have applied during the
+            outage interval.
+        start : date
+            Inclusive outage start date.
+        end : date
+            Exclusive outage end date. The outage duration is ``end - start``.
+        capacity_reduction : float, optional
+            Fraction of the affected capacity unavailable during the outage.
+            ``1.0`` means fully offline and ``0.5`` means half output lost.
+        timing : {"begin", "middle", "end"}, optional
+            Date assigned to the negative generation entry. ``"begin"`` uses
+            ``start``, ``"end"`` uses the final outage day, and ``"middle"``
+            uses the midpoint of the inclusive outage dates.
+        source : str, optional
+            Source identifier for the outage entry.
+        carrier : str, optional
+            Energy carrier. Default is ``"electricity"``.
+        label : str, optional
+            Label for the negative generation entry.
+
+        Returns
+        -------
+        GenerationStream
+            Stream containing one negative generation entry.
+
+        Raises
+        ------
+        ValueError
+            If the date range is empty or invalid, numeric inputs are not
+            finite, capacity inputs are negative, or ``capacity_reduction`` is
+            outside ``[0, 1]``.
+
+        Examples
+        --------
+        >>> from datetime import date
+        >>> outage = GenerationStream.from_outage(
+        ...     capacity_mw=1000.0,
+        ...     capacity_factor=0.92,
+        ...     start=date(2030, 5, 1),
+        ...     end=date(2030, 5, 11),
+        ... )
+        >>> outage.sum()
+        -220800.0
+        """
+        _validate_outage_inputs(
+            capacity_mw=capacity_mw,
+            capacity_factor=capacity_factor,
+            start=start,
+            end=end,
+            capacity_reduction=capacity_reduction,
+        )
+        days = (end - start).days
+        lost_mwh = capacity_mw * capacity_factor * capacity_reduction * 24.0 * days
+        return cls(
+            [
+                Generation(
+                    amount_mwh=-lost_mwh,
+                    date=_outage_event_date(start=start, end=end, timing=timing),
+                    source=source,
+                    carrier=carrier,
+                    label=label,
+                )
+            ]
+        )
+
+    @classmethod
     def from_streams(
         cls, *iterables: "GenerationStream | Generation | Iterable[Generation]"
     ) -> "GenerationStream":
@@ -946,14 +1082,16 @@ class GenerationStream(BaseStream[Generation]):
         end: date | None = None,
     ) -> "GenerationStream":
         """
-        Filter generation entries by inclusive date bounds.
+        Filter generation entries to the half-open ``[start, end)`` interval.
 
         Parameters
         ----------
         start : date, optional
-            Earliest date to include. If ``None``, no lower bound is applied.
+            Earliest date to include (inclusive). If ``None``, no lower bound
+            is applied.
         end : date, optional
-            Latest date to include. If ``None``, no upper bound is applied.
+            Exclusive end boundary. Entries on or after this date are
+            excluded. If ``None``, no upper bound is applied.
 
         Returns
         -------

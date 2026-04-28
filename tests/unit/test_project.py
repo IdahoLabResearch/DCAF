@@ -24,7 +24,7 @@ def test_energy_project_single_asset_workflow_builds_analysis_and_metrics():
             capacity_mw=100.0,
             capacity_factor=0.5,
             operations_start=date(2026, 1, 1),
-            operations_end=date(2027, 12, 31),
+            operations_end=date(2028, 1, 1),
         )
         .construction(
             overnight_cost=1_000.0,
@@ -196,7 +196,7 @@ def test_energy_project_is_order_independent_across_sections():
             capacity_mw=25.0,
             capacity_factor=0.8,
             operations_start=date(2026, 1, 1),
-            operations_end=date(2026, 12, 31),
+            operations_end=date(2027, 1, 1),
         )
         .revenue_from_generation(sell_price_per_unit=60.0)
         .fixed_opex(amount=50.0, frequency="year")
@@ -224,7 +224,7 @@ def test_energy_project_is_order_independent_across_sections():
             capacity_mw=25.0,
             capacity_factor=0.8,
             operations_start=date(2026, 1, 1),
-            operations_end=date(2026, 12, 31),
+            operations_end=date(2027, 1, 1),
         )
     )
 
@@ -246,7 +246,7 @@ def test_energy_project_metrics_treats_irr_overflow_as_non_convergence():
             capacity_mw=100.0,
             capacity_factor=0.5,
             operations_start=date(2026, 1, 1),
-            operations_end=date(2045, 12, 31),
+            operations_end=date(2046, 1, 1),
         )
         .construction(
             overnight_cost=1_000_000.0,
@@ -295,7 +295,7 @@ def test_energy_project_derives_debt_principal_from_construction():
             capacity_mw=1.0,
             capacity_factor=1.0,
             operations_start=date(2026, 1, 1),
-            operations_end=date(2026, 12, 31),
+            operations_end=date(2027, 1, 1),
         )
         .construction(
             overnight_cost=1_000.0,
@@ -330,6 +330,159 @@ def test_energy_project_allows_custom_cashflow_streams():
     assert analysis.cashflow_components["grant"].sum() == pytest.approx(100.0)
 
 
+def test_energy_project_generation_outage_reduces_modeled_generation_economics():
+    project = (
+        EnergyProject()
+        .generation(
+            capacity_mw=10.0,
+            capacity_factor=1.0,
+            operations_start=date(2026, 1, 1),
+            operations_end=date(2027, 1, 1),
+        )
+        .generation_outage(
+            start=date(2026, 5, 1),
+            end=date(2026, 5, 11),
+            label="Refueling extension",
+        )
+        .revenue_from_generation(sell_price_per_unit=50.0)
+        .variable_cost(rate_per_unit=5.0)
+        .production_tax_credit(rate_per_unit=1.0, years=1)
+    )
+
+    analysis = project.analyze()
+    base_mwh = 10.0 * 8760.0
+    lost_mwh = 10.0 * 24.0 * 10.0
+    net_mwh = base_mwh - lost_mwh
+
+    assert analysis.generation.count() == 2
+    assert analysis.generation.sum() == pytest.approx(net_mwh)
+    assert analysis.cashflow_components["default:revenue"].sum() == pytest.approx(net_mwh * 50.0)
+    assert analysis.cashflow_components["default:variable_cost"].sum() == pytest.approx(
+        -net_mwh * 5.0
+    )
+    assert analysis.cashflow_components["default:ptc"].sum() == pytest.approx(net_mwh)
+    assert analysis.metrics(discount_rate=0.08, valuation_date=date(2026, 1, 1)).levelized_cost
+
+
+def test_energy_project_construction_outage_preserves_generation():
+    project = (
+        EnergyProject()
+        .generation(
+            capacity_mw=10.0,
+            capacity_factor=1.0,
+            operations_start=date(2026, 1, 1),
+            operations_end=date(2027, 1, 1),
+        )
+        .revenue_from_generation(sell_price_per_unit=50.0)
+        .construction_outage(
+            start=date(2025, 5, 1),
+            end=date(2025, 5, 11),
+            capacity_mw=1000.0,
+            capacity_factor=0.92,
+            fixed_cost=1_000_000.0,
+            cost_per_day=10_000.0,
+            lost_revenue_label="Construction outage lost revenue",
+        )
+    )
+
+    analysis = project.analyze()
+    lost_mwh = 1000.0 * 0.92 * 24.0 * 10.0
+    expected_impact = -(lost_mwh * 50.0 + 1_000_000.0 + 10_000.0 * 10.0)
+    impact = analysis.cashflow_components["default:construction_outage"]
+
+    assert analysis.generation.sum() == pytest.approx(10.0 * 8760.0)
+    assert impact.sum() == pytest.approx(expected_impact)
+    assert {flow.pro_forma_category for flow in impact} == {ProFormaCategory.OPERATING_COST}
+    assert {flow.tax_treatment for flow in impact} == {TaxTreatment.DEDUCTIBLE}
+
+
+def test_energy_project_construction_outage_explicit_price_and_lcoe():
+    base_project = (
+        EnergyProject()
+        .generation(
+            capacity_mw=10.0,
+            capacity_factor=1.0,
+            operations_start=date(2026, 1, 1),
+            operations_end=date(2027, 1, 1),
+        )
+        .revenue_from_generation(sell_price_per_unit=50.0)
+    )
+    outage_project = base_project.construction_outage(
+        start=date(2025, 5, 1),
+        end=date(2025, 5, 11),
+        capacity_mw=1000.0,
+        capacity_factor=0.92,
+        sell_price_per_unit=45.0,
+    )
+
+    base_lcoe = base_project.metrics(discount_rate=0.08, valuation_date=date(2025, 1, 1))
+    outage_lcoe = outage_project.metrics(discount_rate=0.08, valuation_date=date(2025, 1, 1))
+
+    assert base_lcoe.levelized_cost is not None
+    assert outage_lcoe.levelized_cost is not None
+    assert outage_lcoe.levelized_cost > base_lcoe.levelized_cost
+
+
+def test_energy_project_construction_outage_requires_price_or_market():
+    project = (
+        EnergyProject()
+        .generation(
+            capacity_mw=10.0,
+            capacity_factor=1.0,
+            operations_start=date(2026, 1, 1),
+            operations_end=date(2027, 1, 1),
+        )
+        .construction_outage(
+            start=date(2025, 5, 1),
+            end=date(2025, 5, 11),
+            capacity_mw=1000.0,
+            capacity_factor=0.92,
+        )
+    )
+
+    with pytest.raises(ValueError, match="requires sell_price_per_unit"):
+        project.analyze()
+
+
+def test_energy_project_construction_outage_models_two_construction_outages():
+    project = (
+        EnergyProject()
+        .generation(
+            capacity_mw=220.0,
+            capacity_factor=0.92,
+            operations_start=date(2032, 1, 1),
+            operations_end=date(2033, 1, 1),
+            source="nuclear-uprate",
+        )
+        .revenue_from_generation(sell_price_per_unit=45.0)
+        .construction_outage(
+            name="refueling_1",
+            start=date(2028, 4, 1),
+            end=date(2028, 4, 11),
+            capacity_mw=1000.0,
+            capacity_factor=0.92,
+        )
+        .construction_outage(
+            name="refueling_2",
+            start=date(2030, 10, 1),
+            end=date(2030, 10, 11),
+            capacity_mw=1000.0,
+            capacity_factor=0.92,
+        )
+    )
+
+    analysis = project.analyze()
+    expected_per_outage = -(1000.0 * 0.92 * 24.0 * 10.0 * 45.0)
+
+    assert analysis.generation.sum() == pytest.approx(220.0 * 0.92 * 8760.0 * 366.0 / 365.0)
+    assert analysis.cashflow_components["default:construction_outage:refueling_1"].sum() == (
+        pytest.approx(expected_per_outage)
+    )
+    assert analysis.cashflow_components["default:construction_outage:refueling_2"].sum() == (
+        pytest.approx(expected_per_outage)
+    )
+
+
 def test_energy_project_prorates_partial_operating_periods_from_generation_dates():
     project = (
         EnergyProject()
@@ -337,13 +490,12 @@ def test_energy_project_prorates_partial_operating_periods_from_generation_dates
             capacity_mw=10.0,
             capacity_factor=0.5,
             operations_start=date(2026, 6, 1),
-            operations_end=date(2027, 8, 31),
+            operations_end=date(2027, 9, 1),
         )
         .fixed_opex(amount=120.0, frequency="year")
     )
 
     analysis = project.analyze()
-    # operations_end is inclusive; exclusive boundary is 2027-09-01
     exclusive_end = date(2027, 9, 1)
     expected_operating_years = (exclusive_end - date(2026, 6, 1)).days / 365.0
     expected_fractional_year = (exclusive_end - date(2027, 6, 1)).days / 365.0
@@ -363,7 +515,7 @@ def test_project_pro_forma_can_write_csv(tmp_path):
             capacity_mw=1.0,
             capacity_factor=1.0,
             operations_start=date(2026, 1, 1),
-            operations_end=date(2026, 12, 31),
+            operations_end=date(2027, 1, 1),
         )
         .revenue_from_generation(sell_price_per_unit=50.0)
     )
@@ -520,7 +672,7 @@ def test_energy_project_cashflow_modifiers_can_rewrite_components_before_tax():
             capacity_mw=1.0,
             capacity_factor=1.0,
             operations_start=date(2026, 1, 1),
-            operations_end=date(2026, 12, 31),
+            operations_end=date(2027, 1, 1),
         )
         .revenue_from_generation(sell_price_per_unit=1.0)
         .tax(rate=0.21)
@@ -557,7 +709,7 @@ def test_energy_project_supports_multiple_named_fixed_opex_items():
             capacity_mw=1.0,
             capacity_factor=1.0,
             operations_start=date(2026, 1, 1),
-            operations_end=date(2026, 12, 31),
+            operations_end=date(2027, 1, 1),
         )
         .fixed_opex(name="om", amount=100.0, label="O&M")
         .fixed_opex(name="insurance", amount=50.0, label="Insurance")
@@ -584,7 +736,7 @@ def test_energy_project_default_named_fixed_opex_uses_backward_compatible_key():
             capacity_mw=1.0,
             capacity_factor=1.0,
             operations_start=date(2026, 1, 1),
-            operations_end=date(2026, 12, 31),
+            operations_end=date(2027, 1, 1),
         )
         .fixed_opex(amount=100.0, frequency="year")
     )
@@ -601,7 +753,7 @@ def test_energy_project_supports_multiple_named_variable_cost_items():
             capacity_mw=10.0,
             capacity_factor=1.0,
             operations_start=date(2026, 1, 1),
-            operations_end=date(2026, 12, 31),
+            operations_end=date(2027, 1, 1),
         )
         .variable_cost(rate_per_unit=5.0, name="fuel")
         .variable_cost(rate_per_unit=2.0, name="water")
@@ -626,7 +778,7 @@ def test_energy_project_named_fixed_opex_replaces_by_name():
             capacity_mw=1.0,
             capacity_factor=1.0,
             operations_start=date(2026, 1, 1),
-            operations_end=date(2026, 12, 31),
+            operations_end=date(2027, 1, 1),
         )
         .fixed_opex(name="om", amount=100.0)
         .fixed_opex(name="om", amount=200.0)
@@ -644,7 +796,7 @@ def test_energy_project_explicit_zero_escalation_overrides_project_default():
             capacity_mw=1.0,
             capacity_factor=1.0,
             operations_start=date(2026, 1, 1),
-            operations_end=date(2027, 12, 31),
+            operations_end=date(2028, 1, 1),
         )
         .default_escalation(rate=0.10)
         .fixed_opex(name="flat", amount=100.0, escalation=0.0)
@@ -712,7 +864,7 @@ def test_energy_project_debt_principal_capitalize_vs_pay():
                 capacity_mw=1.0,
                 capacity_factor=1.0,
                 operations_start=date(2026, 1, 1),
-                operations_end=date(2026, 12, 31),
+                operations_end=date(2027, 1, 1),
             )
             .construction(
                 overnight_cost=1_000.0,
@@ -770,7 +922,7 @@ def test_energy_project_wacc_is_independent_from_project_tax_rate():
             capacity_mw=1.0,
             capacity_factor=1.0,
             operations_start=date(2026, 1, 1),
-            operations_end=date(2026, 12, 31),
+            operations_end=date(2027, 1, 1),
         )
     )
 
@@ -788,7 +940,7 @@ def test_energy_project_discount_rate_sets_default_metrics_rate():
             capacity_mw=1.0,
             capacity_factor=1.0,
             operations_start=date(2026, 1, 1),
-            operations_end=date(2026, 12, 31),
+            operations_end=date(2027, 1, 1),
         )
         .revenue_from_generation(sell_price_per_unit=50.0)
     )
@@ -807,7 +959,7 @@ def test_energy_project_metrics_override_builder_valuation_rate():
             capacity_mw=1.0,
             capacity_factor=1.0,
             operations_start=date(2026, 1, 1),
-            operations_end=date(2026, 12, 31),
+            operations_end=date(2027, 1, 1),
         )
         .construction(
             overnight_cost=100.0,
@@ -823,16 +975,16 @@ def test_energy_project_metrics_override_builder_valuation_rate():
     assert analysis.metrics(discount_rate=0.12).discount_rate == pytest.approx(0.12)
 
 
-# --- operations_end inclusivity ---
+# --- operations_end exclusivity ---
 
 
-def test_energy_project_operations_end_is_inclusive():
-    """operations_end=2026-12-31 should produce a full year of operation."""
+def test_energy_project_operations_end_is_exclusive():
+    """operations_end=2027-01-01 covers all of 2026 (a full year)."""
     project = EnergyProject().generation(
         capacity_mw=10.0,
         capacity_factor=1.0,
         operations_start=date(2026, 1, 1),
-        operations_end=date(2026, 12, 31),
+        operations_end=date(2027, 1, 1),
     )
 
     analysis = project.analyze()
@@ -864,7 +1016,7 @@ def test_energy_project_overnight_cost_without_spend_profile():
             capacity_mw=1.0,
             capacity_factor=1.0,
             operations_start=date(2026, 1, 1),
-            operations_end=date(2026, 12, 31),
+            operations_end=date(2027, 1, 1),
         )
         .construction(overnight_cost=1_000.0)
     )
@@ -885,7 +1037,7 @@ def test_energy_project_overnight_cost_with_explicit_cod_date():
             capacity_mw=1.0,
             capacity_factor=1.0,
             operations_start=date(2026, 1, 1),
-            operations_end=date(2026, 12, 31),
+            operations_end=date(2027, 1, 1),
         )
         .construction(overnight_cost=500.0, cod_date=date(2025, 7, 1))
     )
@@ -915,4 +1067,5 @@ def test_energy_project_generation_stream_infers_operations_dates():
     analysis = project.analyze()
     assert analysis.generation.count() == 2
     assert analysis.timeline.operations_start == date(2026, 1, 1)
-    assert analysis.timeline.operations_end == date(2026, 7, 1)
+    # operations_end is exclusive; inferred boundary is one day past the latest entry.
+    assert analysis.timeline.operations_end == date(2026, 7, 2)

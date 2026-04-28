@@ -1037,14 +1037,15 @@ class CashFlowStream(BaseStream[CashFlow]):
         end: date | None = None,
     ) -> "CashFlowStream":
         """
-        Filter cashflows by inclusive date bounds.
+        Filter cashflows to the half-open ``[start, end)`` interval.
 
         Parameters
         ----------
         start : date, optional
-            Earliest date to include. If ``None``, no lower bound.
+            Earliest date to include (inclusive). If ``None``, no lower bound.
         end : date, optional
-            Latest date to include. If ``None``, no upper bound.
+            Exclusive end boundary. Cashflows on or after this date are
+            excluded. If ``None``, no upper bound.
 
         Returns
         -------

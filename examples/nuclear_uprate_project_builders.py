@@ -2,7 +2,7 @@
 
 This example demonstrates the customizable builder class APIs available in DCAF's
 mid-level layer. It models the same nuclear uprate scenario as the other examples,
-but highlights three areas where the builder APIs expose configuration that the
+but highlights four areas where the builder APIs expose configuration that the
 high-level ``EnergyProject`` interface does not:
 
 **Custom construction spend profile**
@@ -28,6 +28,14 @@ high-level ``EnergyProject`` interface does not:
 
     These are assembled as raw ``CashFlow`` objects so the credit structure is
     fully visible and can be adapted to any hybrid incentive design.
+
+**Construction-outage decomposition**
+    Two extended refueling outages are modeled side-by-side:
+
+    - ``generator_outage`` returns a negative ``GenerationStream`` capturing the
+      lost MWh, available for downstream physical-quantity analysis.
+    - ``construction_outage`` returns a ``CashFlowStream`` with distinct
+      lost-revenue, fixed-cost, and per-day-cost line items.
 """
 
 from datetime import date
@@ -35,6 +43,7 @@ from datetime import date
 from dcaf.finance.amortization import AmortizationSchedule
 from dcaf.finance.construction import ConstructionSpendBuilder
 from dcaf.finance.escalation import ConstantRateEscalation
+from dcaf.finance.outage import construction_outage, generator_outage
 from dcaf.shared.types import ProFormaCategory, TaxTreatment
 from dcaf.streams.cashflows import CashFlow, CashFlowStream
 from dcaf.streams.generation import GenerationStream
@@ -43,32 +52,42 @@ from dcaf.tax.liability import compute_taxable_income, tax_liability
 
 
 # ANALYSIS CONSTANTS
-REFERENCE_DATE     = date(2025, 1, 1)
+REFERENCE_DATE = date(2025, 1, 1)
 CONSTRUCTION_START = date(2027, 1, 1)
-OPERATIONS_START   = date(2032, 1, 1)
-OPERATIONS_END     = date(2066, 12, 31)
+OPERATIONS_START = date(2032, 1, 1)
+OPERATIONS_END = date(2067, 1, 1)
 
-UPRATE_CAPACITY_MW  = 220.0
-CAPACITY_FACTOR     = 0.92
-OPERATING_YEARS     = 35
+UPRATE_CAPACITY_MW = 220.0
+CAPACITY_FACTOR = 0.92
+OPERATING_YEARS = 35
 
-OVERNIGHT_CAPEX     = 600_000_000.0
-ESCALATION_RATE     = 0.025
+OVERNIGHT_CAPEX = 600_000_000.0
+ESCALATION_RATE = 0.025
 POWER_PRICE_PER_MWH = 45.0
 
-DEBT_FRACTION        = 0.50
-INITIAL_DEBT_RATE    = 0.10   # rate for years 1–9
-REDUCED_DEBT_RATE    = 0.07   # rate from year 10 onward (refinancing)
-COST_OF_EQUITY       = 0.10
-TAX_RATE             = 0.21
-DEBT_TERM_YEARS      = 20
-INTEREST_FREE_YEARS  = 2      # grace period: no interest in years 1 and 2
-RATE_STEP_DOWN_YEAR  = 10     # zero-based period index where rate drops
+DEBT_FRACTION = 0.50
+INITIAL_DEBT_RATE = 0.10  # rate for years 1–9
+REDUCED_DEBT_RATE = 0.07  # rate from year 10 onward (refinancing)
+COST_OF_EQUITY = 0.10
+TAX_RATE = 0.21
+DEBT_TERM_YEARS = 20
+INTEREST_FREE_YEARS = 2  # grace period: no interest in years 1 and 2
+RATE_STEP_DOWN_YEAR = 10  # zero-based period index where rate drops
 
 # Hybrid tax incentive parameters
-HYBRID_ITC_RATE          = 0.20   # fraction of total capitalized cost at COD
-HYBRID_PTC_RATE_PER_MWH  = 15.0  # $/MWh for the first operating years
-HYBRID_PTC_YEARS         = 5
+HYBRID_ITC_RATE = 0.20  # fraction of total capitalized cost at COD
+HYBRID_PTC_RATE_PER_MWH = 15.0  # $/MWh for the first operating years
+HYBRID_PTC_YEARS = 5
+
+# Construction outage parameters — extensions to baseline refueling outages.
+BASELINE_CAPACITY_MW = 1000.0
+BASELINE_CAPACITY_FACTOR = 0.92
+OUTAGE_FIXED_COST = 500_000.0
+OUTAGE_COST_PER_DAY = 50_000.0
+OUTAGE_WINDOWS = (
+    ("refueling_1", date(2028, 4, 1), date(2028, 4, 11)),
+    ("refueling_2", date(2030, 10, 1), date(2030, 10, 11)),
+)
 
 
 # CUSTOM CONSTRUCTION SPEND PROFILE
@@ -82,9 +101,9 @@ HYBRID_PTC_YEARS         = 5
 #   Phase 3 ( 75–100% of duration): Systems integration, testing, commissioning — 25%
 #                                                                    sum = 1.00
 CUSTOM_SPEND_SCHEDULE = (
-    (0.00, 0.15),   # Phase 1
-    (0.25, 0.60),   # Phase 2
-    (0.75, 0.25),   # Phase 3
+    (0.00, 0.15),  # Phase 1
+    (0.25, 0.60),  # Phase 2
+    (0.75, 0.25),  # Phase 3
     (1.00, 0.00),
 )
 
@@ -181,25 +200,63 @@ upfront_credit = CashFlow(
 # Built as a CashFlowStream comprehension over the generation entries so the
 # credit amount, date, and eligibility window are directly tied to the physical
 # generation data.
-generation_credit = CashFlowStream([
-    CashFlow(
-        amount=gen.amount_mwh * HYBRID_PTC_RATE_PER_MWH,
-        date=gen.date,
-        label=f"Hybrid PTC Credit {gen.date.year}",
-        pro_forma_category=ProFormaCategory.TAX_CREDIT,
-        tax_treatment=TaxTreatment.TAXABLE,
-    )
-    for i, gen in enumerate(generation)
-    if i < HYBRID_PTC_YEARS
-])
+generation_credit = CashFlowStream(
+    [
+        CashFlow(
+            amount=gen.amount_mwh * HYBRID_PTC_RATE_PER_MWH,
+            date=gen.date,
+            label=f"Hybrid PTC Credit {gen.date.year}",
+            pro_forma_category=ProFormaCategory.TAX_CREDIT,
+            tax_treatment=TaxTreatment.TAXABLE,
+        )
+        for i, gen in enumerate(generation)
+        if i < HYBRID_PTC_YEARS
+    ]
+)
 
 hybrid_credits = CashFlowStream.from_streams(upfront_credit.to_stream(), generation_credit)
 
+# CONSTRUCTION OUTAGES
+# ``generator_outage`` produces a physical-quantity stream of negative MWh,
+# useful when an analyst wants to inspect lost generation independently of its
+# financial impact. ``construction_outage`` produces the corresponding
+# operating-cost cashflows (lost revenue + replacement-power + mobilization).
+outage_generation_streams = [
+    generator_outage(
+        capacity_mw=BASELINE_CAPACITY_MW,
+        capacity_factor=BASELINE_CAPACITY_FACTOR,
+        start=outage_start,
+        end=outage_end,
+        source="baseline-plant",
+        label=f"{name} Lost MWh",
+    )
+    for name, outage_start, outage_end in OUTAGE_WINDOWS
+]
+total_outage_mwh = sum(stream.sum() for stream in outage_generation_streams)
+
+outage_cashflow_streams = [
+    construction_outage(
+        capacity_mw=BASELINE_CAPACITY_MW,
+        capacity_factor=BASELINE_CAPACITY_FACTOR,
+        start=outage_start,
+        end=outage_end,
+        sell_price_per_unit=POWER_PRICE_PER_MWH,
+        fixed_cost=OUTAGE_FIXED_COST,
+        cost_per_day=OUTAGE_COST_PER_DAY,
+        escalation_policy=escalation_policy,
+        lost_revenue_label=f"{name} Lost Revenue",
+        fixed_cost_label=f"{name} Mobilization",
+        daily_cost_label=f"{name} Replacement Power",
+    )
+    for name, outage_start, outage_end in OUTAGE_WINDOWS
+]
+outage_impact = CashFlowStream.from_streams(*outage_cashflow_streams)
+
 # TAXES
 # Taxable revenue = electricity revenue + PTC portion of hybrid credits
-# Deductions      = MACRS depreciation + interest payments
+# Deductions      = MACRS depreciation + interest payments + outage costs
 taxable_revenue = CashFlowStream.from_streams(revenue, generation_credit)
-deductions = CashFlowStream.from_streams(depreciation, debt_service.interest)
+deductions = CashFlowStream.from_streams(depreciation, debt_service.interest, outage_impact)
 taxable_income = compute_taxable_income(taxable_revenue, deductions)
 taxes = tax_liability(taxable_income, tax_rate=TAX_RATE)
 
@@ -209,14 +266,15 @@ cashflows = CashFlowStream.from_streams(
     revenue,
     hybrid_credits,
     debt_service.total,
+    outage_impact,
     taxes,
 )
 
 # METRICS
 valuation_date = CONSTRUCTION_START
-discount_rate  = COST_OF_EQUITY
+discount_rate = COST_OF_EQUITY
 
-total_generation      = generation.sum()
+total_generation = generation.sum()
 discounted_generation = generation.discounted_sum(
     rate=discount_rate,
     valuation_date=valuation_date,
@@ -245,6 +303,8 @@ print(f"Hybrid PTC credits ($):      {generation_credit.sum():,.0f}")
 print(f"Debt service cash flow ($):  {debt_service.total.sum():,.0f}")
 print(f"  Interest-free years:       {INTEREST_FREE_YEARS}")
 print(f"  Rate after year {RATE_STEP_DOWN_YEAR}:        {REDUCED_DEBT_RATE:.4%}")
+print(f"Outage lost gen (MWh):       {total_outage_mwh:,.0f}")
+print(f"Outage impact ($):           {outage_impact.sum():,.0f}")
 print(f"Tax cash flow ($):           {taxes.sum():,.0f}")
 print()
 print(f"NPV ($):                     {npv:,.0f}")

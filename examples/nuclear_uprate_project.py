@@ -26,6 +26,11 @@ Additional modeling assumptions
 - A 21% tax rate is included for taxes.
 - WACC is computed from the financing inputs and used as the discount rate for
   metrics. It is not part of the project configuration itself.
+- Two refueling outages on the existing 1000 MW baseline plant are extended
+  by 10 days each to perform uprate work. Each extension incurs lost revenue
+  at the baseline capacity, a fixed mobilization cost, and per-day replacement
+  power costs. These appear as distinct line items via
+  :meth:`EnergyProject.construction_outage`.
 """
 
 from datetime import date
@@ -37,7 +42,7 @@ from dcaf import EnergyProject
 REFERENCE_DATE = date(2025, 1, 1)
 CONSTRUCTION_START = date(2027, 1, 1)
 OPERATIONS_START = date(2032, 1, 1)
-OPERATIONS_END = date(2066, 12, 31)
+OPERATIONS_END = date(2067, 1, 1)
 
 UPRATE_CAPACITY_MW = 220.0
 CAPACITY_FACTOR = 0.92
@@ -55,6 +60,13 @@ TAX_RATE = 0.21
 PTC_RATE_PER_MWH = 27.50
 PTC_YEARS = 10
 DEBT_TERM_YEARS = 20
+
+# CONSTRUCTION OUTAGE INPUTS — extensions to two refueling outages on the
+# existing baseline plant during the EPU construction window.
+BASELINE_CAPACITY_MW = 1000.0
+BASELINE_CAPACITY_FACTOR = 0.92
+OUTAGE_FIXED_COST = 500_000.0  # mobilization / craft labor surge
+OUTAGE_COST_PER_DAY = 50_000.0  # replacement-power premium beyond lost revenue
 
 
 # PROJECT DEFINITION
@@ -95,13 +107,39 @@ project = (
         years=PTC_YEARS,
         label="PTC Credit",
     )
+    .construction_outage(
+        name="refueling_1",
+        start=date(2028, 4, 1),
+        end=date(2028, 4, 11),
+        capacity_mw=BASELINE_CAPACITY_MW,
+        capacity_factor=BASELINE_CAPACITY_FACTOR,
+        fixed_cost=OUTAGE_FIXED_COST,
+        cost_per_day=OUTAGE_COST_PER_DAY,
+        lost_revenue_label="Refuel #1 Lost Revenue",
+        fixed_cost_label="Refuel #1 Mobilization",
+        daily_cost_label="Refuel #1 Replacement Power",
+    )
+    .construction_outage(
+        name="refueling_2",
+        start=date(2030, 10, 1),
+        end=date(2030, 10, 11),
+        capacity_mw=BASELINE_CAPACITY_MW,
+        capacity_factor=BASELINE_CAPACITY_FACTOR,
+        fixed_cost=OUTAGE_FIXED_COST,
+        cost_per_day=OUTAGE_COST_PER_DAY,
+        lost_revenue_label="Refuel #2 Lost Revenue",
+        fixed_cost_label="Refuel #2 Mobilization",
+        daily_cost_label="Refuel #2 Replacement Power",
+    )
 )
 
 # run the analysis and generate an annual pro-forma
 analysis = project.analyze()
 pro_forma = analysis.pro_forma(period="year")
 
-discount_rate = analysis.valuation.discount_rate if analysis.valuation is not None else COST_OF_EQUITY
+discount_rate = (
+    analysis.valuation.discount_rate if analysis.valuation is not None else COST_OF_EQUITY
+)
 valuation_date = CONSTRUCTION_START
 # TODO: wrap LCOE calculation to get similar ergonomics as NPV and IRR
 cashflows = analysis.cashflows.cash_only()
@@ -139,6 +177,9 @@ print(f"PTC cash flow ($):           {analysis.cashflow_components['default:ptc'
 print(
     f"Debt service cash flow ($):  {analysis.cashflow_components['default:debt_service'].sum():,.0f}"
 )
+for outage_name in ("refueling_1", "refueling_2"):
+    component = analysis.cashflow_components[f"default:construction_outage:{outage_name}"]
+    print(f"Outage impact ({outage_name}) ($):  {component.sum():,.0f}")
 print()
 print(f"NPV ($):                     {npv:,.0f}")
 print(f"Discounted generation (MWh): {discounted_generation:,.0f}")

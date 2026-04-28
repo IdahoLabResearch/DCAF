@@ -125,6 +125,61 @@ def test_from_capacity_label_template():
     assert gs.entries[1].label == "Year 2"
 
 
+def test_from_outage_creates_negative_generation():
+    """Explicit outage intervals produce normal negative generation entries."""
+    outage = GenerationStream.from_outage(
+        capacity_mw=1000.0,
+        capacity_factor=0.92,
+        start=date(2030, 5, 1),
+        end=date(2030, 5, 11),
+        source="unit_1",
+        carrier="electricity",
+        label="Refueling extension",
+    )
+
+    assert outage.count() == 1
+    assert outage.entries[0].amount_mwh == pytest.approx(-(1000.0 * 0.92 * 24.0 * 10.0))
+    assert outage.entries[0].date == date(2030, 5, 10)
+    assert outage.entries[0].source == "unit_1"
+    assert outage.entries[0].carrier == "electricity"
+    assert outage.entries[0].label == "Refueling extension"
+
+
+def test_from_outage_supports_partial_reduction_and_timing():
+    """Outage helper supports partial reductions and booking-date timing."""
+    outage = GenerationStream.from_outage(
+        capacity_mw=100.0,
+        capacity_factor=0.5,
+        capacity_reduction=0.25,
+        start=date(2030, 1, 1),
+        end=date(2030, 1, 5),
+        timing="middle",
+    )
+
+    assert outage.entries[0].amount_mwh == pytest.approx(-(100.0 * 0.5 * 0.25 * 24.0 * 4.0))
+    assert outage.entries[0].date == date(2030, 1, 2)
+
+
+def test_from_outage_rejects_invalid_inputs():
+    """Outage helper validates dates and capacity reduction."""
+    with pytest.raises(ValueError, match="end must be after"):
+        GenerationStream.from_outage(
+            capacity_mw=100.0,
+            capacity_factor=0.9,
+            start=date(2030, 1, 2),
+            end=date(2030, 1, 2),
+        )
+
+    with pytest.raises(ValueError, match="capacity_reduction"):
+        GenerationStream.from_outage(
+            capacity_mw=100.0,
+            capacity_factor=0.9,
+            capacity_reduction=1.1,
+            start=date(2030, 1, 1),
+            end=date(2030, 1, 2),
+        )
+
+
 # === GenerationStream.from_streams ===
 
 
@@ -305,9 +360,9 @@ def test_filter_apply_generation_stream():
 
 
 def test_date_range_generation_stream():
-    """date_range filters generation entries by inclusive bounds."""
+    """date_range filters generation entries to the half-open [start, end) interval."""
     gs = GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 4)
-    result = gs.date_range(start=date(2031, 1, 1), end=date(2032, 1, 1))
+    result = gs.date_range(start=date(2031, 1, 1), end=date(2033, 1, 1))
     assert result.count() == 2
     assert [entry.date for entry in result] == [date(2031, 1, 1), date(2032, 1, 1)]
 

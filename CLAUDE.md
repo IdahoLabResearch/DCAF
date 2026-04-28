@@ -61,6 +61,25 @@ The public API is re-exported from `dcaf/__init__.py`. Business logic is organiz
 - **Day count conventions**: NPV calculations use configurable `DayCountConvention` (currently `"actual/365"`), centralized in `utils.timedelta_fractional_years()`.
 - **Generation-to-cashflow bridge**: `GenerationStream` converts physical quantities (MWh) to financial cashflows, while tax incentives like PTC are modeled in `tax_incentives.py`.
 
+## Conventions
+
+### Date intervals are half-open `[start, end)`
+
+Every date-bounded interval in the public API uses **inclusive start, exclusive end** semantics — matching Python's `range`, slicing, and `datetime` arithmetic. This applies to:
+
+- `EnergyProject.generation(operations_start, operations_end)` and `ProjectTimeline.operations_end`
+- `EnergyProject.construction(construction_start, construction_end)` and `construction_spend_schedule(start_date, end_date)`
+- `EnergyProject.construction_outage(start, end)` / `EnergyProject.generation_outage(start, end)`
+- `GenerationStream.from_outage(start, end)`, `generator_outage(start, end)`, `construction_outage(start, end)`
+- `BaseStream.date_range(start, end)`, `CashFlowStream.date_range`, `GenerationStream.date_range`
+- `AmortizationBuilder.interest_free(from_date, to_date)`
+
+Concretely: to model a full calendar year 2026, write `operations_start=date(2026, 1, 1), operations_end=date(2027, 1, 1)`. The end date is the first day **after** the interval. **Do not** use `date(2026, 12, 31)` to mean "last day of 2026" — always use the first day of the following period as the exclusive upper bound.
+
+This convention does **not** apply to integer period indices (e.g., `AmortizationBuilder.interest_free(from_period, to_period)`), which use inclusive bounds on both ends because they select discrete elements rather than spans of time.
+
+When introducing a new date-interval API, follow the half-open convention and document it explicitly in the docstring (`"exclusive end"` or `"half-open [start, end)"`).
+
 ## Code Style
 
 - Python 3.13+ required

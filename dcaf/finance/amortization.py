@@ -411,8 +411,9 @@ class AmortizationBuilder:
     ) -> Self:
         """Designate a range of periods as interest-free (zero interest rate).
 
-        Specify either period indices or dates, not both. Both endpoints are
-        inclusive. Omitting an endpoint defaults to the beginning or end of
+        Specify either period indices or dates, not both. Period bounds are
+        inclusive on both ends; date bounds are half-open ``[from_date,
+        to_date)``. Omitting an endpoint defaults to the beginning or end of
         the schedule.
 
         Parameters
@@ -425,7 +426,8 @@ class AmortizationBuilder:
         from_date : date, optional
             Start date of the interest-free window (inclusive).
         to_date : date, optional
-            End date of the interest-free window (inclusive).
+            Exclusive end boundary; payment dates on or after this date are
+            excluded.
 
         Returns
         -------
@@ -457,19 +459,20 @@ class AmortizationBuilder:
         return self
 
     def _resolve_date_range(self, from_date: date | None, to_date: date | None) -> set[int]:
-        """Convert a date range to a set of zero-based period indices.
+        """Convert a half-open date range to a set of zero-based period indices.
 
         Parameters
         ----------
         from_date : date or None
             Inclusive start date. ``None`` means no lower bound.
         to_date : date or None
-            Inclusive end date. ``None`` means no upper bound.
+            Exclusive end date. ``None`` means no upper bound.
 
         Returns
         -------
         set[int]
-            Zero-based indices of periods whose payment dates fall within the range.
+            Zero-based indices of periods whose payment dates fall within
+            ``[from_date, to_date)``.
         """
         delta = time_delta_per_period(self._frequency.value)
         indices: list[int] = []
@@ -477,7 +480,7 @@ class AmortizationBuilder:
             payment_date = self._start_date + delta * i
             if from_date is not None and payment_date < from_date:
                 continue
-            if to_date is not None and payment_date > to_date:
+            if to_date is not None and payment_date >= to_date:
                 continue
             indices.append(i)
         return set(indices)

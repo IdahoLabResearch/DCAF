@@ -151,7 +151,7 @@ def test_interest_free_periods_by_period():
 
 
 def test_interest_free_periods_by_date():
-    """Interest-free via date range resolves to the correct periods."""
+    """Interest-free via half-open [from_date, to_date) resolves to the correct periods."""
     schedule = (
         AmortizationSchedule.builder(
             principal=60_000.0,
@@ -159,7 +159,7 @@ def test_interest_free_periods_by_date():
             term=12,
             start_date=date(2026, 1, 1),
         )
-        .interest_free(from_date=date(2026, 4, 1), to_date=date(2026, 6, 1))
+        .interest_free(from_date=date(2026, 4, 1), to_date=date(2026, 7, 1))
         .build()
     )
     # Periods 3, 4, 5 correspond to Apr, May, Jun
