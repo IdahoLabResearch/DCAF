@@ -11,10 +11,6 @@ from datetime import date
 from typing import (
     Any,
     Callable,
-    Collection,
-    Iterable,
-    Iterator,
-    Literal,
     Optional,
     overload,
 )
@@ -197,269 +193,50 @@ class CashFlow:
 @dataclass
 class CashFlowGroup[KeyType](BaseGroup[KeyType, CashFlow, "CashFlowStream"]):
     """
-    A dictionary-like container for grouped CashFlows.
+    Dictionary-like container mapping group keys to ``CashFlowStream`` objects.
 
-    Maps group keys to CashFlowStream objects, enabling aggregation and analysis
-    across groups.
+    Produced by :meth:`CashFlowStream.group_by` and related methods. Supports
+    aggregation, selective group-wise transformation, group filtering, and
+    flattening back to a single stream.
+
+    Examples
+    --------
+    Build a stream, group by pro-forma category, and compute per-category totals:
+
+    >>> from datetime import date
+    >>> from dcaf.streams import CashFlow, CashFlowStream
+    >>> from dcaf.shared.types import ProFormaCategory
+    >>> revenue = CashFlowStream.from_recurring(
+    ...     date(2026, 1, 1), 3, 1000.0,
+    ...     pro_forma_category=ProFormaCategory.REVENUE,
+    ... )
+    >>> opex = CashFlowStream.from_recurring(
+    ...     date(2026, 1, 1), 3, -200.0,
+    ...     pro_forma_category=ProFormaCategory.OPERATING_COST,
+    ... )
+    >>> stream = CashFlowStream.from_streams(revenue, opex)
+    >>> by_category = stream.group_by_pro_forma_category()
+    >>> totals = by_category.sum()
+
+    Scale only the revenue group and flatten back:
+
+    >>> scaled = by_category.apply_to_groups(
+    ...     lambda s: s.apply(lambda cf: cf.replace(amount=cf.amount * 1.05)),
+    ...     keys=ProFormaCategory.REVENUE,
+    ... )
+    >>> combined = scaled.ungroup()
+    >>> combined.count()
+    6
+
+    Iterate over groups:
+
+    >>> for key, group_stream in by_category.items():
+    ...     print(key, group_stream.count())  # doctest: +SKIP
     """
 
     def _empty_stream(self) -> "CashFlowStream":
         """Return an empty stream for internal regrouping helpers."""
         return CashFlowStream()
-
-    def aggregate[T](self, fn: Callable[["CashFlowStream"], T]) -> dict[KeyType, T]:
-        """
-        Aggregate each group using a function.
-
-        Applies the function to each group's CashFlowStream and returns a dictionary
-        mapping each group key to its aggregated value.
-
-        If wanting to chain operations within the `CashFlowGroup` object, use the
-        `apply_to_groups` function instead.
-
-        Parameters
-        ----------
-        fn : Callable
-            A function that takes a CashFlowStream and returns an aggregated value
-            (e.g., sum of amounts, count of flows, average, etc.).
-
-        Returns
-        -------
-        dict
-            A dictionary mapping group keys to aggregated values.
-
-        Examples
-        --------
-        >>> # Group by date and get total amount per date
-        >>> grouped = stream.group_by(lambda cf: cf.date)
-        >>> totals = grouped.aggregate(lambda s: s.sum())
-        >>> # Returns: {date1: 1000.0, date2: 2000.0, ...}
-
-        >>> # Get count of cashflows per year
-        >>> by_year = stream.group_by(lambda cf: cf.date.year)
-        >>> counts = by_year.aggregate(lambda s: s.count())
-        >>> # Returns: {2023: 15, 2024: 23, ...}
-        """
-        return super().aggregate(fn)
-
-    def apply_to_groups(
-        self,
-        fn: Callable[["CashFlowStream"], "CashFlowStream"],
-        keys: KeyType | Collection[KeyType] | None = None,
-    ) -> "CashFlowGroup":
-        """
-        Apply a function to each group's CashFlowStream, optionally filtered by keys.
-
-        Applies the provided function to groups within this CashFlowGroup,
-        transforming each selected group's CashFlowStream and returning a new
-        CashFlowGroup with the results. Groups not selected remain unchanged.
-        This enables selective group-wise transformations while preserving
-        the overall grouping structure.
-
-        If wanting a return type from the transformation function that is *not* a
-        `CashFlowStream`, use the `aggregate` function.
-
-        Parameters
-        ----------
-        fn : Callable
-            A function that takes a CashFlowStream and returns a transformed
-            CashFlowStream. Applied to each selected group independently.
-        keys : KeyType or Collection[KeyType], optional
-            Group key(s) to which the transformation should be applied. Can be:
-            - None (default): Apply transformation to all groups
-            - A single key: Apply to only that group (works for any key type)
-            - A collection of keys: Apply to those specific groups (list, tuple, set, etc.)
-
-        Returns
-        -------
-        CashFlowGroup
-            A new CashFlowGroup with the function applied to selected groups' streams.
-            Non-selected groups remain unchanged.
-
-        Raises
-        ------
-        ValueError
-            If any provided key is not found in this CashFlowGroup.
-
-        Examples
-        --------
-        >>> # Scale all amounts in each group by 1.1 (all groups)
-        >>> by_category = stream.group_by_pro_forma_category()
-        >>> scaled_groups = by_category.apply_to_groups(
-        ...     lambda s: s.apply(lambda cf: CashFlow(
-        ...         cf.amount * 1.1,
-        ...         cf.date,
-        ...         cf.label,
-        ...         cf.is_cash,
-        ...         cf.pro_forma_category,
-        ...         cf.tax_treatment,
-        ...     ))
-        ... )
-
-        >>> # Filter each group to only include cashflows after a certain date
-        >>> by_year = stream.group_by(period="year")
-        >>> recent_groups = by_year.apply_to_groups(
-        ...     lambda s: s.filter(lambda cf: cf.date >= date(2024, 1, 1))
-        ... )
-
-        >>> # Sort each group by date
-        >>> sorted_groups = by_year.apply_to_groups(lambda s: s.sort())
-
-        >>> # Apply transformation only to specific groups (sequence of keys)
-        >>> by_category = stream.group_by_pro_forma_category()
-        >>> scaled_revenue = by_category.apply_to_groups(
-        ...     lambda s: s.apply(lambda cf: cf.replace(amount=cf.amount * 1.05)),
-        ...     keys=[ProFormaCategory.REVENUE]
-        ... )
-
-        >>> # Apply transformation to a single group
-        >>> scaled_one_year = by_year.apply_to_groups(
-        ...     lambda s: s.apply(lambda cf: cf.replace(amount=cf.amount * 1.5)),
-        ...     keys=date(2024, 1, 1)
-        ... )
-        """
-        return super().apply_to_groups(fn, keys=keys)
-
-    def filter_groups(
-        self, fn: Callable[[KeyType, "CashFlowStream"], bool]
-    ) -> "CashFlowGroup[KeyType]":
-        """
-        Return a new CashFlowGroup containing only groups where the predicate is True.
-
-        Parameters
-        ----------
-        fn : Callable[[KeyType, CashFlowStream], bool]
-            A predicate that receives each group's key and stream.
-
-        Returns
-        -------
-        CashFlowGroup
-            A new CashFlowGroup with only the matching groups.
-        """
-        return super().filter_groups(fn)
-
-    def ungroup(self) -> "CashFlowStream":
-        """
-        Ungroup the cashflows and return them as a single CashFlowStream.
-
-        Combines all cashflows from all groups into a single stream.
-
-        Returns
-        -------
-        CashFlowStream
-            A new CashFlowStream containing all cashflows from all groups.
-
-        Examples
-        --------
-        >>> # Group by period, then ungroup back to a single stream
-        >>> by_month = stream.group_by(period="month")
-        >>> ungrouped = by_month.ungroup()
-        >>> # ungrouped contains all original cashflows
-
-        >>> # Filter groups, then ungroup
-        >>> by_year = stream.group_by(period="year")
-        >>> recent_years = CashFlowGroup({
-        ...     year: flows
-        ...     for year, flows in by_year.items()
-        ...     if year.year >= 2024
-        ... })
-        >>> recent_flows = recent_years.ungroup()
-
-        >>> # Apply transformations to groups, then ungroup
-        >>> by_category = stream.group_by_pro_forma_category()
-        >>> revenue_scaled = by_category[ProFormaCategory.REVENUE].apply(
-        ...     lambda cf: cf.replace(amount=cf.amount * 1.05)
-        ... )
-        >>> # Put back into a stream
-        >>> scaled_stream = CashFlowGroup({ProFormaCategory.REVENUE: revenue_scaled}).ungroup()
-
-        Notes
-        -----
-        - The resulting stream is not guaranteed to be in any particular order.
-          Use `sort()` on the result if ordering is important.
-        - If the same cashflow object appears in multiple groups of a manually
-          constructed ``CashFlowGroup``, it will appear multiple times after
-          ungrouping.
-        """
-        return super().ungroup()
-
-    def keys(self) -> Iterable[KeyType]:
-        """Return the group keys."""
-        return super().keys()
-
-    def values(self) -> Iterable["CashFlowStream"]:
-        """Return the CashFlowStream values."""
-        return super().values()
-
-    def items(self) -> Iterable[tuple[KeyType, "CashFlowStream"]]:
-        """Return key-value pairs of (key, CashFlowStream)."""
-        return super().items()
-
-    def __getitem__(self, key: KeyType) -> "CashFlowStream":
-        """Access a specific group by key."""
-        return super().__getitem__(key)
-
-    def __len__(self) -> int:
-        """Return the number of groups."""
-        return super().__len__()
-
-    def __iter__(self) -> Iterator[KeyType]:
-        """Iterate over group keys."""
-        return super().__iter__()
-
-    def sum(self) -> dict[KeyType, float]:
-        """
-        Return the sum of amounts for each group.
-
-        Convenience method equivalent to ``aggregate(lambda s: s.sum())``.
-
-        Returns
-        -------
-        dict
-            A dictionary mapping each group key to the sum of cashflow amounts
-            in that group.
-
-        Examples
-        --------
-        >>> # Get total amount per pro-forma category
-        >>> by_category = stream.group_by_pro_forma_category()
-        >>> totals = by_category.sum()
-        >>> # Returns: {ProFormaCategory.REVENUE: 50000.0,
-        >>> #           ProFormaCategory.OPERATING_COST: -20000.0, ...}
-
-        >>> # Get monthly totals
-        >>> by_month = stream.group_by(period="month")
-        >>> monthly_totals = by_month.sum()
-        >>> # Returns: {date(2024, 1, 1): 5000.0,
-        >>> #           date(2024, 2, 1): 6000.0, ...}
-        """
-        return super().sum()
-
-    def count(self) -> dict[KeyType, int]:
-        """
-        Return the count of cashflows for each group.
-
-        Convenience method equivalent to ``aggregate(lambda s: s.count())``.
-
-        Returns
-        -------
-        dict
-            A dictionary mapping each group key to the number of cashflows
-            in that group.
-
-        Examples
-        --------
-        >>> # Get count per pro-forma category
-        >>> by_category = stream.group_by_pro_forma_category()
-        >>> counts = by_category.count()
-        >>> # Returns: {ProFormaCategory.REVENUE: 15, ProFormaCategory.OPERATING_COST: 42, ...}
-
-        >>> # Get cashflows per year
-        >>> by_year = stream.group_by(period="year")
-        >>> yearly_counts = by_year.count()
-        >>> # Returns: {date(2023, 1, 1): 24, date(2024, 1, 1): 36, ...}
-        """
-        return super().count()
 
 
 @dataclass
@@ -467,81 +244,53 @@ class CashFlowStream(BaseStream[CashFlow]):
     """
     Functional container for ``CashFlow`` entries.
 
-    The stream preserves insertion order and supports common sequence-style
-    operations such as iteration, indexing, slicing, and ``len()`` in addition
-    to the domain-specific cashflow helpers defined on the class.
+    Preserves insertion order and supports sequence-style operations (iteration,
+    indexing, slicing, ``len()``) alongside domain-specific helpers for building,
+    filtering, transforming, grouping, and discounting cashflows. All
+    mutating-style operations return a new ``CashFlowStream``; the original is
+    never modified.
+
+    Examples
+    --------
+    Build a project cashflow and compute NPV and IRR:
+
+    >>> from datetime import date
+    >>> from dcaf.streams import CashFlow, CashFlowStream
+    >>> stream = CashFlowStream([
+    ...     CashFlow(-10_000.0, date(2026, 1, 1)),
+    ...     CashFlow(  4_000.0, date(2027, 1, 1)),
+    ...     CashFlow(  4_000.0, date(2028, 1, 1)),
+    ...     CashFlow(  5_000.0, date(2029, 1, 1)),
+    ... ])
+    >>> stream.npv(rate=0.10, valuation_date=date(2026, 1, 1)) > 0
+    True
+    >>> 0.0 < stream.irr() < 0.30
+    True
+
+    Combine recurring revenue with a one-off capital cost:
+
+    >>> capex = CashFlow(-12_000.0, date(2026, 1, 1))
+    >>> revenue = CashFlowStream.from_recurring(date(2027, 1, 1), 5, 3_000.0)
+    >>> project = CashFlowStream.from_streams(capex, revenue)
+    >>> project.count()
+    6
+
+    Filter, transform, and group:
+
+    >>> by_year = project.sort().group_by(period="year")
+    >>> yearly_totals = by_year.sum()
+
+    Index and slice like a sequence:
+
+    >>> project[0].amount
+    -12000.0
+    >>> project[1:3].count()
+    2
     """
 
     def _amount(self, entry: CashFlow) -> float:
         """Return the numeric amount for internal shared helpers."""
         return entry.amount
-
-    @overload
-    def __getitem__(self, index: int) -> CashFlow: ...
-
-    @overload
-    def __getitem__(self, index: slice) -> "CashFlowStream": ...
-
-    def __getitem__(self, index: int | slice) -> "CashFlow | CashFlowStream":
-        """
-        Return a single cashflow or a sliced stream.
-
-        Parameters
-        ----------
-        index : int or slice
-            Integer position of a single cashflow, or a slice selecting a
-            contiguous subset of the stream.
-
-        Returns
-        -------
-        CashFlow or CashFlowStream
-            A single ``CashFlow`` when *index* is an integer, or a new
-            ``CashFlowStream`` containing the selected entries when *index* is
-            a slice.
-
-        Examples
-        --------
-        >>> stream = CashFlowStream.from_recurring(date(2026, 1, 1), 3, 100.0)
-        >>> stream[0].amount
-        100.0
-        >>> stream[1:].count()
-        2
-        """
-        return super().__getitem__(index)
-
-    def __iter__(self) -> Iterator[CashFlow]:
-        """
-        Iterate over cashflows in insertion order.
-
-        Returns
-        -------
-        Iterator[CashFlow]
-            Iterator yielding each cashflow in the stream.
-
-        Examples
-        --------
-        >>> stream = CashFlowStream.from_recurring(date(2026, 1, 1), 2, 100.0)
-        >>> [cf.amount for cf in stream]
-        [100.0, 100.0]
-        """
-        return super().__iter__()
-
-    def __len__(self) -> int:
-        """
-        Return the number of cashflows in the stream.
-
-        Returns
-        -------
-        int
-            Number of cashflows stored in the stream.
-
-        Examples
-        --------
-        >>> stream = CashFlowStream.from_recurring(date(2026, 1, 1), 4, 100.0)
-        >>> len(stream)
-        4
-        """
-        return super().__len__()
 
     @classmethod
     def from_recurring(
@@ -653,299 +402,6 @@ class CashFlowStream(BaseStream[CashFlow]):
 
         return cls(entries)
 
-    @classmethod
-    def from_streams(cls, *iterables) -> "CashFlowStream":
-        """
-        Create a CashFlowStream from multiple sources of cashflows.
-
-        Accepts any combination of CashFlowStreams, individual CashFlows, lists of
-        CashFlows, or other iterables containing CashFlow objects, and combines them
-        into a single CashFlowStream. This is the primary way to combine multiple
-        cashflow sources during model construction.
-
-        Parameters
-        ----------
-        *iterables : CashFlowStream or CashFlow or Iterable[CashFlow]
-            Variable number of cashflow sources. Can be:
-            - CashFlowStream objects
-            - Individual CashFlow objects
-            - Lists of CashFlow objects
-            - Any other iterable of CashFlow objects
-
-        Returns
-        -------
-        CashFlowStream
-            A new CashFlowStream containing all cashflows from all inputs.
-
-        Examples
-        --------
-        >>> # Combine multiple streams generated by classmethods
-        >>> revenue = CashFlowStream.from_recurring(
-        ...     start=date(2029, 1, 1), periods=50, amount=1000.0
-        ... )
-        >>> opex = CashFlowStream.from_recurring(start=date(2029, 1, 1), periods=50, amount=-200.0)
-        >>> capex = CashFlowStream([CashFlow(-20_000.0, date(2026, 1, 1))])  # Manual list
-        >>> combined = CashFlowStream.from_streams(revenue, opex, capex)
-
-        >>> # Mix streams, individual cashflows, and lists
-        >>> construction_stream = CashFlowStream.from_recurring(
-        ...     start=date(2030, 6, 1), periods=5, amount=-200.0
-        ... )
-        >>> itc_flow = CashFlow(30.0, date(2028, 1, 1))  # Single ITC payment
-        >>> depreciation_flows = [
-        ...     CashFlow(-50.0, date(2038, 1, 1)), CashFlow(-50.0, date(2028, 1, 1))
-        ... ]  # List of depreciation cashflows
-        >>> model = CashFlowStream.from_streams(
-        ...     construction_stream,
-        ...     itc_flow,  # Individual CashFlow now supported directly
-        ...     depreciation_flows
-        ... )
-
-        >>> # Combine all cashflows for a project with individual flows
-        >>> initial_investment = CashFlow(-1_000_000.0, date(2024, 1, 1))
-        >>> project = CashFlowStream.from_streams(
-        ...     initial_investment,  # Individual cashflow
-        ...     CashFlowStream.from_recurring(start, 20, revenue, 'annual', escalation),
-        ...     CashFlowStream.from_recurring(start, 20, opex, 'annual', opex_esc),
-        ...     capex_stream,
-        ...     depreciation_stream,
-        ...     tax_stream
-        ... )  # doctest: +SKIP
-
-        Notes
-        -----
-        - Order of cashflows in the result is determined by the order of arguments
-          and the order within each iterable
-        - No deduplication is performed - if the same CashFlow appears in multiple
-          inputs, it will appear multiple times in the result
-        - For ordered output, use .sort() on the result
-        - This is more convenient than manual list concatenation when working with
-          multiple CashFlowStream objects
-        """
-        return super().from_streams(*iterables)
-
-    def append(self, flow: CashFlow) -> "CashFlowStream":
-        """
-        Return a new CashFlowStream with one cashflow appended.
-
-        Parameters
-        ----------
-        flow : CashFlow
-            Cashflow to append to the stream.
-
-        Returns
-        -------
-        CashFlowStream
-            A new CashFlowStream containing all original cashflows plus *flow*.
-
-        Examples
-        --------
-        >>> base = CashFlowStream([CashFlow(100.0, date(2026, 1, 1))])
-        >>> updated = base.append(CashFlow(-25.0, date(2026, 2, 1)))
-        >>> updated.count()
-        2
-        """
-        return super().append(flow)
-
-    def extend(self, other: "CashFlowStream | Iterable[CashFlow]") -> "CashFlowStream":
-        """
-        Return a new CashFlowStream with additional cashflows appended.
-
-        Parameters
-        ----------
-        other : CashFlowStream or Iterable[CashFlow]
-            Cashflows to append.
-
-        Returns
-        -------
-        CashFlowStream
-            A new CashFlowStream containing all original and additional cashflows.
-        """
-        return super().extend(other)
-
-    def with_recurring(
-        self,
-        start: date,
-        periods: int,
-        amount: float,
-        frequency: Period = "year",
-        escalation: float = 0.0,
-        label: str = "Recurring Payment",
-        is_cash: bool = True,
-        pro_forma_category: ProFormaCategory | str | None = ProFormaCategory.OTHER,
-        tax_treatment: TaxTreatment | str = TaxTreatment.NONE,
-        *,
-        escalation_period: Period = "year",
-        amount_reference_date: date | None = None,
-        escalation_policy: EscalationPolicy | None = None,
-    ) -> "CashFlowStream":
-        """
-        Chain ``from_recurring`` onto the current stream.
-
-        Generates recurring cashflows and appends them to this stream, returning
-        a new CashFlowStream. All parameters are forwarded to ``from_recurring``.
-
-        Returns
-        -------
-        CashFlowStream
-            A new CashFlowStream with the recurring cashflows added.
-        """
-        recurring = CashFlowStream.from_recurring(
-            start=start,
-            periods=periods,
-            amount=amount,
-            frequency=frequency,
-            escalation=escalation,
-            escalation_period=escalation_period,
-            amount_reference_date=amount_reference_date,
-            escalation_policy=escalation_policy,
-            label=label,
-            is_cash=is_cash,
-            pro_forma_category=pro_forma_category,
-            tax_treatment=tax_treatment,
-        )
-        return self.extend(recurring)
-
-    def apply(
-        self,
-        transform: Callable[[CashFlow], CashFlow],
-        where: Callable[[CashFlow], bool] | None = None,
-    ) -> "CashFlowStream":
-        """
-        Apply a functional transformation to each cashflow within the CashFlowStream
-        for which the given (optional) condition is satisfied.
-
-        Parameters
-        ----------
-        transform : Callable
-            A callable that takes a CashFlow object and returns a modified CashFlow object.
-        where : Callable
-            A callable that takes a CashFlow object and returns a bool
-            indicating whether to apply the transformation on that CashFlow.
-            Defaults to applying the transformation to all CashFlows.
-
-        Returns
-        -------
-        CashFlowStream
-            A new CashFlowStream object with the function applied to the specified cashflows.
-
-        Examples
-        --------
-        >>> def scale_amount(cf: CashFlow) -> CashFlow:
-        ...     return cf.replace(amount=cf.amount * 2)
-        >>> stream = CashFlowStream([cf1, cf2])
-        >>> scaled_stream = stream.apply(scale_amount)
-
-        >>> # Apply discount factor to all amounts
-        >>> discounted = stream.apply(lambda cf: cf.replace(amount=cf.amount * 0.9))
-
-        >>> # Reclassify positive amounts as revenue
-        >>> classified = stream.apply(
-        ...     lambda cf: cf.replace(pro_forma_category=ProFormaCategory.REVENUE),
-        ...     where=lambda cf: cf.amount > 0,
-        ... )
-
-        Notes
-        -----
-        This method returns a new CashFlowStream and does not modify the original.
-        For operations on the entire stream (not element-wise), use ``apply_streamwise()``.
-        """
-        return super().apply(transform, where)
-
-    def apply_streamwise(
-        self, fn: Callable[["CashFlowStream"], "CashFlowStream"]
-    ) -> "CashFlowStream":
-        """
-        Apply a function to an entire CashFlowStream.
-
-        Unlike ``apply()`` which operates on each cashflow individually, this method
-        passes the entire CashFlowStream to the function, allowing operations that
-        depend on the full context of the stream and enabling composition with other
-        CashFlowStream methods.
-
-        Parameters
-        ----------
-        fn : Callable
-            A callable that takes a CashFlowStream object and returns a CashFlowStream
-            object. The function has access to the entire stream and can use any
-            CashFlowStream methods.
-
-        Returns
-        -------
-        CashFlowStream
-            A new CashFlowStream object with the function applied to the entire stream.
-
-        Examples
-        --------
-        >>> def normalize_to_first(stream: CashFlowStream) -> CashFlowStream:
-        ...     if not stream:
-        ...         return stream
-        ...     first_amount = stream[0].amount
-        ...     return stream.apply(
-        ...         lambda cf: cf.replace(amount=cf.amount / first_amount)
-        ...     )
-        >>> stream = CashFlowStream([cf1, cf2, cf3])
-        >>> normalized_stream = stream.apply_streamwise(normalize_to_first)
-
-        >>> # Or using lambda for composition
-        >>> pred = lambda cf: cf.is_cash
-        >>> scale_fn = lambda cf: cf.replace(amount=1.1 * cf.amount)
-        >>> result = stream.apply_streamwise(lambda s: s.filter(pred).apply(scale_fn))
-        """
-        return super().apply_streamwise(fn)
-
-    def flat_apply(self, fn: Callable[[CashFlow], Iterable[CashFlow]]) -> "CashFlowStream":
-        """
-        Flat-map: apply *fn* to each cashflow, collecting all produced flows.
-
-        Parameters
-        ----------
-        fn : Callable[[CashFlow], Iterable[CashFlow]]
-            A function that takes a CashFlow and returns zero or more CashFlows.
-
-        Returns
-        -------
-        CashFlowStream
-            A new CashFlowStream containing all cashflows produced by *fn*.
-
-        Examples
-        --------
-        >>> # Split each annual cashflow into monthly installments
-        >>> from dateutil.relativedelta import relativedelta
-        >>> def monthly_split(cf: CashFlow) -> list[CashFlow]:
-        ...     monthly = cf.amount / 12
-        ...     return [CashFlow(monthly, cf.date + relativedelta(months=m))
-        ...             for m in range(12)]
-        >>> monthly_stream = stream.flat_apply(monthly_split)
-        """
-        return super().flat_apply(fn)
-
-    def filter_apply(self, fn: Callable[[CashFlow], CashFlow | None]) -> "CashFlowStream":
-        """
-        Filter-and-transform: *fn* returns a transformed CashFlow or ``None`` to drop.
-
-        Parameters
-        ----------
-        fn : Callable[[CashFlow], CashFlow | None]
-            A function that takes a CashFlow and returns a (possibly transformed)
-            CashFlow, or ``None`` to exclude it.
-
-        Returns
-        -------
-        CashFlowStream
-            A new CashFlowStream with only the non-None results.
-
-        Examples
-        --------
-        >>> # Double revenue flows, drop everything else
-        >>> def double_revenue(cf: CashFlow) -> CashFlow | None:
-        ...     if cf.pro_forma_category is ProFormaCategory.REVENUE:
-        ...         return cf.replace(amount=cf.amount * 2)
-        ...     return None
-        >>> revenue_doubled = stream.filter_apply(double_revenue)
-        """
-        return super().filter_apply(fn)
-
     def filter(
         self,
         fn: Callable[[CashFlow], bool] | None = None,
@@ -1030,29 +486,6 @@ class CashFlowStream(BaseStream[CashFlow]):
     def cash_only(self) -> "CashFlowStream":
         """Return only cash-basis cashflows (``is_cash=True``)."""
         return self._filter_where(lambda flow: flow.is_cash)
-
-    def date_range(
-        self,
-        start: date | None = None,
-        end: date | None = None,
-    ) -> "CashFlowStream":
-        """
-        Filter cashflows to the half-open ``[start, end)`` interval.
-
-        Parameters
-        ----------
-        start : date, optional
-            Earliest date to include (inclusive). If ``None``, no lower bound.
-        end : date, optional
-            Exclusive end boundary. Cashflows on or after this date are
-            excluded. If ``None``, no upper bound.
-
-        Returns
-        -------
-        CashFlowStream
-            A new CashFlowStream with only cashflows within the date range.
-        """
-        return super().date_range(start=start, end=end)
 
     @overload
     def group_by[KeyType](self, fn: Callable[[CashFlow], KeyType]) -> CashFlowGroup[KeyType]: ...
@@ -1256,31 +689,6 @@ class CashFlowStream(BaseStream[CashFlow]):
             return super().sort()
         return super().sort(attr=attr, descending=descending)
 
-    def sort_by(
-        self,
-        attr: Literal["date", "amount", "label"] = "date",
-        ascending: bool = True,
-    ) -> "CashFlowStream":
-        """
-        Sort cashflows by a named attribute.
-
-        .. deprecated::
-            Use ``sort(attr=..., descending=...)`` instead.
-
-        Parameters
-        ----------
-        attr : Literal["date", "amount", "label"], optional
-            The cashflow attribute to sort by. Default is ``"date"``.
-        ascending : bool, optional
-            Sort in ascending order if ``True`` (default), descending if ``False``.
-
-        Returns
-        -------
-        CashFlowStream
-            A new sorted CashFlowStream.
-        """
-        return self.sort(attr=attr, descending=not ascending)
-
     def scale(self, factor: float) -> "CashFlowStream":
         """
         Multiply all cashflow amounts by the provided factor.
@@ -1314,64 +722,6 @@ class CashFlowStream(BaseStream[CashFlow]):
         >>> result_stream = CashFlowStream.from_streams(scaled_costs, other_flows)
         """
         return CashFlowStream([cf.replace(amount=cf.amount * factor) for cf in self.entries])
-
-    def sum(self) -> float:
-        """
-        Return the sum of all cashflow amounts.
-
-        Returns
-        -------
-        float
-            The sum of all cashflow amounts in the stream, including both
-            positive (inflows) and negative (outflows) amounts.
-
-        Examples
-        --------
-        >>> stream = CashFlowStream([
-        ...     CashFlow(1000.0, date(2024, 1, 1)),
-        ...     CashFlow(-500.0, date(2024, 2, 1)),
-        ...     CashFlow(2000.0, date(2024, 3, 1))
-        ... ])
-        >>> stream.sum()
-        2500.0
-
-        >>> # Get total revenue
-        >>> revenue_total = stream.filter(pro_forma_category=ProFormaCategory.REVENUE).sum()
-
-        >>> # Get net cash flow (cash flows only)
-        >>> net_cash = stream.filter(lambda cf: cf.is_cash).sum()
-
-        Notes
-        -----
-        Returns 0.0 for empty streams.
-        """
-        ## NOTE: Need to think about this and handling nested CFS. Jacob says we
-        ## never want nested CFS. If you want to do anything nested, use a CashFlowGroup.
-        return super().sum()
-
-    def count(self) -> int:
-        """
-        Return the number of cashflows in the stream.
-
-        Returns
-        -------
-        int
-            The count of cashflows in the stream.
-
-        Examples
-        --------
-        >>> stream = CashFlowStream([cf1, cf2, cf3])
-        >>> n = stream.count()
-        >>> # Returns: 3
-
-        >>> # Count revenue items
-        >>> revenue_count = stream.filter(pro_forma_category=ProFormaCategory.REVENUE).count()
-
-        >>> # Check if stream is empty
-        >>> if stream.count() == 0:
-        ...     print("No cashflows")
-        """
-        return super().count()
 
     def min(self, key: Optional[Callable[[CashFlow], SupportsLessThan]] = None) -> CashFlow:
         """
@@ -1454,7 +804,6 @@ class CashFlowStream(BaseStream[CashFlow]):
         rate: float,
         valuation_date: date,
         convention: DayCountConvention = "actual/365",
-        is_cash_only: bool = True,
     ) -> float:
         """
         Calculate the Net Present Value (NPV) of the cashflow stream.
@@ -1506,8 +855,8 @@ class CashFlowStream(BaseStream[CashFlow]):
 
         Notes
         -----
-        - Only cashflows with `is_cash=True` are included in the calculation, as
-          non-cash items (e.g., depreciation) don't represent actual cash movements.
+        - Only cashflows with ``is_cash=True`` are included; non-cash items (e.g.,
+          depreciation) do not represent actual cash movements.
         - Time differences are calculated in days and converted to years using the
           specified day count convention (default: actual/365).
         - The discount formula is: PV = CF / (1 + r)^t where t can be positive
@@ -1516,9 +865,7 @@ class CashFlowStream(BaseStream[CashFlow]):
           compounds the value forward to the valuation date.
         - Returns 0.0 for empty streams or streams with no cash flows.
         """
-        values = (
-            (flow.amount, flow.date) for flow in self.entries if not is_cash_only or flow.is_cash
-        )
+        values = ((flow.amount, flow.date) for flow in self.entries if flow.is_cash)
         return _npv(values, rate, valuation_date, convention)
 
     def irr(

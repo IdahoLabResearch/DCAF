@@ -58,7 +58,26 @@ class BaseStream[EntryT]:
 
     @classmethod
     def from_streams(cls, *iterables: "BaseStream[EntryT] | EntryT | Iterable[EntryT]") -> Self:
-        """Combine stream objects, single entries, and iterables into one stream."""
+        """
+        Combine stream objects, single entries, and iterables into one stream.
+
+        Parameters
+        ----------
+        *iterables : stream, entry, or Iterable[entry]
+            Variable number of sources. Each may be an instance of the same
+            concrete stream type, a single entry, or any iterable of entries.
+
+        Returns
+        -------
+        Self
+            New stream containing all entries from all inputs, in argument order.
+
+        Notes
+        -----
+        No deduplication is performed. An entry that appears in multiple inputs
+        will appear multiple times in the result. Call ``.sort()`` on the result
+        if ordering is required.
+        """
         all_entries: list[EntryT] = []
 
         for item in iterables:
@@ -81,26 +100,76 @@ class BaseStream[EntryT]:
     @overload
     def __getitem__(self, index: slice) -> Self: ...
 
-    def __getitem__(self, index: int | slice) -> EntryT | Self:
-        """Return a single entry or a sliced stream."""
+    def __getitem__(self, index: int | slice) -> "EntryT | Self":
+        """
+        Return a single entry or a sliced stream.
+
+        Parameters
+        ----------
+        index : int or slice
+            Integer position of a single entry, or a slice selecting a
+            contiguous subset of the stream.
+
+        Returns
+        -------
+        EntryT or Self
+            A single entry when *index* is an integer, or a new stream
+            containing the selected entries when *index* is a slice.
+        """
         if isinstance(index, slice):
             return self._new(self.entries[index])
         return self.entries[index]
 
     def __iter__(self) -> Iterator[EntryT]:
-        """Iterate over entries."""
+        """
+        Iterate over entries in insertion order.
+
+        Returns
+        -------
+        Iterator[EntryT]
+        """
         return iter(self.entries)
 
     def __len__(self) -> int:
-        """Return the number of entries."""
+        """
+        Return the number of entries in the stream.
+
+        Returns
+        -------
+        int
+        """
         return len(self.entries)
 
     def append(self, entry: EntryT) -> Self:
-        """Return a new stream with one entry appended."""
+        """
+        Return a new stream with one entry appended.
+
+        Parameters
+        ----------
+        entry : EntryT
+            Entry to append.
+
+        Returns
+        -------
+        Self
+            New stream containing all original entries plus *entry*.
+        """
         return self._new([*self.entries, entry])
 
     def extend(self, other: "BaseStream[EntryT] | Iterable[EntryT]") -> Self:
-        """Return a new stream with additional entries appended."""
+        """
+        Return a new stream with additional entries appended.
+
+        Parameters
+        ----------
+        other : Self or Iterable[EntryT]
+            Additional entries to append.
+
+        Returns
+        -------
+        Self
+            New stream containing the original and appended entries.
+        """
         if isinstance(other, BaseStream):
             type(self)._validate_stream_type(other)
             return self._new([*self.entries, *other.entries])
@@ -109,7 +178,29 @@ class BaseStream[EntryT]:
     def apply(
         self, transform: Callable[[EntryT], EntryT], where: Callable[[EntryT], bool] | None = None
     ) -> Self:
-        """Map entries one-to-one."""
+        """
+        Apply a transformation to each entry, optionally filtered by a predicate.
+
+        Parameters
+        ----------
+        transform : Callable[[EntryT], EntryT]
+            One-to-one transformation applied to each selected entry.
+        where : Callable[[EntryT], bool], optional
+            Predicate determining which entries are transformed. Entries for
+            which the predicate returns ``False`` are passed through unchanged.
+            Default is to transform all entries.
+
+        Returns
+        -------
+        Self
+            New stream with the transformation applied to the selected entries.
+
+        Notes
+        -----
+        This method returns a new stream and does not modify the original.
+        For operations on the whole stream rather than individual entries,
+        use :meth:`apply_streamwise`.
+        """
         new_entries = []
         for entry in self.entries:
             if where is None:
@@ -122,18 +213,61 @@ class BaseStream[EntryT]:
         return self._new(new_entries)
 
     def apply_streamwise(self, fn: Callable[[Self], Self]) -> Self:
-        """Apply a transformation to the entire stream object."""
+        """
+        Apply a function to the entire stream at once.
+
+        Unlike :meth:`apply`, which operates entry-by-entry, this method passes
+        the entire stream object to *fn*, enabling operations that depend on the
+        full context of the stream.
+
+        Parameters
+        ----------
+        fn : Callable[[Self], Self]
+            Transformation receiving the whole stream and returning a new stream.
+
+        Returns
+        -------
+        Self
+            Result returned by *fn*.
+        """
         return fn(self)
 
     def flat_apply(self, fn: Callable[[EntryT], Iterable[EntryT]]) -> Self:
-        """Flat-map entries to zero or more output entries."""
+        """
+        Flat-map entries to zero or more output entries.
+
+        Parameters
+        ----------
+        fn : Callable[[EntryT], Iterable[EntryT]]
+            Mapping function that may emit multiple entries per input. Return an
+            empty iterable to drop an entry.
+
+        Returns
+        -------
+        Self
+            New stream containing all entries emitted by *fn*, in order.
+        """
         mapped: list[EntryT] = []
         for entry in self.entries:
             mapped.extend(fn(entry))
         return self._new(mapped)
 
-    def filter_apply(self, fn: Callable[[EntryT], EntryT | None]) -> Self:
-        """Map entries while dropping ``None`` results."""
+    def filter_apply(self, fn: Callable[[EntryT], "EntryT | None"]) -> Self:
+        """
+        Transform entries while dropping ``None`` results.
+
+        Combines a conditional transformation and a filter in one pass.
+
+        Parameters
+        ----------
+        fn : Callable[[EntryT], EntryT | None]
+            Mapping function returning a replacement entry or ``None`` to drop.
+
+        Returns
+        -------
+        Self
+            New stream containing only the non-``None`` results.
+        """
         mapped: list[EntryT] = []
         for entry in self.entries:
             transformed = fn(entry)
@@ -157,10 +291,24 @@ class BaseStream[EntryT]:
         return self._filter_where(matches)
 
     def date_range(self, start: date | None = None, end: date | None = None) -> Self:
-        """Filter entries to the half-open ``[start, end)`` interval.
+        """
+        Filter entries to the half-open ``[start, end)`` interval.
 
         ``start`` is inclusive; ``end`` is exclusive. Either bound may be
         omitted to leave that side unbounded.
+
+        Parameters
+        ----------
+        start : date, optional
+            Earliest date to include (inclusive). If ``None``, no lower bound.
+        end : date, optional
+            Exclusive upper boundary. Entries on or after this date are excluded.
+            If ``None``, no upper bound.
+
+        Returns
+        -------
+        Self
+            New stream containing only entries within the date range.
         """
         result = self.entries
         if start is not None:
@@ -212,7 +360,30 @@ class BaseStream[EntryT]:
         attr: str | None = None,
         descending: bool = False,
     ) -> Self:
-        """Return a new stream sorted by key function or named attribute."""
+        """
+        Return a new stream sorted by a key function or named attribute.
+
+        When called with no arguments, sorts by ``date`` ascending.
+
+        Parameters
+        ----------
+        fn : Callable[[EntryT], SupportsLessThan], optional
+            Sort key function. Mutually exclusive with *attr*.
+        attr : str, optional
+            Named entry attribute to sort by. Mutually exclusive with *fn*.
+        descending : bool, optional
+            If ``True``, sort in descending order. Default is ``False``.
+
+        Returns
+        -------
+        Self
+            New sorted stream.
+
+        Raises
+        ------
+        ValueError
+            If both *fn* and *attr* are provided.
+        """
         if fn is not None and attr is not None:
             raise ValueError("Cannot pass both a key function and 'attr' to sort()")
 
@@ -228,11 +399,25 @@ class BaseStream[EntryT]:
         raise NotImplementedError
 
     def sum(self) -> float:
-        """Return the sum of entry amounts."""
+        """
+        Return the sum of all entry amounts.
+
+        Returns
+        -------
+        float
+            Sum of the numeric amount for each entry. Returns ``0.0`` for an
+            empty stream.
+        """
         return sum((self._amount(entry) for entry in self.entries), start=0.0)
 
     def count(self) -> int:
-        """Return the number of entries."""
+        """
+        Return the number of entries.
+
+        Returns
+        -------
+        int
+        """
         return len(self.entries)
 
 
@@ -256,15 +441,54 @@ class BaseGroup[KeyT, EntryT, StreamT]:
         raise NotImplementedError
 
     def aggregate[T](self, fn: Callable[[StreamT], T]) -> dict[KeyT, T]:
-        """Apply a function to each group and return a dict of results."""
+        """
+        Apply a function to each group and return a dict of results.
+
+        Use this when the transformation produces a non-stream result. For
+        stream-to-stream transformations, use :meth:`apply_to_groups`.
+
+        Parameters
+        ----------
+        fn : Callable[[StreamT], T]
+            Function applied independently to each grouped stream.
+
+        Returns
+        -------
+        dict[KeyT, T]
+            Mapping of each group key to the value returned by *fn*.
+        """
         return {key: fn(stream) for key, stream in self.groups.items()}
 
     def apply_to_groups(
         self,
         fn: Callable[[StreamT], StreamT],
-        keys: KeyT | Collection[KeyT] | None = None,
+        keys: "KeyT | Collection[KeyT] | None" = None,
     ) -> Self:
-        """Apply a transformation to each selected group."""
+        """
+        Apply a stream-to-stream transformation to selected groups.
+
+        Non-selected groups are passed through unchanged. Use this when the
+        transformation returns a stream; for reductions use :meth:`aggregate`.
+
+        Parameters
+        ----------
+        fn : Callable[[StreamT], StreamT]
+            Transformation applied to each selected grouped stream.
+        keys : KeyT or Collection[KeyT], optional
+            Group key or keys to transform. ``None`` transforms all groups.
+            A single non-collection key selects exactly one group. A collection
+            of keys selects the listed groups.
+
+        Returns
+        -------
+        Self
+            New group container with the transformation applied to selected groups.
+
+        Raises
+        ------
+        ValueError
+            If any provided key is not present in the group container.
+        """
         if keys is None:
             transformed_keys = list(self.groups)
         elif isinstance(keys, Collection) and not isinstance(keys, str):
@@ -291,11 +515,39 @@ class BaseGroup[KeyT, EntryT, StreamT]:
         )
 
     def filter_groups(self, fn: Callable[[KeyT, StreamT], bool]) -> Self:
-        """Return only the groups matching the predicate."""
+        """
+        Return only the groups matching the predicate.
+
+        Parameters
+        ----------
+        fn : Callable[[KeyT, StreamT], bool]
+            Predicate receiving each group key and its stream.
+
+        Returns
+        -------
+        Self
+            New group container with only the groups for which *fn* returns ``True``.
+        """
         return self._new({key: stream for key, stream in self.groups.items() if fn(key, stream)})
 
     def ungroup(self) -> StreamT:
-        """Flatten all groups back into a single stream."""
+        """
+        Flatten all groups back into a single stream.
+
+        Concatenates entries from every grouped stream in iteration order.
+
+        Returns
+        -------
+        StreamT
+            Stream containing all entries from every group.
+
+        Notes
+        -----
+        The resulting stream is not guaranteed to be sorted. Use ``.sort()`` on
+        the result if ordering is required. If the same entry appears in multiple
+        groups of a manually constructed container, it will appear multiple times
+        in the returned stream.
+        """
         all_entries: list[EntryT] = []
         for stream in self.groups.values():
             protocol_stream = cast(_StreamProtocol[EntryT], stream)
@@ -307,15 +559,15 @@ class BaseGroup[KeyT, EntryT, StreamT]:
         exemplar = cast(_StreamProtocol[EntryT], next(iter(self.groups.values())))
         return cast(StreamT, exemplar._new(all_entries))
 
-    def keys(self) -> Iterable[KeyT]:
+    def keys(self) -> "Iterable[KeyT]":
         """Return the group keys."""
         return self.groups.keys()
 
-    def values(self) -> Iterable[StreamT]:
+    def values(self) -> "Iterable[StreamT]":
         """Return grouped streams."""
         return self.groups.values()
 
-    def items(self) -> Iterable[tuple[KeyT, StreamT]]:
+    def items(self) -> "Iterable[tuple[KeyT, StreamT]]":
         """Return ``(key, stream)`` pairs."""
         return self.groups.items()
 
@@ -327,18 +579,32 @@ class BaseGroup[KeyT, EntryT, StreamT]:
         """Return the number of groups."""
         return len(self.groups)
 
-    def __iter__(self) -> Iterator[KeyT]:
+    def __iter__(self) -> "Iterator[KeyT]":
         """Iterate over grouping keys."""
         return iter(self.groups)
 
-    def sum(self) -> dict[KeyT, float]:
-        """Return the per-group sums."""
+    def sum(self) -> "dict[KeyT, float]":
+        """
+        Return the per-group sum of entry amounts.
+
+        Returns
+        -------
+        dict[KeyT, float]
+            Mapping of each group key to the sum of entry amounts in that group.
+        """
         return {
             key: cast(_StreamProtocol[EntryT], stream).sum() for key, stream in self.groups.items()
         }
 
-    def count(self) -> dict[KeyT, int]:
-        """Return the per-group entry counts."""
+    def count(self) -> "dict[KeyT, int]":
+        """
+        Return the per-group entry count.
+
+        Returns
+        -------
+        dict[KeyT, int]
+            Mapping of each group key to the number of entries in that group.
+        """
         return {
             key: cast(_StreamProtocol[EntryT], stream).count()
             for key, stream in self.groups.items()

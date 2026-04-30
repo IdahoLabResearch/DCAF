@@ -606,75 +606,6 @@ def test_filter_by_pro_forma_category_empty_stream():
     assert result.entries == []
 
 
-# ---- with_recurring tests ----
-
-
-def test_with_recurring():
-    """Tests that with_recurring appends recurring flows."""
-    base = CashFlowStream([CashFlow(100.0, date(2026, 1, 1))])
-    result = base.with_recurring(start=date(2026, 6, 1), periods=2, amount=50.0)
-    assert len(result.entries) == 3
-    assert result.entries[0].amount == 100.0
-    assert result.entries[1].amount == 50.0
-    assert result.entries[2].amount == 50.0
-
-
-def test_with_recurring_chaining():
-    """Tests chaining with_recurring calls."""
-    result = (
-        CashFlowStream([])
-        .with_recurring(start=date(2026, 1, 1), periods=2, amount=10.0)
-        .with_recurring(start=date(2027, 1, 1), periods=1, amount=20.0)
-    )
-    assert len(result.entries) == 3
-
-
-def test_with_recurring_immutability():
-    """Tests that with_recurring does not modify the original stream."""
-    original = CashFlowStream([CashFlow(100.0, date(2026, 1, 1))])
-    _ = original.with_recurring(start=date(2026, 6, 1), periods=3, amount=50.0)
-    assert len(original.entries) == 1
-
-
-def test_with_recurring_forwards_new_escalation_kwargs():
-    """with_recurring forwards explicit escalation kwargs to from_recurring."""
-    base = CashFlowStream([CashFlow(100.0, date(2026, 1, 1))])
-    result = base.with_recurring(
-        start=date(2026, 3, 1),
-        periods=2,
-        amount=50.0,
-        frequency="month",
-        escalation=0.01,
-        escalation_period="month",
-        amount_reference_date=date(2026, 1, 1),
-    )
-    assert result.entries[0].amount == 100.0
-    assert result.entries[1].amount == pytest.approx(50.0 * (1.01**2))
-    assert result.entries[2].amount == pytest.approx(50.0 * (1.01**3))
-
-
-def test_with_recurring_forwards_escalation_policy():
-    base = CashFlowStream([CashFlow(100.0, date(2026, 1, 1))])
-    policy = IndexSeriesEscalation(
-        reference_date=date(2026, 1, 1),
-        points=(
-            (date(2026, 1, 1), 100.0),
-            (date(2026, 2, 1), 102.0),
-            (date(2026, 3, 1), 105.0),
-        ),
-    )
-    result = base.with_recurring(
-        start=date(2026, 1, 15),
-        periods=3,
-        amount=50.0,
-        frequency="month",
-        escalation_policy=policy,
-    )
-
-    assert result.entries[0].amount == 100.0
-    assert [flow.amount for flow in result.entries[1:]] == pytest.approx([50.0, 51.0, 52.5])
-
-
 # ---- append tests ----
 
 
@@ -859,61 +790,38 @@ def test_date_range_empty_result(_create_cf_stream):
     assert result.entries == []
 
 
-# ---- sort_by tests ----
-
-
-def test_sort_by_date(_create_cf_stream):
-    """Tests sort_by with default attr='date'."""
+def test_sort_attr_amount_ascending(_create_cf_stream):
+    """sort(attr='amount') sorts by amount ascending."""
     cf_stream, flows = _create_cf_stream
-    result = cf_stream.sort_by()
-    assert result.entries == [flows[0], flows[1], flows[2], flows[3]]
-
-
-def test_sort_by_date_descending(_create_cf_stream):
-    """Tests sort_by date descending."""
-    cf_stream, flows = _create_cf_stream
-    result = cf_stream.sort_by(ascending=False)
-    assert result.entries == [flows[3], flows[2], flows[1], flows[0]]
-
-
-def test_sort_by_amount(_create_cf_stream):
-    """Tests sort_by amount ascending."""
-    cf_stream, flows = _create_cf_stream
-    result = cf_stream.sort_by(attr="amount")
+    result = cf_stream.sort(attr="amount")
     assert result.entries == [flows[2], flows[0], flows[3], flows[1]]
 
 
-def test_sort_by_label(_create_cf_stream):
-    """Tests sort_by label ascending."""
+def test_sort_attr_label(_create_cf_stream):
+    """sort(attr='label') sorts by label ascending."""
     cf_stream, flows = _create_cf_stream
-    result = cf_stream.sort_by(attr="label")
+    result = cf_stream.sort(attr="label")
     assert result.entries == [flows[0], flows[2], flows[1], flows[3]]
 
 
-def test_sort_by_immutability(_create_cf_stream):
-    """Tests that sort_by does not modify the original stream."""
+def test_sort_immutability(_create_cf_stream):
+    """sort() does not modify the original stream."""
     cf_stream, flows = _create_cf_stream
-    _ = cf_stream.sort_by(attr="amount")
+    _ = cf_stream.sort(attr="amount")
     assert cf_stream.entries == list(flows)
 
 
-def test_sort_by_empty_stream():
-    """Tests sort_by on an empty stream."""
-    result = CashFlowStream([]).sort_by()
+def test_sort_empty_stream():
+    """sort() on an empty stream returns an empty stream."""
+    result = CashFlowStream([]).sort()
     assert result.entries == []
 
 
-def test_sort_by_default(_create_cf_stream):
-    """Tests that sort_by default is equivalent to sort_by(attr='date', ascending=True)."""
-    cf_stream = _create_cf_stream[0]
-    assert cf_stream.sort_by().entries == cf_stream.sort_by(attr="date", ascending=True).entries
-
-
-def test_sort_by_bad_attr(_create_cf_stream):
-    """Tests that sort_by raises on an invalid attribute."""
+def test_sort_bad_attr(_create_cf_stream):
+    """sort(attr=...) raises on an invalid attribute."""
     cf_stream = _create_cf_stream[0]
     with pytest.raises(AssertionError):
-        cf_stream.sort_by(attr="nonexistent")
+        cf_stream.sort(attr="nonexistent")
 
 
 # ---- unified sort tests ----
