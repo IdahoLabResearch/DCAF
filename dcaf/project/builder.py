@@ -7,11 +7,10 @@ stays immutable: each configuration method returns a new project.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass, field, replace as dc_replace
 from datetime import date
 from math import isclose, isfinite
-from typing import Callable, Literal, Self, TypeAlias
+from typing import Literal, Self, TypeAlias
 
 from dateutil.relativedelta import relativedelta
 
@@ -50,11 +49,6 @@ from dcaf.shared.types import (
 )
 from dcaf.shared.formatting import format_label
 from dcaf.shared.time import elapsed_periods, event_date, hours_per_period, time_delta_per_period
-
-CashFlowComponentModifier: TypeAlias = Callable[
-    [CashFlowGroup[str]],
-    CashFlowGroup[str] | Mapping[str, CashFlowStream],
-]
 
 
 def _validate_finite(value: float, name: str) -> None:
@@ -364,7 +358,6 @@ class _ProjectConfig:
     valuation: ProjectValuation | None = None
     default_escalation: _EscalationSettings = field(default_factory=_EscalationSettings)
     custom_cashflows: dict[str, CashFlowStream] = field(default_factory=dict)
-    cashflow_modifiers: tuple[CashFlowComponentModifier, ...] = ()
 
 
 class EnergyProject:
@@ -1445,42 +1438,12 @@ class EnergyProject:
         custom[name] = stream
         return self._copy(config=dc_replace(self._config, custom_cashflows=custom))
 
-    def modify_cashflow_components(self, *, modifier: CashFlowComponentModifier) -> Self:
-        """Register a component-level cashflow modifier.
-
-        The modifier receives the compiled pre-tax cashflow component map and may
-        add, remove, or rewrite named components. The modified components are
-        then used to recompute taxable income, tax liability, metrics, and the
-        project pro forma.
-
-        Parameters
-        ----------
-        modifier : CashFlowComponentModifier
-            Callable that receives the compiled component group and returns
-            either a replacement :class:`CashFlowGroup` or a mapping of names
-            to :class:`CashFlowStream` objects.
-
-        Returns
-        -------
-        EnergyProject
-            New project with ``modifier`` appended to the modifier pipeline.
-
-        Raises
-        ------
-        TypeError
-            Raised later during :meth:`analyze` if the modifier returns any
-            non-:class:`CashFlowStream` values.
-        """
-        modifiers = (*self._config.cashflow_modifiers, modifier)
-        return self._copy(config=dc_replace(self._config, cashflow_modifiers=modifiers))
-
     def analyze(self) -> ProjectAnalysis:
         """Compile all configuration into a :class:`ProjectAnalysis`.
 
         Builds generation, revenue, fixed and variable OPEX, construction,
-        ITC, PTC, depreciation, and debt service streams. Applies any
-        registered cashflow modifiers, then computes taxable income and tax
-        liability.
+        ITC, PTC, depreciation, and debt service streams. Then computes taxable
+        income and tax liability.
 
         Returns
         -------
@@ -1564,8 +1527,6 @@ class EnergyProject:
 
         for name, stream in self._config.custom_cashflows.items():
             component_streams[name] = stream
-
-        component_streams = self._apply_cashflow_modifiers(component_streams)
 
         per_asset_taxable_components: list[CashFlowStream] = []
         per_asset_deductible_components: list[CashFlowStream] = []
@@ -2268,28 +2229,6 @@ class EnergyProject:
             phase_start=ops_start,
             phase_end=ops_end,
         )
-
-    def _apply_cashflow_modifiers(
-        self,
-        component_streams: dict[str, CashFlowStream],
-    ) -> dict[str, CashFlowStream]:
-        """Apply all registered cashflow modifiers sequentially to *component_streams*.
-
-        Each modifier receives a ``CashFlowGroup`` and must return either a
-        ``CashFlowGroup`` or a ``Mapping[str, CashFlowStream]``.
-        """
-        updated = dict(component_streams)
-        for modifier in self._config.cashflow_modifiers:
-            modified = modifier(CashFlowGroup(updated))
-            updated = (
-                dict(modified.items()) if isinstance(modified, CashFlowGroup) else dict(modified)
-            )
-            for name, stream in updated.items():
-                if not isinstance(stream, CashFlowStream):
-                    raise TypeError(
-                        "cashflow modifiers must return CashFlowStream values for every component"
-                    )
-        return updated
 
     def _infer_levelized_cost_escalation_rate(self) -> float | None:
         """Infer a shared annual escalation rate for constant-dollar LCOE when possible."""

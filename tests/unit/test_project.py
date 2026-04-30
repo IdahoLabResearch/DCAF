@@ -640,40 +640,6 @@ def test_project_pro_forma_groups_categories_and_computes_subtotals():
     assert "project:tax_liability" not in row_map
 
 
-def test_energy_project_cashflow_modifiers_can_rewrite_components_before_tax():
-    base_project = (
-        EnergyProject()
-        .generation(
-            capacity_mw=1.0,
-            capacity_factor=1.0,
-            operations_start=date(2026, 1, 1),
-            operations_end=date(2027, 1, 1),
-        )
-        .revenue_from_generation(sell_price_per_unit=1.0)
-        .tax(rate=0.21)
-    )
-
-    def halve_revenue(components):
-        updated = dict(components.items())
-        updated["revenue"] = updated["revenue"].apply(
-            lambda flow: flow.replace(amount=flow.amount * 0.5)
-        )
-        return updated
-
-    modified_project = base_project.modify_cashflow_components(modifier=halve_revenue)
-
-    base_analysis = base_project.analyze()
-    modified_analysis = modified_project.analyze()
-
-    assert modified_analysis.cashflow_components["revenue"].sum() == pytest.approx(
-        base_analysis.cashflow_components["revenue"].sum() * 0.5
-    )
-    assert modified_analysis.taxable_income.sum() == pytest.approx(
-        base_analysis.taxable_income.sum() * 0.5
-    )
-    assert modified_analysis.taxes.sum() == pytest.approx(base_analysis.taxes.sum() * 0.5)
-
-
 # --- Multiple named cost items ---
 
 
