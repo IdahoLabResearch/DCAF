@@ -20,8 +20,6 @@ def test_generation_defaults():
     """Test Generation frozen dataclass defaults."""
     g = Generation(amount_mwh=100.0, date=date(2030, 1, 1))
     assert g.amount_mwh == 100.0
-    assert g.source == ""
-    assert g.carrier == "electricity"
     assert g.label == ""
 
 
@@ -34,7 +32,7 @@ def test_generation_immutable():
 
 def test_generation_replace():
     """replace method replaces the specified parameters."""
-    old_g = Generation(amount_mwh=100.0, date=date(2026, 1, 1), source="uprate", label="old_gen")
+    old_g = Generation(amount_mwh=100.0, date=date(2026, 1, 1), label="old_gen")
     new_g = old_g.replace(amount_mwh=150.0, label="new_gen")
 
     # Check that replacements were made
@@ -43,8 +41,6 @@ def test_generation_replace():
 
     # Check that other parameters are untouched
     assert new_g.date == date(2026, 1, 1)
-    assert new_g.source == "uprate"
-    assert new_g.carrier == "electricity"
 
     # Check that original stream is unmodified
     assert old_g.amount_mwh == 100.0
@@ -60,13 +56,10 @@ def test_from_capacity_annual():
         capacity_factor=0.92,
         start=date(2030, 1, 1),
         periods=3,
-        source="uprate",
     )
     assert gs.count() == 3
     expected_mwh = 100 * 0.92 * 8760
     assert abs(gs.entries[0].amount_mwh - expected_mwh) < 1e-6
-    assert gs.entries[0].source == "uprate"
-    assert gs.entries[0].carrier == "electricity"
     assert gs.entries[0].date == date(2030, 1, 1)
     assert gs.entries[1].date == date(2031, 1, 1)
     assert gs.entries[2].date == date(2032, 1, 1)
@@ -95,12 +88,10 @@ def test_from_capacity_quarterly():
         start=date(2030, 1, 1),
         periods=4,
         frequency="quarter",
-        carrier="hydrogen",
     )
     assert gs.count() == 4
     expected_mwh = 50 * 0.80 * (8760 / 4)
     assert abs(gs.entries[0].amount_mwh - expected_mwh) < 1e-6
-    assert gs.entries[0].carrier == "hydrogen"
 
 
 def test_from_capacity_default_label():
@@ -132,16 +123,12 @@ def test_from_outage_creates_negative_generation():
         capacity_factor=0.92,
         start=date(2030, 5, 1),
         end=date(2030, 5, 11),
-        source="unit_1",
-        carrier="electricity",
         label="Refueling extension",
     )
 
     assert outage.count() == 1
     assert outage.entries[0].amount_mwh == pytest.approx(-(1000.0 * 0.92 * 24.0 * 10.0))
     assert outage.entries[0].date == date(2030, 5, 10)
-    assert outage.entries[0].source == "unit_1"
-    assert outage.entries[0].carrier == "electricity"
     assert outage.entries[0].label == "Refueling extension"
 
 
@@ -185,16 +172,16 @@ def test_from_outage_rejects_invalid_inputs():
 
 def test_from_streams_combines():
     """from_streams combines multiple GenerationStreams."""
-    gs1 = GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 2, source="a")
-    gs2 = GenerationStream.from_capacity(50, 0.8, date(2030, 1, 1), 3, source="b")
+    gs1 = GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 2)
+    gs2 = GenerationStream.from_capacity(50, 0.8, date(2032, 1, 1), 3)
     combined = GenerationStream.from_streams(gs1, gs2)
     assert combined.count() == 5
 
 
 def test_from_streams_accepts_entries_and_iterables():
     """from_streams also accepts individual Generation entries and plain iterables."""
-    g1 = Generation(100.0, date(2030, 1, 1), source="a")
-    g2 = Generation(200.0, date(2031, 1, 1), source="b")
+    g1 = Generation(100.0, date(2030, 1, 1))
+    g2 = Generation(200.0, date(2031, 1, 1))
     combined = GenerationStream.from_streams(g1, [g2])
     assert combined.entries == [g1, g2]
 
@@ -226,8 +213,8 @@ def test_with_capacity_label_with_index():
 
 def test_with_capacity_appends():
     """with_capacity appends to existing entries."""
-    gs = GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 2, source="a")
-    gs2 = gs.with_capacity(50, 0.8, date(2030, 1, 1), 3, source="b")
+    gs = GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 2)
+    gs2 = gs.with_capacity(50, 0.8, date(2032, 1, 1), 3)
     assert gs2.count() == 5
     # Original unchanged
     assert gs.count() == 2
@@ -263,29 +250,6 @@ def test_extend_rejects_other_stream_types():
 # === filter methods ===
 
 
-def test_filter_by_source():
-    """Filter entries by source using filter(source=...)."""
-    gs = GenerationStream.from_streams(
-        GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 2, source="unit_1"),
-        GenerationStream.from_capacity(50, 0.8, date(2030, 1, 1), 3, source="uprate"),
-    )
-    unit1 = gs.filter(source="unit_1")
-    assert unit1.count() == 2
-    assert all(e.source == "unit_1" for e in unit1.entries)
-
-
-def test_filter_by_carrier():
-    """Filter entries by carrier using filter(carrier=...)."""
-    gs = GenerationStream.from_streams(
-        GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 2, carrier="electricity"),
-        GenerationStream.from_capacity(50, 0.8, date(2030, 1, 1), 2, carrier="hydrogen"),
-    )
-    elec = gs.filter(carrier="electricity")
-    assert elec.count() == 2
-    h2 = gs.filter(carrier="hydrogen")
-    assert h2.count() == 2
-
-
 def test_filter_generic():
     """Generic filter with a custom predicate."""
     gs = GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 5)
@@ -293,23 +257,10 @@ def test_filter_generic():
     assert recent.count() == 2
 
 
-def test_filter_requires_criteria():
-    """filter() requires either a predicate or keyword filters."""
-    with pytest.raises(ValueError, match="Provide either"):
-        GenerationStream().filter()
-
-
-def test_filter_rejects_predicate_and_keywords():
-    """filter() rejects mixing a predicate with keyword filters."""
-    gs = GenerationStream([Generation(100.0, date(2030, 1, 1), source="a")])
-    with pytest.raises(ValueError, match="Cannot pass both"):
-        gs.filter(lambda entry: entry.amount_mwh > 0, source="a")
-
-
 def test_apply_generation_stream_no_condition():
     """apply transforms all entries with no condition provided and preserves stream type."""
-    gs = GenerationStream([Generation(100.0, date(2030, 1, 1), source="a")])
-    result = gs.apply(lambda g: Generation(g.amount_mwh * 2, g.date, g.source, g.carrier, g.label))
+    gs = GenerationStream([Generation(100.0, date(2030, 1, 1))])
+    result = gs.apply(lambda g: Generation(g.amount_mwh * 2, g.date, g.label))
     assert isinstance(result, GenerationStream)
     assert result[0].amount_mwh == 200.0
     assert gs[0].amount_mwh == 100.0
@@ -319,13 +270,13 @@ def test_apply_generation_stream_with_condition():
     """apply transforms all entries satisfying the condition provided and preserves stream type."""
     gs = GenerationStream(
         [
-            Generation(150.0, date(2030, 1, 1), source="a"),
-            Generation(200.0, date(2031, 1, 1), source="b"),
+            Generation(150.0, date(2030, 1, 1), label="a"),
+            Generation(200.0, date(2031, 1, 1), label="b"),
         ]
     )
     result = gs.apply(
-        lambda g: Generation(g.amount_mwh * 2, g.date, g.source, g.carrier, g.label),
-        lambda g: g.source == "a",
+        lambda g: Generation(g.amount_mwh * 2, g.date, g.label),
+        lambda g: g.label == "a",
     )
     assert isinstance(result, GenerationStream)
     assert result[0].amount_mwh == 300.0
@@ -351,9 +302,7 @@ def test_filter_apply_generation_stream():
         ]
     )
     result = gs.filter_apply(
-        lambda g: Generation(g.amount_mwh * 1.5, g.date, g.source, g.carrier, g.label)
-        if g.amount_mwh > 0
-        else None
+        lambda g: Generation(g.amount_mwh * 1.5, g.date, g.label) if g.amount_mwh > 0 else None
     )
     assert result.count() == 1
     assert result[0].amount_mwh == 150.0
@@ -370,27 +319,22 @@ def test_date_range_generation_stream():
 # === grouping ===
 
 
-def test_group_by_source():
-    """Group by source returns correct groups."""
-    gs = GenerationStream.from_streams(
-        GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 2, source="a"),
-        GenerationStream.from_capacity(50, 0.8, date(2030, 1, 1), 3, source="b"),
+def test_group_by_predicate():
+    """Group by a predicate function returns correct groups."""
+    gs = GenerationStream(
+        [
+            Generation(100.0, date(2030, 1, 1), label="a"),
+            Generation(150.0, date(2031, 1, 1), label="a"),
+            Generation(50.0, date(2030, 1, 1), label="b"),
+            Generation(75.0, date(2031, 1, 1), label="b"),
+            Generation(25.0, date(2032, 1, 1), label="b"),
+        ]
     )
-    groups = gs.group_by(source=True)
+    groups = gs.group_by(lambda g: g.label)
     assert isinstance(groups, GenerationGroup)
     assert len(groups) == 2
     assert groups["a"].count() == 2
     assert groups["b"].count() == 3
-
-
-def test_group_by_carrier():
-    """Group by carrier."""
-    gs = GenerationStream.from_streams(
-        GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 2, carrier="elec"),
-        GenerationStream.from_capacity(50, 0.8, date(2030, 1, 1), 1, carrier="h2"),
-    )
-    groups = gs.group_by(carrier=True)
-    assert len(groups) == 2
 
 
 def test_group_by_period():
@@ -421,9 +365,9 @@ def test_sort_generation_stream_by_attr():
     """sort(attr=...) sorts by a named Generation attribute."""
     gs = GenerationStream(
         [
-            Generation(300.0, date(2030, 1, 1), source="c"),
-            Generation(100.0, date(2031, 1, 1), source="a"),
-            Generation(200.0, date(2032, 1, 1), source="b"),
+            Generation(300.0, date(2030, 1, 1)),
+            Generation(100.0, date(2031, 1, 1)),
+            Generation(200.0, date(2032, 1, 1)),
         ]
     )
     result = gs.sort(attr="amount_mwh", descending=True)
@@ -755,13 +699,21 @@ def test_to_cost_supports_index_series_escalation_policy():
 # === GenerationGroup ===
 
 
+def _two_group_stream() -> GenerationStream:
+    """Build a two-group stream keyed by ``label`` for GenerationGroup tests."""
+    return GenerationStream(
+        [
+            Generation(100.0 * 0.9 * 8760, date(2030, 1, 1), label="a"),
+            Generation(100.0 * 0.9 * 8760, date(2031, 1, 1), label="a"),
+            Generation(50.0 * 0.8 * 8760, date(2030, 1, 1), label="b"),
+        ]
+    )
+
+
 def test_generation_group_aggregate():
     """Aggregate works on GenerationGroup."""
-    gs = GenerationStream.from_streams(
-        GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 2, source="a"),
-        GenerationStream.from_capacity(50, 0.8, date(2030, 1, 1), 2, source="b"),
-    )
-    groups = gs.group_by(source=True)
+    gs = _two_group_stream()
+    groups = gs.group_by(lambda g: g.label)
     sums = groups.aggregate(lambda s: s.sum())
     assert "a" in sums
     assert "b" in sums
@@ -770,56 +722,45 @@ def test_generation_group_aggregate():
 
 def test_generation_group_sum():
     """Sum convenience method on GenerationGroup."""
-    gs = GenerationStream.from_streams(
-        GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 1, source="a"),
-        GenerationStream.from_capacity(50, 0.8, date(2030, 1, 1), 1, source="b"),
-    )
-    groups = gs.group_by(source=True)
+    gs = _two_group_stream()
+    groups = gs.group_by(lambda g: g.label)
     sums = groups.sum()
-    assert abs(sums["a"] - 100 * 0.9 * 8760) < 1e-6
+    assert abs(sums["a"] - 2 * 100 * 0.9 * 8760) < 1e-6
 
 
 def test_generation_group_count():
     """Count convenience method on GenerationGroup."""
-    gs = GenerationStream.from_streams(
-        GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 3, source="a"),
-        GenerationStream.from_capacity(50, 0.8, date(2030, 1, 1), 2, source="b"),
-    )
-    groups = gs.group_by(source=True)
+    gs = _two_group_stream()
+    groups = gs.group_by(lambda g: g.label)
     counts = groups.count()
-    assert counts["a"] == 3
-    assert counts["b"] == 2
+    assert counts["a"] == 2
+    assert counts["b"] == 1
 
 
 def test_generation_group_getitem():
     """Bracket access works."""
-    gs = GenerationStream.from_streams(
-        GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 2, source="x"),
+    gs = GenerationStream(
+        [
+            Generation(100.0, date(2030, 1, 1), label="x"),
+            Generation(150.0, date(2031, 1, 1), label="x"),
+        ]
     )
-    groups = gs.group_by(source=True)
+    groups = gs.group_by(lambda g: g.label)
     assert groups["x"].count() == 2
 
 
 def test_generation_group_len():
     """len() returns number of groups."""
-    gs = GenerationStream.from_streams(
-        GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 1, source="a"),
-        GenerationStream.from_capacity(50, 0.8, date(2030, 1, 1), 1, source="b"),
-    )
-    assert len(gs.group_by(source=True)) == 2
+    gs = _two_group_stream()
+    assert len(gs.group_by(lambda g: g.label)) == 2
 
 
 def test_generation_group_apply_to_groups():
     """apply_to_groups transforms selected grouped streams."""
-    gs = GenerationStream.from_streams(
-        GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 1, source="a"),
-        GenerationStream.from_capacity(50, 0.8, date(2030, 1, 1), 1, source="b"),
-    )
-    grouped = gs.group_by(source=True)
+    gs = _two_group_stream()
+    grouped = gs.group_by(lambda g: g.label)
     result = grouped.apply_to_groups(
-        lambda s: s.apply(
-            lambda g: Generation(g.amount_mwh * 2, g.date, g.source, g.carrier, g.label)
-        ),
+        lambda s: s.apply(lambda g: Generation(g.amount_mwh * 2, g.date, g.label)),
         keys="a",
     )
     assert result["a"].sum() == grouped["a"].sum() * 2
@@ -828,22 +769,16 @@ def test_generation_group_apply_to_groups():
 
 def test_generation_group_filter_groups():
     """filter_groups keeps only groups matching the predicate."""
-    gs = GenerationStream.from_streams(
-        GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 2, source="a"),
-        GenerationStream.from_capacity(50, 0.8, date(2030, 1, 1), 1, source="b"),
-    )
-    grouped = gs.group_by(source=True)
+    gs = _two_group_stream()
+    grouped = gs.group_by(lambda g: g.label)
     result = grouped.filter_groups(lambda key, stream: stream.count() > 1)
     assert list(result.keys()) == ["a"]
 
 
 def test_generation_group_ungroup():
     """ungroup flattens grouped generation streams back to one stream."""
-    gs = GenerationStream.from_streams(
-        GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 2, source="a"),
-        GenerationStream.from_capacity(50, 0.8, date(2030, 1, 1), 1, source="b"),
-    )
-    grouped = gs.group_by(source=True)
+    gs = _two_group_stream()
+    grouped = gs.group_by(lambda g: g.label)
     result = grouped.ungroup()
     assert isinstance(result, GenerationStream)
     assert result.count() == gs.count()

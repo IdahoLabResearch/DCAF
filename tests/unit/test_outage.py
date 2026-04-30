@@ -230,7 +230,7 @@ def test_construction_outage_equivalence_with_builder_method():
         )
     )
     analysis = project.analyze()
-    builder_stream = analysis.cashflow_components["default:construction_outage"]
+    builder_stream = analysis.cashflow_components["construction_outage"]
 
     helper_stream = construction_outage(
         capacity_mw=1000.0,
@@ -268,6 +268,6 @@ def test_construction_outage_market_price_lookup_via_builder():
         )
     )
     analysis = project.analyze()
-    impact = analysis.cashflow_components["default:construction_outage"]
+    impact = analysis.cashflow_components["construction_outage"]
     expected = -(1000.0 * 0.92 * 24.0 * 10.0 * 42.0)
     assert impact.sum() == pytest.approx(expected)

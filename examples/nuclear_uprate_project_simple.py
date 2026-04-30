@@ -55,13 +55,11 @@ print(f"Operating years:    {analysis.timeline.operating_years:.2f} (365-day con
 print(f"Discount rate:      {discount_rate:.4%}")
 print()
 print(f"Total generation (MWh):      {analysis.generation.sum():,.0f}")
+print(f"Construction cash flow ($):  {analysis.cashflow_components['construction'].sum():,.0f}")
+print(f"Revenue cash flow ($):       {analysis.cashflow_components['revenue'].sum():,.0f}")
+print(f"PTC cash flow ($):           {analysis.cashflow_components['ptc'].sum():,.0f}")
 print(
-    f"Construction cash flow ($):  {analysis.cashflow_components['default:construction'].sum():,.0f}"
-)
-print(f"Revenue cash flow ($):       {analysis.cashflow_components['default:revenue'].sum():,.0f}")
-print(f"PTC cash flow ($):           {analysis.cashflow_components['default:ptc'].sum():,.0f}")
-print(
-    f"Outage impact ($):           {analysis.cashflow_components['default:construction_outage'].sum():,.0f}"
+    f"Outage impact ($):           {analysis.cashflow_components['construction_outage'].sum():,.0f}"
 )
 print()
 print(f"NPV ($):                 {metrics.npv:,.0f}")

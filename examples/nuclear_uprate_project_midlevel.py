@@ -111,8 +111,6 @@ generation = GenerationStream.from_capacity(
     start=OPERATIONS_START,
     periods=OPERATING_YEARS,
     frequency="year",
-    source="nuclear-uprate",
-    carrier="electricity",
     label="Uprate Generation",
 )
 

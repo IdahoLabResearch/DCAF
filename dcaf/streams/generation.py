@@ -2,8 +2,7 @@
 Generation stream module for physical energy quantities.
 
 Provides Generation (single data point), GenerationStream (container),
-and GenerationGroup (grouped container) for modeling MWh production
-from various sources and energy carriers.
+and GenerationGroup (grouped container) for modeling MWh production.
 """
 
 import datetime as dt
@@ -14,7 +13,6 @@ from typing import (
     Any,
     Callable,
     Iterable,
-    Literal,
     TypeVar,
     assert_never,
     overload,
@@ -60,26 +58,18 @@ class Generation:
         Energy produced in MWh.
     date : date
         Date of the generation.
-    source : str
-        Generation source identifier (e.g. "uprate", "unit_1").
-    carrier : str
-        Energy carrier type (e.g. "electricity", "hydrogen").
     label : str
         Descriptive label.
     """
 
     amount_mwh: float
     date: date
-    source: str = ""
-    carrier: str = "electricity"
     label: str = ""
 
     def replace(
         self,
         amount_mwh: float | None = None,
         date: dt.date | None = None,
-        source: str | None = None,
-        carrier: str | None = None,
         label: str | None = None,
     ) -> "Generation":
         """
@@ -89,8 +79,6 @@ class Generation:
         ----------
         amount_mwh: float | None = None
         date: date | None = None
-        source: str | None = None
-        carrier: str | None = None
         label: str | None = None
 
         Returns
@@ -120,8 +108,6 @@ class Generation:
         return Generation(
             amount_mwh=self.amount_mwh if amount_mwh is None else amount_mwh,
             date=self.date if date is None else date,
-            source=self.source if source is None else source,
-            carrier=self.carrier if carrier is None else carrier,
             label=self.label if label is None else label,
         )
 
@@ -207,24 +193,21 @@ class GenerationGroup(BaseGroup[KeyType, Generation, "GenerationStream"]):
 
     Examples
     --------
-    Group a multi-source stream and aggregate total MWh per source:
+    Group an annual stream by year and aggregate total MWh:
 
     >>> from datetime import date
     >>> from dcaf.streams import GenerationStream
-    >>> stream = GenerationStream.from_streams(
-    ...     GenerationStream.from_capacity(500, 0.92, date(2030, 1, 1), 5, source="unit_1"),
-    ...     GenerationStream.from_capacity(300, 0.88, date(2030, 1, 1), 5, source="unit_2"),
-    ... )
-    >>> by_source = stream.group_by(source=True)
-    >>> mwh_totals = by_source.sum()
+    >>> stream = GenerationStream.from_capacity(500, 0.92, date(2030, 1, 1), 5)
+    >>> by_year = stream.group_by(period="year")
+    >>> mwh_totals = by_year.sum()
 
     Keep only groups above a MWh threshold:
 
-    >>> large_groups = by_source.filter_groups(lambda key, s: s.sum() > 1_000_000)
+    >>> large_groups = by_year.filter_groups(lambda key, s: s.sum() > 1_000_000)
 
     Flatten back to a single stream:
 
-    >>> combined = by_source.ungroup()
+    >>> combined = by_year.ungroup()
     >>> combined.count() == stream.count()
     True
     """
@@ -256,25 +239,13 @@ class GenerationStream(BaseStream[Generation]):
     ...     capacity_factor=0.92,
     ...     start=date(2030, 1, 1),
     ...     periods=5,
-    ...     source="uprate",
     ... )
     >>> revenue = gen.to_revenue(price_per_mwh=55.0, escalation=0.02)
     >>> revenue.count()
     5
 
-    Combine two generation sources and group by source:
-
-    >>> base = GenerationStream.from_capacity(1_000, 0.90, date(2030, 1, 1), 3, source="base")
-    >>> uprate = GenerationStream.from_capacity(200, 0.92, date(2030, 1, 1), 3, source="uprate")
-    >>> combined = GenerationStream.from_streams(base, uprate)
-    >>> by_source = combined.group_by(source=True)
-    >>> list(by_source.keys())
-    ['base', 'uprate']
-
     Index and slice like a sequence:
 
-    >>> gen[0].source
-    'uprate'
     >>> gen[1:3].count()
     2
     """
@@ -291,8 +262,6 @@ class GenerationStream(BaseStream[Generation]):
         start: date,
         periods: int,
         frequency: Period = "year",
-        source: str = "",
-        carrier: str = "electricity",
         label: str = "Generation",
     ) -> "GenerationStream":
         """
@@ -310,10 +279,6 @@ class GenerationStream(BaseStream[Generation]):
             Number of periods.
         frequency : Period, optional
             Generation frequency. Default ``"year"``.
-        source : str, optional
-            Source identifier.
-        carrier : str, optional
-            Energy carrier. Default ``"electricity"``.
         label : str, optional
             Label template. ``{n}`` is replaced with the 1-based period index.
 
@@ -329,12 +294,9 @@ class GenerationStream(BaseStream[Generation]):
         ...     capacity_factor=0.9,
         ...     start=date(2030, 1, 1),
         ...     periods=2,
-        ...     source="unit_1",
         ... )
         >>> stream.count()
         2
-        >>> stream[0].source
-        'unit_1'
         """
         entries: list[Generation] = []
         hours = hours_per_period(frequency)
@@ -347,8 +309,6 @@ class GenerationStream(BaseStream[Generation]):
                 Generation(
                     amount_mwh=mwh,
                     date=current_date,
-                    source=source,
-                    carrier=carrier,
                     label=gen_label,
                 )
             )
@@ -365,8 +325,6 @@ class GenerationStream(BaseStream[Generation]):
         end: date,
         capacity_reduction: float = 1.0,
         timing: TimingConvention = "end",
-        source: str = "",
-        carrier: str = "electricity",
         label: str = "Generation Outage",
     ) -> "GenerationStream":
         """
@@ -396,10 +354,6 @@ class GenerationStream(BaseStream[Generation]):
             Date assigned to the negative generation entry. ``"begin"`` uses
             ``start``, ``"end"`` uses the final outage day, and ``"middle"``
             uses the midpoint of the inclusive outage dates.
-        source : str, optional
-            Source identifier for the outage entry.
-        carrier : str, optional
-            Energy carrier. Default is ``"electricity"``.
         label : str, optional
             Label for the negative generation entry.
 
@@ -441,8 +395,6 @@ class GenerationStream(BaseStream[Generation]):
                 Generation(
                     amount_mwh=-lost_mwh,
                     date=_outage_event_date(start=start, end=end, timing=timing),
-                    source=source,
-                    carrier=carrier,
                     label=label,
                 )
             ]
@@ -467,8 +419,8 @@ class GenerationStream(BaseStream[Generation]):
 
         Examples
         --------
-        >>> g1 = Generation(100.0, date(2030, 1, 1), source="unit_1")
-        >>> g2 = Generation(200.0, date(2031, 1, 1), source="unit_2")
+        >>> g1 = Generation(100.0, date(2030, 1, 1))
+        >>> g2 = Generation(200.0, date(2031, 1, 1))
         >>> stream = GenerationStream.from_streams(g1, [g2])
         >>> stream.count()
         2
@@ -482,8 +434,6 @@ class GenerationStream(BaseStream[Generation]):
         start: date,
         periods: int,
         frequency: Period = "year",
-        source: str = "",
-        carrier: str = "electricity",
         label: str = "Generation",
     ) -> "GenerationStream":
         """
@@ -501,10 +451,6 @@ class GenerationStream(BaseStream[Generation]):
             Number of periods to generate.
         frequency : Period, optional
             Generation frequency. Default ``"year"``.
-        source : str, optional
-            Source identifier for the appended entries.
-        carrier : str, optional
-            Energy carrier for the appended entries.
         label : str, optional
             Label template for the appended entries. ``{n}`` is
             replaced with the 1-based period index.
@@ -516,8 +462,8 @@ class GenerationStream(BaseStream[Generation]):
 
         Examples
         --------
-        >>> base = GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 2, source="a")
-        >>> expanded = base.with_capacity(50, 0.8, date(2030, 1, 1), 1, source="b")
+        >>> base = GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 2)
+        >>> expanded = base.with_capacity(50, 0.8, date(2032, 1, 1), 1)
         >>> expanded.count()
         3
         """
@@ -527,76 +473,39 @@ class GenerationStream(BaseStream[Generation]):
             start=start,
             periods=periods,
             frequency=frequency,
-            source=source,
-            carrier=carrier,
             label=label,
         )
         return self.extend(new)
 
     def filter(
         self,
-        fn: Callable[[Generation], bool] | None = None,
-        *,
-        source: str | None = None,
-        carrier: str | None = None,
+        fn: Callable[[Generation], bool],
     ) -> "GenerationStream":
         """
-        Return a new stream filtered by a predicate or keyword constraints.
+        Return a new stream filtered by a predicate.
 
         Parameters
         ----------
-        fn : Callable, optional
-            Predicate receiving a Generation; only entries where it returns True are kept.
-            Mutually exclusive with keyword arguments.
-        source : str, optional
-            Keep only entries with exactly this source value.
-        carrier : str, optional
-            Keep only entries with exactly this carrier value.
+        fn : Callable
+            Predicate receiving a Generation; only entries where it returns
+            True are kept.
 
         Returns
         -------
         GenerationStream
-            New stream containing only entries that match the predicate or field filters.
-
-        Raises
-        ------
-        ValueError
-            If both a predicate and keyword filters are supplied, or if no filter
-            criterion is supplied.
+            New stream containing only entries that match the predicate.
 
         Examples
         --------
         >>> stream.filter(lambda g: g.amount_mwh > 1000)
         GenerationStream(...)
-        >>> stream.filter(source="uprate")
-        GenerationStream(...)
-        >>> stream.filter(source="unit_1", carrier="electricity")
-        GenerationStream(...)
-
-        Notes
-        -----
-        Multiple keyword filters are combined with AND semantics.
         """
-        kwargs_given = source is not None or carrier is not None
-        if fn is not None and kwargs_given:
-            raise ValueError(
-                "Cannot pass both a predicate function and keyword arguments to filter()"
-            )
-        if fn is None and not kwargs_given:
-            raise ValueError("Provide either a predicate function or keyword arguments.")
-        if fn is not None:
-            return self._filter_where(fn)
-
-        return self._filter_by_attrs(source=source, carrier=carrier)
+        return self._filter_where(fn)
 
     @overload
     def group_by(
         self, fn: Callable[[Generation], KeyType]
     ) -> "GenerationGroup[KeyType]": ...
-    @overload
-    def group_by(self, fn: None = None, *, source: Literal[True]) -> "GenerationGroup[str]": ...
-    @overload
-    def group_by(self, fn: None = None, *, carrier: Literal[True]) -> "GenerationGroup[str]": ...
     @overload
     def group_by(self, fn: None = None, *, period: Period) -> "GenerationGroup[date]": ...
 
@@ -604,22 +513,16 @@ class GenerationStream(BaseStream[Generation]):
         self,
         fn: Callable[[Generation], Any] | None = None,
         *,
-        source: Literal[True] | None = None,
-        carrier: Literal[True] | None = None,
         period: Period | None = None,
     ) -> "GenerationGroup[Any]":
         """
-        Group entries by a key function or a named field.
+        Group entries by a key function or by time period.
 
         Parameters
         ----------
         fn : Callable, optional
             Key function mapping each Generation to a hashable group key.
-            Mutually exclusive with keyword arguments.
-        source : Literal[True], optional
-            Group by the ``source`` field.
-        carrier : Literal[True], optional
-            Group by the ``carrier`` field.
+            Mutually exclusive with ``period``.
         period : Period, optional
             Group by time period (``"day"``, ``"month"``, ``"quarter"``, ``"year"``).
 
@@ -631,47 +534,24 @@ class GenerationStream(BaseStream[Generation]):
         Raises
         ------
         ValueError
-            If more than one grouping mode is requested, or if no grouping mode
-            is provided.
+            If both ``fn`` and ``period`` are supplied or neither is supplied.
 
         Examples
         --------
         >>> stream.group_by(lambda g: g.date.year)
         GenerationGroup(...)
-        >>> stream.group_by(source=True)
-        GenerationGroup(...)
-        >>> stream.group_by(carrier=True)
-        GenerationGroup(...)
         >>> stream.group_by(period="month")
         GenerationGroup(...)
         """
-        # We blend two API styles in one function call:
-        #   1. Provide a callable function which returns the value to group by
-        #   2. Indicate a `Generation` field to group by
-        # These are mutually exclusive, and we currently support only choosing one field by
-        # which to group using the field keyword args.
-        kwargs_given = source is not None or carrier is not None or period is not None
-        if fn is not None and kwargs_given:
-            raise ValueError("Cannot pass both a key function and keyword arguments to group_by()")
-        n_kwargs = sum(x is not None for x in (source, carrier, period))
-        if n_kwargs > 1:
-            raise ValueError("group_by() accepts at most one keyword argument")
-        if fn is None and not kwargs_given:
-            raise ValueError("group_by() requires a key function or keyword argument")
+        if fn is not None and period is not None:
+            raise ValueError("Cannot pass both a key function and 'period' to group_by()")
+        if fn is None and period is None:
+            raise ValueError("group_by() requires a key function or 'period' argument")
 
         if fn is not None:
             groups = self._grouped_entries_by_key(fn)
             return GenerationGroup(self._grouped_streams(groups))
 
-        if source is True:
-            src_groups: dict[str, list[Generation]] = self._grouped_entries_by_attr("source")
-            return GenerationGroup(self._grouped_streams(src_groups))
-
-        if carrier is True:
-            car_groups: dict[str, list[Generation]] = self._grouped_entries_by_attr("carrier")
-            return GenerationGroup(self._grouped_streams(car_groups))
-
-        # period is set
         assert period is not None
         per_groups = self._grouped_entries_by_period(period)
         return GenerationGroup(self._grouped_streams(per_groups))
@@ -704,7 +584,7 @@ class GenerationStream(BaseStream[Generation]):
         ----------
         fn : Callable[[Generation], SupportsLessThan], optional
             Sort key function applied to each entry.
-        attr : {"date", "amount_mwh", "source", "carrier", "label"}, optional
+        attr : {"date", "amount_mwh", "label"}, optional
             Named ``Generation`` attribute to sort by.
         descending : bool, optional
             If ``True``, sort in descending order.
@@ -724,7 +604,7 @@ class GenerationStream(BaseStream[Generation]):
         """
         if fn is not None and attr is not None:
             raise ValueError("Cannot pass both a key function and 'attr' to sort()")
-        if attr not in (None, "date", "amount_mwh", "source", "carrier", "label"):
+        if attr not in (None, "date", "amount_mwh", "label"):
             raise AssertionError(f"Unexpected sort attribute: {attr!r}")
         if fn is not None:
             return super().sort(fn, descending=descending)
@@ -750,14 +630,6 @@ class GenerationStream(BaseStream[Generation]):
         --------
         >>> # Add 20% to all generation amounts
         >>> scaled_gen_stream = gen_stream.scale(1.2)
-
-        >>> # Reduce generation amounts from an uprate by 10%
-        >>> uprate_stream = stream.filter(source="uprate")
-        >>> non_uprate_stream = GenerationStream(
-        ...     entries=list(set(stream.entries) - set(uprate_stream.entries))
-        ... )
-        >>> scaled_uprate_stream = uprate_stream.scale(0.9)
-        >>> result_stream = GenerationStream.from_streams(scaled_uprate_stream, non_uprate_stream)
         """
         return GenerationStream([e.replace(e.amount_mwh * factor) for e in self.entries])
 

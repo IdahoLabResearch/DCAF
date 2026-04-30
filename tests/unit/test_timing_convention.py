@@ -137,7 +137,7 @@ class TestConstructionTimingEndOfPeriod:
             .revenue_from_generation(sell_price_per_unit=50.0)
         )
         analysis = project.analyze()
-        capex_stream = analysis.cashflow_components["default:construction"]
+        capex_stream = analysis.cashflow_components["construction"]
         capex_dates = [cf.date for cf in capex_stream.entries]
         assert capex_dates == [
             date(2025, 12, 31),
@@ -186,7 +186,7 @@ class TestOperationsTimingEndOfPeriod:
 
     def test_fixed_opex_dates_end_of_period(self, project):
         analysis = project.analyze()
-        opex_stream = analysis.cashflow_components["default:fixed_opex"]
+        opex_stream = analysis.cashflow_components["fixed_opex"]
         opex_dates = [cf.date for cf in opex_stream.entries]
         assert opex_dates == [
             date(2030, 12, 31),
@@ -195,7 +195,7 @@ class TestOperationsTimingEndOfPeriod:
 
     def test_revenue_inherits_generation_dates(self, project):
         analysis = project.analyze()
-        revenue_stream = analysis.cashflow_components["default:revenue"]
+        revenue_stream = analysis.cashflow_components["revenue"]
         revenue_dates = [cf.date for cf in revenue_stream.entries]
         assert revenue_dates == [
             date(2030, 12, 31),
@@ -259,7 +259,7 @@ class TestBeginOfPeriodTiming:
             .fixed_opex(amount=500_000, frequency="year")
         )
         analysis = project.analyze()
-        opex_stream = analysis.cashflow_components["default:fixed_opex"]
+        opex_stream = analysis.cashflow_components["fixed_opex"]
         opex_dates = [cf.date for cf in opex_stream.entries]
         # max(period_start, ops_start=2025-03-15)
         # dt=2025-03-15: period_start=2025-01-01, max=2025-03-15
@@ -369,7 +369,7 @@ class TestPerComponentTimingOverride:
         ]
 
         # OPEX uses "end" (project default)
-        opex_stream = analysis.cashflow_components["default:fixed_opex"]
+        opex_stream = analysis.cashflow_components["fixed_opex"]
         opex_dates = [cf.date for cf in opex_stream.entries]
         assert opex_dates == [
             date(2025, 12, 31),
@@ -405,7 +405,7 @@ class TestDepreciationRemapping:
             .depreciation_macrs(property_class=5)
         )
         analysis = project.analyze()
-        dep_stream = analysis.cashflow_components["default:depreciation"]
+        dep_stream = analysis.cashflow_components["depreciation"]
         dep_dates = [cf.date for cf in dep_stream.entries]
         # MACRS 5-year generates dates at placed_in_service + i years.
         # With "end" timing, remapped to min(year-end, ops_end):
@@ -448,7 +448,7 @@ class TestDebtRemapping:
             )
         )
         analysis = project.analyze()
-        debt_stream = analysis.cashflow_components["default:debt_service"]
+        debt_stream = analysis.cashflow_components["debt_service"]
         unique_dates = sorted(set(cf.date for cf in debt_stream.entries))
         # Amortization starts at operations_start (2025-03-15).
         # With "end" timing, remapped to min(year-end, ops_end):

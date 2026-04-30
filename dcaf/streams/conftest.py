@@ -30,7 +30,7 @@ def create_streams(request, doctest_namespace):
         doctest_namespace.clear()
     elif "generation" in module_name:
         # GenerationStreams
-        stream = GenerationStream([Generation(1000.0, date(2027, 1, 1), source="unit_1")])
+        stream = GenerationStream([Generation(1000.0, date(2027, 1, 1), label="unit_1")])
         doctest_namespace["stream"] = stream
         doctest_namespace["gen_stream"] = stream
 

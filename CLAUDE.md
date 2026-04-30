@@ -48,9 +48,9 @@ The public API is re-exported from `dcaf/__init__.py`. Business logic is organiz
 - **`CashFlowStream`** — Primary container of `CashFlow` objects. All operations (filter, apply, sort, group) return new instances. Supports fluent chaining: `stream.filter(fn).sort(fn).apply(fn)`.
 - **`CashFlowGroup[KeyType]`** — Generic dict-like container mapping keys to `CashFlowStream`s. Produced by `group_by()`, `group_by_tag()`, `group_by_period()`. Supports `aggregate()`, `apply_to_groups()`, and `ungroup()`.
 - **`CashFlowTags`** — Enum for categorization: REVENUE, EXPENSE, TAXABLE, TAX_DEDUCTIBLE, CAPEX, OPEX, DEPRECIATION.
-- **`Generation`** — Frozen dataclass for a single generation data point with `amount_mwh`, `date`, `source`, `carrier`, and `label`.
+- **`Generation`** — Frozen dataclass for a single generation data point with `amount_mwh`, `date`, and `label`.
 - **`GenerationStream`** — Container for `Generation` objects mirroring the CashFlowStream pattern. Supports `from_capacity()` factory, `filter()`, `group_by()`, `sum()`, `discounted_sum()`, and conversion methods (`to_revenue()`, `to_cost()`) that produce `CashFlowStream` objects.
-- **`GenerationGroup[KeyType]`** — Generic dict-like container mapping keys to `GenerationStream`s. Supports grouping by `source`, `carrier`, or `period`.
+- **`GenerationGroup[KeyType]`** — Generic dict-like container mapping keys to `GenerationStream`s. Supports grouping by a key function or by time `period`.
 
 ### Key Design Patterns
 

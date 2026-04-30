@@ -79,8 +79,6 @@ classDiagram
       <<dataclass>>
       +amount_mwh: float
       +date: date
-      +source: str
-      +carrier: str
       +label: str
     }
 

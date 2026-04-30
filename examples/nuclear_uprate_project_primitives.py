@@ -90,8 +90,6 @@ generation = GenerationStream(
         Generation(
             amount_mwh=annual_mwh,
             date=date(OPERATIONS_START.year + i, 1, 1),
-            source="nuclear-uprate",
-            carrier="electricity",
             label=f"Generation {OPERATIONS_START.year + i}",
         )
         for i in range(OPERATING_YEARS)

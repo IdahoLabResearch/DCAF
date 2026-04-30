@@ -46,12 +46,12 @@ def test_energy_project_single_asset_workflow_builds_analysis_and_metrics():
     assert analysis.valuation is not None
     assert analysis.valuation.discount_rate == pytest.approx(0.09728)
     assert set(analysis.cashflow_components.keys()) >= {
-        "default:construction",
-        "default:revenue",
-        "default:fixed_opex",
-        "default:variable_cost",
-        "default:depreciation",
-        "default:itc",
+        "construction",
+        "revenue",
+        "fixed_opex",
+        "variable_cost",
+        "depreciation",
+        "itc",
         "project:tax_liability",
     }
 
@@ -66,7 +66,7 @@ def test_energy_project_single_asset_workflow_builds_analysis_and_metrics():
 
     pro_forma = analysis.pro_forma(period="year")
     assert "Free Cash Flow to Equity" in pro_forma.row_map()
-    assert "default:revenue" in pro_forma.row_map()
+    assert "revenue" in pro_forma.row_map()
     assert len(pro_forma.periods) >= 2
 
 
@@ -109,8 +109,6 @@ def test_energy_project_levelized_cost_matches_real_carrying_charge_methodology(
                 capacity_factor=capacity_factor,
                 operations_start=operations_start,
                 operations_end=operations_end,
-                carrier="electricity",
-                source="nuclear-uprate",
                 label="Uprate Generation",
             )
         )
@@ -268,26 +266,6 @@ def test_energy_project_metrics_treats_irr_overflow_as_non_convergence():
     assert metrics.xirr is None
 
 
-def test_energy_project_prices_mixed_carrier_generation_per_carrier_market():
-    project = (
-        EnergyProject()
-        .generation_stream(
-            stream=GenerationStream(
-                [
-                    Generation(10.0, date(2026, 1, 1), carrier="electricity", label="Electricity"),
-                    Generation(5.0, date(2026, 1, 1), carrier="steam", label="Steam"),
-                ]
-            )
-        )
-        .revenue_from_generation(carrier="electricity", sell_price_per_unit=50.0)
-        .revenue_from_generation(carrier="steam", sell_price_per_unit=20.0)
-    )
-
-    analysis = project.analyze()
-
-    assert analysis.cashflow_components["default:revenue"].sum() == pytest.approx(600.0)
-
-
 def test_energy_project_derives_debt_principal_from_construction():
     project = (
         EnergyProject()
@@ -312,7 +290,7 @@ def test_energy_project_derives_debt_principal_from_construction():
     )
 
     analysis = project.analyze()
-    assert analysis.cashflow_components["default:debt_service"].sum() == pytest.approx(-550.0)
+    assert analysis.cashflow_components["debt_service"].sum() == pytest.approx(-550.0)
 
 
 def test_energy_project_generation_stream_sets_generation_explicitly():
@@ -356,11 +334,9 @@ def test_energy_project_generation_outage_reduces_modeled_generation_economics()
 
     assert analysis.generation.count() == 2
     assert analysis.generation.sum() == pytest.approx(net_mwh)
-    assert analysis.cashflow_components["default:revenue"].sum() == pytest.approx(net_mwh * 50.0)
-    assert analysis.cashflow_components["default:variable_cost"].sum() == pytest.approx(
-        -net_mwh * 5.0
-    )
-    assert analysis.cashflow_components["default:ptc"].sum() == pytest.approx(net_mwh)
+    assert analysis.cashflow_components["revenue"].sum() == pytest.approx(net_mwh * 50.0)
+    assert analysis.cashflow_components["variable_cost"].sum() == pytest.approx(-net_mwh * 5.0)
+    assert analysis.cashflow_components["ptc"].sum() == pytest.approx(net_mwh)
     assert analysis.metrics(discount_rate=0.08, valuation_date=date(2026, 1, 1)).levelized_cost
 
 
@@ -388,7 +364,7 @@ def test_energy_project_construction_outage_preserves_generation():
     analysis = project.analyze()
     lost_mwh = 1000.0 * 0.92 * 24.0 * 10.0
     expected_impact = -(lost_mwh * 50.0 + 1_000_000.0 + 10_000.0 * 10.0)
-    impact = analysis.cashflow_components["default:construction_outage"]
+    impact = analysis.cashflow_components["construction_outage"]
 
     assert analysis.generation.sum() == pytest.approx(10.0 * 8760.0)
     assert impact.sum() == pytest.approx(expected_impact)
@@ -452,7 +428,6 @@ def test_energy_project_construction_outage_models_two_construction_outages():
             capacity_factor=0.92,
             operations_start=date(2032, 1, 1),
             operations_end=date(2033, 1, 1),
-            source="nuclear-uprate",
         )
         .revenue_from_generation(sell_price_per_unit=45.0)
         .construction_outage(
@@ -475,10 +450,10 @@ def test_energy_project_construction_outage_models_two_construction_outages():
     expected_per_outage = -(1000.0 * 0.92 * 24.0 * 10.0 * 45.0)
 
     assert analysis.generation.sum() == pytest.approx(220.0 * 0.92 * 8760.0 * 366.0 / 365.0)
-    assert analysis.cashflow_components["default:construction_outage:refueling_1"].sum() == (
+    assert analysis.cashflow_components["construction_outage:refueling_1"].sum() == (
         pytest.approx(expected_per_outage)
     )
-    assert analysis.cashflow_components["default:construction_outage:refueling_2"].sum() == (
+    assert analysis.cashflow_components["construction_outage:refueling_2"].sum() == (
         pytest.approx(expected_per_outage)
     )
 
@@ -505,7 +480,7 @@ def test_energy_project_prorates_partial_operating_periods_from_generation_dates
     assert analysis.timeline.operating_years == pytest.approx(expected_operating_years)
     assert analysis.generation.count() == 2
     assert analysis.generation.sum() == pytest.approx(expected_generation)
-    assert analysis.cashflow_components["default:fixed_opex"].sum() == pytest.approx(expected_opex)
+    assert analysis.cashflow_components["fixed_opex"].sum() == pytest.approx(expected_opex)
 
 
 def test_project_pro_forma_can_write_csv(tmp_path):
@@ -533,7 +508,7 @@ def test_project_pro_forma_can_write_csv(tmp_path):
     assert rows[1][0] == "Revenues"
     assert float(row_map["Revenues"][0]) == pytest.approx(1.0 * 8760.0 * 50.0)
     assert float(row_map["Free Cash Flow to Equity"][0]) == pytest.approx(1.0 * 8760.0 * 50.0)
-    assert float(row_map["default:revenue"][0]) == pytest.approx(1.0 * 8760.0 * 50.0)
+    assert float(row_map["revenue"][0]) == pytest.approx(1.0 * 8760.0 * 50.0)
 
 
 def test_project_pro_forma_groups_categories_and_computes_subtotals():
@@ -661,7 +636,7 @@ def test_project_pro_forma_groups_categories_and_computes_subtotals():
     assert row_map["capex"] == pytest.approx((-100.0,))
     assert row_map["depreciation"] == pytest.approx((-20.0,))
     assert row_map["tax_credit"] == pytest.approx((10.0,))
-    assert row_map["default:debt_service"] == pytest.approx((-110.0,))
+    assert row_map["debt_service"] == pytest.approx((-110.0,))
     assert "project:tax_liability" not in row_map
 
 
@@ -680,7 +655,7 @@ def test_energy_project_cashflow_modifiers_can_rewrite_components_before_tax():
 
     def halve_revenue(components):
         updated = dict(components.items())
-        updated["default:revenue"] = updated["default:revenue"].apply(
+        updated["revenue"] = updated["revenue"].apply(
             lambda flow: flow.replace(amount=flow.amount * 0.5)
         )
         return updated
@@ -690,8 +665,8 @@ def test_energy_project_cashflow_modifiers_can_rewrite_components_before_tax():
     base_analysis = base_project.analyze()
     modified_analysis = modified_project.analyze()
 
-    assert modified_analysis.cashflow_components["default:revenue"].sum() == pytest.approx(
-        base_analysis.cashflow_components["default:revenue"].sum() * 0.5
+    assert modified_analysis.cashflow_components["revenue"].sum() == pytest.approx(
+        base_analysis.cashflow_components["revenue"].sum() * 0.5
     )
     assert modified_analysis.taxable_income.sum() == pytest.approx(
         base_analysis.taxable_income.sum() * 0.5
@@ -717,16 +692,12 @@ def test_energy_project_supports_multiple_named_fixed_opex_items():
     )
 
     analysis = project.analyze()
-    assert "default:fixed_opex:om" in analysis.cashflow_components
-    assert "default:fixed_opex:insurance" in analysis.cashflow_components
-    assert "default:fixed_opex:land_lease" in analysis.cashflow_components
-    assert analysis.cashflow_components["default:fixed_opex:om"].sum() == pytest.approx(-100.0)
-    assert analysis.cashflow_components["default:fixed_opex:insurance"].sum() == pytest.approx(
-        -50.0
-    )
-    assert analysis.cashflow_components["default:fixed_opex:land_lease"].sum() == pytest.approx(
-        -30.0
-    )
+    assert "fixed_opex:om" in analysis.cashflow_components
+    assert "fixed_opex:insurance" in analysis.cashflow_components
+    assert "fixed_opex:land_lease" in analysis.cashflow_components
+    assert analysis.cashflow_components["fixed_opex:om"].sum() == pytest.approx(-100.0)
+    assert analysis.cashflow_components["fixed_opex:insurance"].sum() == pytest.approx(-50.0)
+    assert analysis.cashflow_components["fixed_opex:land_lease"].sum() == pytest.approx(-30.0)
 
 
 def test_energy_project_default_named_fixed_opex_uses_backward_compatible_key():
@@ -742,8 +713,8 @@ def test_energy_project_default_named_fixed_opex_uses_backward_compatible_key():
     )
 
     analysis = project.analyze()
-    assert "default:fixed_opex" in analysis.cashflow_components
-    assert analysis.cashflow_components["default:fixed_opex"].sum() == pytest.approx(-100.0)
+    assert "fixed_opex" in analysis.cashflow_components
+    assert analysis.cashflow_components["fixed_opex"].sum() == pytest.approx(-100.0)
 
 
 def test_energy_project_supports_multiple_named_variable_cost_items():
@@ -761,12 +732,10 @@ def test_energy_project_supports_multiple_named_variable_cost_items():
 
     analysis = project.analyze()
     gen_mwh = analysis.generation.sum()
-    assert "default:variable_cost:fuel" in analysis.cashflow_components
-    assert "default:variable_cost:water" in analysis.cashflow_components
-    assert analysis.cashflow_components["default:variable_cost:fuel"].sum() == pytest.approx(
-        -5.0 * gen_mwh
-    )
-    assert analysis.cashflow_components["default:variable_cost:water"].sum() == pytest.approx(
+    assert "variable_cost:fuel" in analysis.cashflow_components
+    assert "variable_cost:water" in analysis.cashflow_components
+    assert analysis.cashflow_components["variable_cost:fuel"].sum() == pytest.approx(-5.0 * gen_mwh)
+    assert analysis.cashflow_components["variable_cost:water"].sum() == pytest.approx(
         -2.0 * gen_mwh
     )
 
@@ -785,8 +754,8 @@ def test_energy_project_named_fixed_opex_replaces_by_name():
     )
 
     analysis = project.analyze()
-    assert "default:fixed_opex:om" in analysis.cashflow_components
-    assert analysis.cashflow_components["default:fixed_opex:om"].sum() == pytest.approx(-200.0)
+    assert "fixed_opex:om" in analysis.cashflow_components
+    assert analysis.cashflow_components["fixed_opex:om"].sum() == pytest.approx(-200.0)
 
 
 def test_energy_project_explicit_zero_escalation_overrides_project_default():
@@ -805,10 +774,8 @@ def test_energy_project_explicit_zero_escalation_overrides_project_default():
 
     analysis = project.analyze()
 
-    assert analysis.cashflow_components["default:fixed_opex:flat"].sum() == pytest.approx(-200.0)
-    assert analysis.cashflow_components["default:fixed_opex"].sum() == pytest.approx(
-        -230.94, abs=0.1
-    )
+    assert analysis.cashflow_components["fixed_opex:flat"].sum() == pytest.approx(-200.0)
+    assert analysis.cashflow_components["fixed_opex"].sum() == pytest.approx(-230.94, abs=0.1)
 
 
 # --- Debt principal derivation: capitalize vs pay ---
@@ -841,7 +808,7 @@ def test_energy_project_debt_principal_is_not_tax_deductible():
     )
 
     analysis = project.analyze()
-    debt_service = analysis.cashflow_components["default:debt_service"]
+    debt_service = analysis.cashflow_components["debt_service"]
 
     assert debt_service.sum() == pytest.approx(-110.0)
     assert debt_service.filter(
@@ -886,8 +853,8 @@ def test_energy_project_debt_principal_capitalize_vs_pay():
     capitalize_analysis = _build("capitalize")
     pay_analysis = _build("pay")
 
-    cap_debt = abs(capitalize_analysis.cashflow_components["default:debt_service"].sum())
-    pay_debt = abs(pay_analysis.cashflow_components["default:debt_service"].sum())
+    cap_debt = abs(capitalize_analysis.cashflow_components["debt_service"].sum())
+    pay_debt = abs(pay_analysis.cashflow_components["debt_service"].sum())
 
     # Both should have debt service
     assert cap_debt > 0.0
@@ -897,7 +864,7 @@ def test_energy_project_debt_principal_capitalize_vs_pay():
     assert cap_debt > pay_debt
 
     # Verify the pay mode principal derives only from cash capex
-    construction = pay_analysis.cashflow_components["default:construction"]
+    construction = pay_analysis.cashflow_components["construction"]
     capex = construction.filter(pro_forma_category=ProFormaCategory.CAPITAL_COST)
     cash_basis = abs(capex.cash_only().sum())
     expected_pay_principal = cash_basis * 0.5
@@ -1022,7 +989,7 @@ def test_energy_project_overnight_cost_without_spend_profile():
     )
 
     analysis = project.analyze()
-    construction = analysis.cashflow_components["default:construction"]
+    construction = analysis.cashflow_components["construction"]
     assert construction.count() == 1
     assert construction.sum() == pytest.approx(-1_000.0)
     # Booked at operations_start (COD default)
@@ -1043,7 +1010,7 @@ def test_energy_project_overnight_cost_with_explicit_cod_date():
     )
 
     analysis = project.analyze()
-    construction = analysis.cashflow_components["default:construction"]
+    construction = analysis.cashflow_components["construction"]
     assert construction.entries[0].date == date(2025, 7, 1)
 
 

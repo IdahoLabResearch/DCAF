@@ -3,11 +3,6 @@
 This module provides an explicit ``EnergyProject`` builder that wraps the
 lower-level DCAF primitives into a configuration-oriented workflow. The builder
 stays immutable: each configuration method returns a new project.
-
-The implementation is intentionally plural-first. Assets are keyed by name and
-market assumptions are keyed by carrier, with optional asset-specific market
-overrides. The single-asset case remains ergonomic by using the implicit asset
-name ``"default"``.
 """
 
 from __future__ import annotations
@@ -164,7 +159,7 @@ class _ScheduledPeriod:
 
 @dataclass(frozen=True)
 class _CapacityGenerationConfig:
-    """Configuration for capacity-based generation inputs on a single asset."""
+    """Configuration for capacity-based generation inputs."""
 
     capacity_mw: float
     capacity_factor: float
@@ -173,8 +168,6 @@ class _CapacityGenerationConfig:
     start: date | None = None
     periods: int | None = None
     frequency: Period | None = None
-    carrier: str = "electricity"
-    source: str | None = None
     label: str = "Generation"
     timing: TimingConvention | None = None
 
@@ -204,8 +197,6 @@ class _GenerationOutageConfig:
     capacity_factor: float | None = None
     capacity_reduction: float = 1.0
     timing: TimingConvention | None = None
-    source: str | None = None
-    carrier: str | None = None
     label: str = "Generation Outage"
 
 
@@ -220,8 +211,6 @@ class _ConstructionOutageConfig:
     capacity_factor: float
     capacity_reduction: float = 1.0
     timing: TimingConvention | None = None
-    carrier: str = "electricity"
-    source: str = "construction-outage"
     sell_price_per_unit: float | None = None
     fixed_cost: float = 0.0
     cost_per_day: float = 0.0
@@ -342,25 +331,8 @@ class _PtcConfig:
 
 
 @dataclass(frozen=True)
-class _AssetConfig:
-    """All configuration for a single named project asset."""
-
-    generation: _GenerationConfig = None
-    generation_outages: tuple[_GenerationOutageConfig, ...] = ()
-    construction_outages: dict[str, _ConstructionOutageConfig] = field(default_factory=dict)
-    fixed_opex_items: dict[str, _RecurringCostConfig] = field(default_factory=dict)
-    variable_cost_items: dict[str, _VariableCostConfig] = field(default_factory=dict)
-    construction: _ConstructionConfig = None
-    construction_debt: _ConstructionDebtConfig | None = None
-    debt_schedule: _DebtScheduleConfig | None = None
-    depreciation: _DepreciationConfig = None
-    itc_rate: float | None = None
-    ptc: _PtcConfig | None = None
-
-
-@dataclass(frozen=True)
 class _MarketConfig:
-    """Market price and escalation configuration for one energy carrier."""
+    """Market price and escalation configuration."""
 
     sell_price_per_unit: float
     unit: str | None = None
@@ -372,12 +344,21 @@ class _MarketConfig:
 class _ProjectConfig:
     """Top-level internal configuration bag for an ``EnergyProject``."""
 
-    default_asset: str = "default"
     frequency: Period = "year"
     timing: TimingConvention = "end"
     timeline: ProjectTimeline = field(default_factory=ProjectTimeline)
-    assets: dict[str, _AssetConfig] = field(default_factory=dict)
-    markets: dict[str, _MarketConfig] = field(default_factory=dict)
+    generation: _GenerationConfig = None
+    generation_outages: tuple[_GenerationOutageConfig, ...] = ()
+    construction_outages: dict[str, _ConstructionOutageConfig] = field(default_factory=dict)
+    fixed_opex_items: dict[str, _RecurringCostConfig] = field(default_factory=dict)
+    variable_cost_items: dict[str, _VariableCostConfig] = field(default_factory=dict)
+    construction: _ConstructionConfig = None
+    construction_debt: _ConstructionDebtConfig | None = None
+    debt_schedule: _DebtScheduleConfig | None = None
+    depreciation: _DepreciationConfig = None
+    itc_rate: float | None = None
+    ptc: _PtcConfig | None = None
+    market: _MarketConfig | None = None
     tax_rate: float | None = None
     tax_allow_refund: bool = False
     valuation: ProjectValuation | None = None
@@ -390,8 +371,7 @@ class EnergyProject:
     """Immutable fluent builder for composing and analyzing energy project cash flows.
 
     Each configuration method returns a new ``EnergyProject`` instance, leaving
-    the original unchanged. All builder methods operate on the single asset
-    configured at construction time.
+    the original unchanged.
 
     Call :meth:`analyze` to compile all configured inputs into a
     :class:`ProjectAnalysis`, or use the convenience methods
@@ -425,7 +405,6 @@ class EnergyProject:
     def __init__(
         self,
         *,
-        asset: str = "default",
         frequency: Period = "year",
         timing: TimingConvention = "end",
     ) -> None:
@@ -433,10 +412,6 @@ class EnergyProject:
 
         Parameters
         ----------
-        asset : str, optional
-            Name for the single project asset. Used as a prefix for component
-            keys in the compiled :class:`ProjectAnalysis` (e.g.
-            ``"<asset>:revenue"``). Default is ``"default"``.
         frequency : Period, optional
             Default operating frequency for recurring items. Default is
             ``"year"``; change only when modeling sub-annual periods.
@@ -447,7 +422,6 @@ class EnergyProject:
             floored by the phase start.
         """
         self._config = _ProjectConfig(
-            default_asset=asset,
             frequency=frequency,
             timing=timing,
         )
@@ -615,12 +589,10 @@ class EnergyProject:
         start: date | None = None,
         periods: int | None = None,
         frequency: Period | None = None,
-        carrier: str = "electricity",
-        source: str | None = None,
         label: str | None = None,
         timing: TimingConvention | None = None,
     ) -> Self:
-        """Configure capacity-based generation for an asset.
+        """Configure capacity-based generation for the project.
 
         The ``operations_start`` and ``operations_end`` dates define the
         operating window for the entire project. All recurring operating
@@ -634,7 +606,7 @@ class EnergyProject:
         capacity_factor : float, optional
             Fraction of full capacity realized on average (0–1).
         operations_start : date, optional
-            Date on which the asset enters operation. Used as the default start
+            Date on which the project enters operation. Used as the default start
             for generation, fixed OPEX, debt service, depreciation, and tax
             incentives. Required when ``start`` and ``periods`` are not both
             provided.
@@ -652,10 +624,6 @@ class EnergyProject:
         frequency : Period, optional
             Generation period frequency. Defaults to the project-wide frequency
             set at construction time.
-        carrier : str, optional
-            Energy carrier label (e.g. ``"electricity"``). Default is ``"electricity"``.
-        source : str, optional
-            Generation source label. Defaults to the asset name.
         label : str, optional
             Label template for individual generation entries. Use ``{n}`` as a
             period index placeholder if desired.
@@ -665,10 +633,8 @@ class EnergyProject:
         EnergyProject
             New project with updated generation configuration.
         """
-        asset = self._config.default_asset
         _validate_finite(capacity_mw, "capacity_mw")
         _validate_finite(capacity_factor, "capacity_factor")
-        asset_config = self._asset_config(asset)
         updated_generation = _CapacityGenerationConfig(
             capacity_mw=capacity_mw,
             capacity_factor=capacity_factor,
@@ -677,19 +643,17 @@ class EnergyProject:
             start=start,
             periods=periods,
             frequency=frequency,
-            carrier=carrier,
-            source=source,
             label="Generation" if label is None else label,
             timing=timing,
         )
-        return self._with_asset(asset, dc_replace(asset_config, generation=updated_generation))
+        return self._copy(config=dc_replace(self._config, generation=updated_generation))
 
     def generation_stream(
         self,
         *,
         stream: GenerationStream,
     ) -> Self:
-        """Configure a pre-built generation stream for the asset.
+        """Configure a pre-built generation stream for the project.
 
         Operations-period dates are inferred from the minimum and maximum dates
         in the provided stream.
@@ -704,11 +668,8 @@ class EnergyProject:
         EnergyProject
             New project with updated generation configuration.
         """
-        asset = self._config.default_asset
-        asset_config = self._asset_config(asset)
-        return self._with_asset(
-            asset,
-            dc_replace(asset_config, generation=_GenerationStreamConfig(stream=stream)),
+        return self._copy(
+            config=dc_replace(self._config, generation=_GenerationStreamConfig(stream=stream)),
         )
 
     def generation_outage(
@@ -721,8 +682,6 @@ class EnergyProject:
         capacity_factor: float | None = None,
         capacity_reduction: float = 1.0,
         timing: TimingConvention | None = None,
-        source: str | None = None,
-        carrier: str | None = None,
         label: str | None = None,
     ) -> Self:
         """Configure an outage that reduces modeled project generation.
@@ -751,11 +710,6 @@ class EnergyProject:
         timing : TimingConvention, optional
             Booking date convention for the negative generation entry. Defaults
             to the outage generation timing or project timing.
-        source : str, optional
-            Source identifier for the outage generation entry. Defaults to the
-            generation source.
-        carrier : str, optional
-            Energy carrier. Defaults to the generation carrier.
         label : str, optional
             Label for the negative generation entry.
 
@@ -771,8 +725,6 @@ class EnergyProject:
             _validate_non_negative(capacity_factor, "capacity_factor")
         _validate_capacity_reduction(capacity_reduction)
 
-        asset = self._config.default_asset
-        asset_config = self._asset_config(asset)
         outage = _GenerationOutageConfig(
             name=name,
             start=start,
@@ -781,15 +733,12 @@ class EnergyProject:
             capacity_factor=capacity_factor,
             capacity_reduction=capacity_reduction,
             timing=timing,
-            source=source,
-            carrier=carrier,
             label="Generation Outage" if label is None else label,
         )
-        return self._with_asset(
-            asset,
-            dc_replace(
-                asset_config,
-                generation_outages=(*asset_config.generation_outages, outage),
+        return self._copy(
+            config=dc_replace(
+                self._config,
+                generation_outages=(*self._config.generation_outages, outage),
             ),
         )
 
@@ -803,8 +752,6 @@ class EnergyProject:
         name: str = "default",
         capacity_reduction: float = 1.0,
         timing: TimingConvention | None = None,
-        carrier: str = "electricity",
-        source: str = "construction-outage",
         sell_price_per_unit: float | None = None,
         fixed_cost: float = 0.0,
         cost_per_day: float = 0.0,
@@ -844,13 +791,9 @@ class EnergyProject:
             Fraction of affected capacity unavailable during the outage.
         timing : TimingConvention, optional
             Booking-date convention for generated cashflows.
-        carrier : str, optional
-            Market carrier used for price lookup when ``sell_price_per_unit`` is omitted.
-        source : str, optional
-            Source identifier for the internal negative generation.
         sell_price_per_unit : float, optional
-            Explicit outage price per MWh. When omitted, the configured market
-            price for ``carrier`` is used.
+            Explicit outage price per MWh. When omitted, the project's
+            configured market price is used.
         fixed_cost : float, optional
             Additional one-time outage cost. Sign is ignored.
         cost_per_day : float, optional
@@ -878,8 +821,6 @@ class EnergyProject:
         _validate_finite(fixed_cost, "fixed_cost")
         _validate_finite(cost_per_day, "cost_per_day")
 
-        asset = self._config.default_asset
-        asset_config = self._asset_config(asset)
         outage = _ConstructionOutageConfig(
             name=name,
             start=start,
@@ -888,8 +829,6 @@ class EnergyProject:
             capacity_factor=capacity_factor,
             capacity_reduction=capacity_reduction,
             timing=timing,
-            carrier=carrier,
-            source=source,
             sell_price_per_unit=sell_price_per_unit,
             fixed_cost=fixed_cost,
             cost_per_day=cost_per_day,
@@ -908,18 +847,16 @@ class EnergyProject:
                 escalation_policy=escalation_policy,
             ),
         )
-        outages = dict(asset_config.construction_outages)
+        outages = dict(self._config.construction_outages)
         outages[name] = outage
-        return self._with_asset(
-            asset,
-            dc_replace(asset_config, construction_outages=outages),
+        return self._copy(
+            config=dc_replace(self._config, construction_outages=outages),
         )
 
     def revenue_from_generation(
         self,
         *,
         sell_price_per_unit: float,
-        carrier: str = "electricity",
         unit: str | None = None,
         escalation: float | None = None,
         escalation_period: Period | None = None,
@@ -927,16 +864,12 @@ class EnergyProject:
         escalation_policy: EscalationPolicy | None = None,
         label: str | None = None,
     ) -> Self:
-        """Configure the revenue price for an energy carrier.
+        """Configure the revenue price for project generation.
 
         Parameters
         ----------
         sell_price_per_unit : float
             Price per MWh at the amount reference date.
-        carrier : str, optional
-            Energy carrier key (e.g. ``"electricity"``). Default is
-            ``"electricity"``. Must match the ``carrier`` set on
-            :meth:`generation`.
         unit : str, optional
             Unit label for display purposes.
         escalation : float, optional
@@ -973,9 +906,7 @@ class EnergyProject:
                 escalation_policy=escalation_policy,
             ),
         )
-        markets = dict(self._config.markets)
-        markets[carrier] = updated
-        return self._copy(config=dc_replace(self._config, markets=markets))
+        return self._copy(config=dc_replace(self._config, market=updated))
 
     def fixed_opex(
         self,
@@ -1028,9 +959,7 @@ class EnergyProject:
         EnergyProject
             New project with updated fixed OPEX configuration.
         """
-        asset = self._config.default_asset
         _validate_finite(amount, "fixed opex amount")
-        asset_config = self._asset_config(asset)
         updated = _RecurringCostConfig(
             amount=amount,
             start=start,
@@ -1046,9 +975,9 @@ class EnergyProject:
             ),
             timing=timing,
         )
-        items = dict(asset_config.fixed_opex_items)
+        items = dict(self._config.fixed_opex_items)
         items[name] = updated
-        return self._with_asset(asset, dc_replace(asset_config, fixed_opex_items=items))
+        return self._copy(config=dc_replace(self._config, fixed_opex_items=items))
 
     def variable_cost(
         self,
@@ -1089,9 +1018,7 @@ class EnergyProject:
         EnergyProject
             New project with updated variable cost configuration.
         """
-        asset = self._config.default_asset
         _validate_finite(rate_per_unit, "variable cost rate_per_unit")
-        asset_config = self._asset_config(asset)
         updated = _VariableCostConfig(
             rate_per_unit=rate_per_unit,
             label="Variable Cost" if label is None else label,
@@ -1103,9 +1030,9 @@ class EnergyProject:
                 escalation_policy=escalation_policy,
             ),
         )
-        items = dict(asset_config.variable_cost_items)
+        items = dict(self._config.variable_cost_items)
         items[name] = updated
-        return self._with_asset(asset, dc_replace(asset_config, variable_cost_items=items))
+        return self._copy(config=dc_replace(self._config, variable_cost_items=items))
 
     def construction(
         self,
@@ -1164,9 +1091,7 @@ class EnergyProject:
         EnergyProject
             New project with updated construction configuration.
         """
-        asset = self._config.default_asset
         _validate_finite(overnight_cost, "overnight_cost")
-        asset_config = self._asset_config(asset)
         updated = _ConstructionScheduleConfig(
             overnight_cost=overnight_cost,
             cod_date=cod_date,
@@ -1182,14 +1107,14 @@ class EnergyProject:
                 escalation_policy=escalation_policy,
             ),
         )
-        return self._with_asset(asset, dc_replace(asset_config, construction=updated))
+        return self._copy(config=dc_replace(self._config, construction=updated))
 
     def construction_stream(
         self,
         *,
         stream: CashFlowStream,
     ) -> Self:
-        """Configure a pre-built construction cash-flow stream for the asset.
+        """Configure a pre-built construction cash-flow stream for the project.
 
         Parameters
         ----------
@@ -1201,11 +1126,8 @@ class EnergyProject:
         EnergyProject
             New project with updated construction configuration.
         """
-        asset = self._config.default_asset
-        asset_config = self._asset_config(asset)
-        return self._with_asset(
-            asset,
-            dc_replace(asset_config, construction=_ConstructionStreamConfig(stream=stream)),
+        return self._copy(
+            config=dc_replace(self._config, construction=_ConstructionStreamConfig(stream=stream)),
         )
 
     def construction_financing(
@@ -1260,9 +1182,7 @@ class EnergyProject:
         ValueError
             If a construction stream override is already configured.
         """
-        asset = self._config.default_asset
-        asset_config = self._asset_config(asset)
-        if isinstance(asset_config.construction, _ConstructionStreamConfig):
+        if isinstance(self._config.construction, _ConstructionStreamConfig):
             raise ValueError(
                 "construction_debt cannot be configured when a construction "
                 "stream override is provided"
@@ -1278,17 +1198,14 @@ class EnergyProject:
             amortization_frequency=amortization_frequency,
             amortization_start=amortization_start,
         )
-        return self._with_asset(
-            asset,
-            dc_replace(asset_config, construction_debt=updated),
-        )
+        return self._copy(config=dc_replace(self._config, construction_debt=updated))
 
     def debt_schedule(
         self,
         *,
         schedule: AmortizationSchedule | CashFlowStream,
     ) -> Self:
-        """Configure a pre-built debt schedule for the asset.
+        """Configure a pre-built debt schedule for the project.
 
         Parameters
         ----------
@@ -1300,10 +1217,8 @@ class EnergyProject:
         EnergyProject
             New project with updated debt configuration.
         """
-        asset = self._config.default_asset
-        asset_config = self._asset_config(asset)
-        return self._with_asset(
-            asset, dc_replace(asset_config, debt_schedule=_DebtScheduleConfig(schedule))
+        return self._copy(
+            config=dc_replace(self._config, debt_schedule=_DebtScheduleConfig(schedule))
         )
 
     def tax(self, *, rate: float, allow_refund: bool = False) -> Self:
@@ -1341,7 +1256,7 @@ class EnergyProject:
         convention: MACRSConvention = "half-year",
         label: str | None = None,
     ) -> Self:
-        """Configure MACRS depreciation for the asset.
+        """Configure MACRS depreciation for the project.
 
         Parameters
         ----------
@@ -1357,12 +1272,9 @@ class EnergyProject:
         EnergyProject
             New project with MACRS depreciation configured.
         """
-        asset = self._config.default_asset
-        asset_config = self._asset_config(asset)
-        return self._with_asset(
-            asset,
-            dc_replace(
-                asset_config,
+        return self._copy(
+            config=dc_replace(
+                self._config,
                 depreciation=_MacrsDepreciationConfig(
                     property_class=property_class,
                     convention=convention,
@@ -1418,12 +1330,9 @@ class EnergyProject:
         EnergyProject
             New project with VDB depreciation configured.
         """
-        asset = self._config.default_asset
-        asset_config = self._asset_config(asset)
-        return self._with_asset(
-            asset,
-            dc_replace(
-                asset_config,
+        return self._copy(
+            config=dc_replace(
+                self._config,
                 depreciation=_VdbDepreciationConfig(
                     life=life,
                     salvage_value=salvage_value,
@@ -1441,7 +1350,7 @@ class EnergyProject:
         )
 
     def investment_tax_credit(self, *, rate: float) -> Self:
-        """Configure an Investment Tax Credit (ITC) for the asset.
+        """Configure an Investment Tax Credit (ITC) for the project.
 
         Parameters
         ----------
@@ -1453,10 +1362,8 @@ class EnergyProject:
         EnergyProject
             New project with ITC configured.
         """
-        asset = self._config.default_asset
         _validate_finite(rate, "itc rate")
-        asset_config = self._asset_config(asset)
-        return self._with_asset(asset, dc_replace(asset_config, itc_rate=rate))
+        return self._copy(config=dc_replace(self._config, itc_rate=rate))
 
     def production_tax_credit(
         self,
@@ -1469,7 +1376,7 @@ class EnergyProject:
         escalation_policy: EscalationPolicy | None = None,
         label: str | None = None,
     ) -> Self:
-        """Configure a Production Tax Credit (PTC) for the asset.
+        """Configure a Production Tax Credit (PTC) for the project.
 
         Parameters
         ----------
@@ -1502,11 +1409,9 @@ class EnergyProject:
         ValueError
             If *years* is not positive.
         """
-        asset = self._config.default_asset
         if years <= 0:
             raise ValueError("PTC years must be positive")
         _validate_finite(rate_per_unit, "ptc rate_per_unit")
-        asset_config = self._asset_config(asset)
         updated = _PtcConfig(
             rate_per_unit=rate_per_unit,
             years=years,
@@ -1519,7 +1424,7 @@ class EnergyProject:
                 escalation_policy=escalation_policy,
             ),
         )
-        return self._with_asset(asset, dc_replace(asset_config, ptc=updated))
+        return self._copy(config=dc_replace(self._config, ptc=updated))
 
     def add_cashflow_stream(self, *, name: str, stream: CashFlowStream) -> Self:
         """Add a custom named cash-flow component to the project.
@@ -1573,9 +1478,9 @@ class EnergyProject:
         """Compile all configuration into a :class:`ProjectAnalysis`.
 
         Builds generation, revenue, fixed and variable OPEX, construction,
-        ITC, PTC, depreciation, and debt service streams for every configured
-        asset. Applies any registered cashflow modifiers, then computes taxable
-        income and tax liability.
+        ITC, PTC, depreciation, and debt service streams. Applies any
+        registered cashflow modifiers, then computes taxable income and tax
+        liability.
 
         Returns
         -------
@@ -1586,7 +1491,7 @@ class EnergyProject:
         Raises
         ------
         ValueError
-            If required timeline dates are missing, asset generation
+            If required timeline dates are missing, the generation
             configuration is incomplete, or debt configuration is invalid.
         """
         # Assemble the internal timeline from generation/construction configs.
@@ -1603,69 +1508,59 @@ class EnergyProject:
 
     def _analyze_impl(self) -> ProjectAnalysis:
         """Internal analysis implementation called after timeline resolution."""
-        generation = GenerationStream()
         component_streams: dict[str, CashFlowStream] = {}
         levelized_revenue_basis: dict[str, CashFlowStream] = {}
 
-        for asset_name, asset_config in self._config.assets.items():
-            generation = self._build_generation(asset_name, asset_config)
+        generation = self._build_generation()
 
-            construction_stream = self._build_construction(asset_config)
-            if construction_stream.entries:
-                component_streams[f"{asset_name}:construction"] = construction_stream
+        construction_stream = self._build_construction()
+        if construction_stream.entries:
+            component_streams["construction"] = construction_stream
 
-            revenue_stream = self._build_revenue(generation)
-            if revenue_stream.entries:
-                component_streams[f"{asset_name}:revenue"] = revenue_stream
-            revenue_basis_stream = self._build_revenue(generation, price_per_mwh=1.0)
-            if revenue_basis_stream.entries:
-                levelized_revenue_basis[f"{asset_name}:revenue"] = revenue_basis_stream
+        revenue_stream = self._build_revenue(generation)
+        if revenue_stream.entries:
+            component_streams["revenue"] = revenue_stream
+        revenue_basis_stream = self._build_revenue(generation, price_per_mwh=1.0)
+        if revenue_basis_stream.entries:
+            levelized_revenue_basis["revenue"] = revenue_basis_stream
 
-            for cost_name, cost_config in asset_config.fixed_opex_items.items():
-                stream = self._build_fixed_opex(asset_name, cost_config)
-                if stream.entries:
-                    key = (
-                        f"{asset_name}:fixed_opex"
-                        if cost_name == "default"
-                        else f"{asset_name}:fixed_opex:{cost_name}"
-                    )
-                    component_streams[key] = stream
+        for cost_name, cost_config in self._config.fixed_opex_items.items():
+            stream = self._build_fixed_opex(cost_config)
+            if stream.entries:
+                key = "fixed_opex" if cost_name == "default" else f"fixed_opex:{cost_name}"
+                component_streams[key] = stream
 
-            for vc_name, vc_config in asset_config.variable_cost_items.items():
-                stream = self._build_variable_cost(vc_config, generation)
-                if stream.entries:
-                    key = (
-                        f"{asset_name}:variable_cost"
-                        if vc_name == "default"
-                        else f"{asset_name}:variable_cost:{vc_name}"
-                    )
-                    component_streams[key] = stream
+        for vc_name, vc_config in self._config.variable_cost_items.items():
+            stream = self._build_variable_cost(vc_config, generation)
+            if stream.entries:
+                key = "variable_cost" if vc_name == "default" else f"variable_cost:{vc_name}"
+                component_streams[key] = stream
 
-            for outage_name, outage_config in asset_config.construction_outages.items():
-                stream = self._build_construction_outage(outage_config)
-                if stream.entries:
-                    key = (
-                        f"{asset_name}:construction_outage"
-                        if outage_name == "default"
-                        else f"{asset_name}:construction_outage:{outage_name}"
-                    )
-                    component_streams[key] = stream
+        for outage_name, outage_config in self._config.construction_outages.items():
+            stream = self._build_construction_outage(outage_config)
+            if stream.entries:
+                key = (
+                    "construction_outage"
+                    if outage_name == "default"
+                    else f"construction_outage:{outage_name}"
+                )
+                component_streams[key] = stream
 
-            itc_stream = self._build_itc(asset_config, construction_stream)
-            if itc_stream.entries:
-                component_streams[f"{asset_name}:itc"] = itc_stream
+        itc_stream = self._build_itc(construction_stream)
+        if itc_stream.entries:
+            component_streams["itc"] = itc_stream
 
-            ptc_stream = self._build_ptc(asset_config, generation)
-            if ptc_stream.entries:
-                component_streams[f"{asset_name}:ptc"] = ptc_stream
+        ptc_stream = self._build_ptc(generation)
+        if ptc_stream.entries:
+            component_streams["ptc"] = ptc_stream
 
-            depreciation_stream = self._build_depreciation(asset_config, construction_stream)
-            if depreciation_stream.entries:
-                component_streams[f"{asset_name}:depreciation"] = depreciation_stream
+        depreciation_stream = self._build_depreciation(construction_stream)
+        if depreciation_stream.entries:
+            component_streams["depreciation"] = depreciation_stream
 
-            debt_stream = self._build_debt(asset_config, construction_stream)
-            if debt_stream.entries:
-                component_streams[f"{asset_name}:debt_service"] = debt_stream
+        debt_stream = self._build_debt(construction_stream)
+        if debt_stream.entries:
+            component_streams["debt_service"] = debt_stream
 
         for name, stream in self._config.custom_cashflows.items():
             component_streams[name] = stream
@@ -1805,26 +1700,25 @@ class EnergyProject:
         operations_end: date | None = None
         construction_start: date | None = None
 
-        for asset_config in self._config.assets.values():
-            gen = asset_config.generation
-            if isinstance(gen, _CapacityGenerationConfig):
-                if gen.operations_start is not None:
-                    operations_start = gen.operations_start
-                if gen.operations_end is not None:
-                    operations_end = gen.operations_end
-            elif isinstance(gen, _GenerationStreamConfig):
-                if gen.stream.entries:
-                    dates = [entry.date for entry in gen.stream.entries]
-                    operations_start = min(dates)
-                    # operations_end is exclusive; the latest entry date is
-                    # within the operating window, so the boundary is the
-                    # following day.
-                    operations_end = max(dates) + relativedelta(days=1)
+        gen = self._config.generation
+        if isinstance(gen, _CapacityGenerationConfig):
+            if gen.operations_start is not None:
+                operations_start = gen.operations_start
+            if gen.operations_end is not None:
+                operations_end = gen.operations_end
+        elif isinstance(gen, _GenerationStreamConfig):
+            if gen.stream.entries:
+                dates = [entry.date for entry in gen.stream.entries]
+                operations_start = min(dates)
+                # operations_end is exclusive; the latest entry date is
+                # within the operating window, so the boundary is the
+                # following day.
+                operations_end = max(dates) + relativedelta(days=1)
 
-            con = asset_config.construction
-            if isinstance(con, _ConstructionScheduleConfig):
-                if con.construction_start is not None:
-                    construction_start = con.construction_start
+        con = self._config.construction
+        if isinstance(con, _ConstructionScheduleConfig):
+            if con.construction_start is not None:
+                construction_start = con.construction_start
 
         return ProjectTimeline(
             construction_start=construction_start,
@@ -1834,28 +1728,15 @@ class EnergyProject:
             timing=self._config.timing,
         )
 
-    def _asset_config(self, asset: str) -> _AssetConfig:
-        """Return the current configuration for *asset*, or a default if unset."""
-        return self._config.assets.get(asset, _AssetConfig())
-
-    def _with_asset(self, asset: str, config: _AssetConfig) -> Self:
-        """Return a new project with *asset*'s configuration replaced by *config*."""
-        assets = dict(self._config.assets)
-        assets[asset] = config
-        return self._copy(config=dc_replace(self._config, assets=assets))
-
-    def _build_generation(self, asset_name: str, asset_config: _AssetConfig) -> GenerationStream:
-        """Build the generation stream for *asset_name* from its configuration.
+    def _build_generation(self) -> GenerationStream:
+        """Build the generation stream from project configuration.
 
         Returns an empty stream when generation is unconfigured.
         """
-        generation = asset_config.generation
+        generation = self._config.generation
         if generation is None:
-            if asset_config.generation_outages:
-                raise ValueError(
-                    f"generation_outage requires generation to be configured for asset "
-                    f"{asset_name!r}"
-                )
+            if self._config.generation_outages:
+                raise ValueError("generation_outage requires generation to be configured")
             return GenerationStream()
         if isinstance(generation, _GenerationStreamConfig):
             base_generation = generation.stream
@@ -1874,7 +1755,6 @@ class EnergyProject:
             ops_start = self._config.timeline.operations_start
             ops_end = self._config.timeline.operations_end
             schedule = self._operating_schedule(
-                asset_name,
                 "generation",
                 start=start,
                 periods=generation.periods,
@@ -1885,7 +1765,6 @@ class EnergyProject:
             )
             entries: list[Generation] = []
             hours = hours_per_period(frequency)
-            source = asset_name if generation.source is None else generation.source
             for index, modeled_period in enumerate(schedule, start=1):
                 label = format_label(generation.label, index)
                 entries.append(
@@ -1897,28 +1776,22 @@ class EnergyProject:
                             * modeled_period.fraction
                         ),
                         date=modeled_period.event_date,
-                        source=source,
-                        carrier=generation.carrier,
                         label=label,
                     )
                 )
             base_generation = GenerationStream(entries)
 
-        outage_generation = self._build_generation_outages(asset_name, asset_config)
+        outage_generation = self._build_generation_outages()
         if not outage_generation.entries:
             return base_generation
         return GenerationStream.from_streams(base_generation, outage_generation).sort()
 
-    def _build_generation_outages(
-        self,
-        asset_name: str,
-        asset_config: _AssetConfig,
-    ) -> GenerationStream:
+    def _build_generation_outages(self) -> GenerationStream:
         """Build negative generation entries for configured modeled outages."""
-        if not asset_config.generation_outages:
+        if not self._config.generation_outages:
             return GenerationStream()
 
-        generation = asset_config.generation
+        generation = self._config.generation
         capacity_defaults: _CapacityGenerationConfig | None = (
             generation if isinstance(generation, _CapacityGenerationConfig) else None
         )
@@ -1926,17 +1799,13 @@ class EnergyProject:
         ops_end = self._config.timeline.operations_end
 
         outage_streams: list[GenerationStream] = []
-        for outage in asset_config.generation_outages:
+        for outage in self._config.generation_outages:
             if ops_start is not None and outage.start < ops_start:
                 raise ValueError(
-                    f"generation_outage {outage.name!r} for asset {asset_name!r} "
-                    "starts before operations_start"
+                    f"generation_outage {outage.name!r} starts before operations_start"
                 )
             if ops_end is not None and outage.end > ops_end:
-                raise ValueError(
-                    f"generation_outage {outage.name!r} for asset {asset_name!r} "
-                    "ends after operations_end"
-                )
+                raise ValueError(f"generation_outage {outage.name!r} ends after operations_end")
 
             capacity_mw = outage.capacity_mw
             if capacity_mw is None and capacity_defaults is not None:
@@ -1956,12 +1825,8 @@ class EnergyProject:
                     "when capacity-based generation is not configured"
                 )
 
-            source = outage.source
-            carrier = outage.carrier
             timing = outage.timing
             if capacity_defaults is not None:
-                source = source if source is not None else capacity_defaults.source or asset_name
-                carrier = carrier if carrier is not None else capacity_defaults.carrier
                 timing = timing or capacity_defaults.timing
 
             outage_streams.append(
@@ -1972,8 +1837,6 @@ class EnergyProject:
                     end=outage.end,
                     capacity_reduction=outage.capacity_reduction,
                     timing=timing or self._config.timeline.timing,
-                    source="" if source is None else source,
-                    carrier="electricity" if carrier is None else carrier,
                     label=outage.label,
                 )
             )
@@ -1985,11 +1848,11 @@ class EnergyProject:
     ) -> CashFlowStream:
         """Build operating-cost cashflows for a construction outage on baseline generation."""
         if outage.sell_price_per_unit is None:
-            market = self._config.markets.get(outage.carrier)
+            market = self._config.market
             if market is None:
                 raise ValueError(
                     f"construction_outage {outage.name!r} requires sell_price_per_unit "
-                    f"or a configured market for carrier {outage.carrier!r}"
+                    "or a configured market"
                 )
             price_per_mwh = market.sell_price_per_unit
             escalation = _effective_escalation(market.escalation, self._config.default_escalation)
@@ -2007,8 +1870,6 @@ class EnergyProject:
             fixed_cost=outage.fixed_cost,
             cost_per_day=outage.cost_per_day,
             timing=outage.timing or self._config.timeline.timing,
-            source=outage.source,
-            carrier=outage.carrier,
             lost_revenue_label=outage.lost_revenue_label,
             fixed_cost_label=outage.fixed_cost_label,
             daily_cost_label=outage.daily_cost_label,
@@ -2026,44 +1887,34 @@ class EnergyProject:
         *,
         price_per_mwh: float | None = None,
     ) -> CashFlowStream:
-        """Build the revenue stream for *asset_name* from generation and market config.
+        """Build the revenue stream from generation and market config.
 
         Returns an empty stream when generation is empty or no market price is set.
         """
         if not generation.entries:
             return CashFlowStream()
-        revenue_streams: list[CashFlowStream] = []
-        for carrier, carrier_generation in generation.group_by(carrier=True).items():
-            market = self._config.markets.get(carrier)
-            if market is None:
-                continue
-            resolved_price_per_mwh = (
-                market.sell_price_per_unit if price_per_mwh is None else price_per_mwh
-            )
-            escalation = _effective_escalation(market.escalation, self._config.default_escalation)
-            if escalation.policy is not None:
-                revenue_streams.append(
-                    carrier_generation.to_revenue(
-                        price_per_mwh=resolved_price_per_mwh,
-                        label=market.label,
-                        escalation_policy=escalation.policy,
-                    )
-                )
-                continue
-            revenue_streams.append(
-                carrier_generation.to_revenue(
-                    price_per_mwh=resolved_price_per_mwh,
-                    label=market.label,
-                    escalation=escalation.escalation,
-                    escalation_period=escalation.escalation_period,
-                    amount_reference_date=escalation.amount_reference_date,
-                )
-            )
-        if not revenue_streams:
+        market = self._config.market
+        if market is None:
             return CashFlowStream()
-        return CashFlowStream.from_streams(*revenue_streams).sort()
+        resolved_price_per_mwh = (
+            market.sell_price_per_unit if price_per_mwh is None else price_per_mwh
+        )
+        escalation = _effective_escalation(market.escalation, self._config.default_escalation)
+        if escalation.policy is not None:
+            return generation.to_revenue(
+                price_per_mwh=resolved_price_per_mwh,
+                label=market.label,
+                escalation_policy=escalation.policy,
+            )
+        return generation.to_revenue(
+            price_per_mwh=resolved_price_per_mwh,
+            label=market.label,
+            escalation=escalation.escalation,
+            escalation_period=escalation.escalation_period,
+            amount_reference_date=escalation.amount_reference_date,
+        )
 
-    def _build_fixed_opex(self, asset_name: str, fixed: _RecurringCostConfig) -> CashFlowStream:
+    def _build_fixed_opex(self, fixed: _RecurringCostConfig) -> CashFlowStream:
         """Build a fixed OPEX cash-flow stream from *fixed* configuration.
 
         Each period's amount is scaled by the escalation factor and the
@@ -2081,7 +1932,6 @@ class EnergyProject:
         ops_start = self._config.timeline.operations_start
         ops_end = self._config.timeline.operations_end
         schedule = self._operating_schedule(
-            asset_name,
             "fixed_opex",
             start=start,
             periods=fixed.periods,
@@ -2137,19 +1987,19 @@ class EnergyProject:
             amount_reference_date=escalation.amount_reference_date,
         )
 
-    def _build_construction(self, asset_config: _AssetConfig) -> CashFlowStream:
-        """Build the construction spend stream from asset construction configuration.
+    def _build_construction(self) -> CashFlowStream:
+        """Build the construction spend stream from project construction configuration.
 
         Returns the pre-built stream directly when a stream override is provided.
         When no spend profile is given, books the overnight cost as a single
         cash flow on the COD date. Otherwise distributes the cost over the
         construction period using the spend schedule.
         """
-        construction = asset_config.construction
+        construction = self._config.construction
         if construction is None:
             return CashFlowStream()
         if isinstance(construction, _ConstructionStreamConfig):
-            if asset_config.construction_debt is not None:
+            if self._config.construction_debt is not None:
                 raise ValueError(
                     "construction stream overrides cannot be combined with construction debt"
                 )
@@ -2186,7 +2036,7 @@ class EnergyProject:
 
         # Convert _ConstructionDebtConfig to ConstructionFinancing for the
         # lower-level construction_spend_schedule function.
-        financing = self._construction_financing(asset_config.construction_debt)
+        financing = self._construction_financing(self._config.construction_debt)
 
         escalation = _effective_escalation(construction.escalation, self._config.default_escalation)
         if escalation.policy is not None:
@@ -2227,7 +2077,6 @@ class EnergyProject:
 
     def _build_itc(
         self,
-        asset_config: _AssetConfig,
         construction_stream: CashFlowStream,
     ) -> CashFlowStream:
         """Build an ITC cash-flow stream from capital-cost construction flows.
@@ -2235,44 +2084,42 @@ class EnergyProject:
         Returns an empty stream when no ITC rate is configured or construction
         has no capital-cost entries.
         """
-        if asset_config.itc_rate is None or not construction_stream.entries:
+        if self._config.itc_rate is None or not construction_stream.entries:
             return CashFlowStream()
         capex_basis = construction_stream.filter(pro_forma_category=ProFormaCategory.CAPITAL_COST)
         if not capex_basis.entries:
             return CashFlowStream()
         return itc(
             capex_stream=capex_basis,
-            rate=asset_config.itc_rate,
+            rate=self._config.itc_rate,
             placed_in_service=self._require_timeline_date("operations_start"),
         )
 
     def _build_ptc(
         self,
-        asset_config: _AssetConfig,
         generation: GenerationStream,
     ) -> CashFlowStream:
         """Build a PTC cash-flow stream from generation and PTC configuration.
 
         Returns an empty stream when no PTC is configured or generation is empty.
         """
-        if asset_config.ptc is None or not generation.entries:
+        if self._config.ptc is None or not generation.entries:
             return CashFlowStream()
-        escalation = _effective_escalation(
-            asset_config.ptc.escalation, self._config.default_escalation
-        )
+        ptc_config = self._config.ptc
+        escalation = _effective_escalation(ptc_config.escalation, self._config.default_escalation)
         if escalation.policy is not None:
             return ptc(
                 generation_stream=generation,
-                rate_per_mwh=asset_config.ptc.rate_per_unit,
-                years=asset_config.ptc.years,
-                label=asset_config.ptc.label,
+                rate_per_mwh=ptc_config.rate_per_unit,
+                years=ptc_config.years,
+                label=ptc_config.label,
                 escalation_policy=escalation.policy,
             )
         return ptc(
             generation_stream=generation,
-            rate_per_mwh=asset_config.ptc.rate_per_unit,
-            years=asset_config.ptc.years,
-            label=asset_config.ptc.label,
+            rate_per_mwh=ptc_config.rate_per_unit,
+            years=ptc_config.years,
+            label=ptc_config.label,
             escalation=escalation.escalation,
             escalation_period=escalation.escalation_period,
             amount_reference_date=escalation.amount_reference_date,
@@ -2303,7 +2150,6 @@ class EnergyProject:
 
     def _build_depreciation(
         self,
-        asset_config: _AssetConfig,
         construction_stream: CashFlowStream,
     ) -> CashFlowStream:
         """Build a depreciation stream from construction capital costs and depreciation config.
@@ -2311,14 +2157,14 @@ class EnergyProject:
         Applies ITC basis adjustment when an ITC rate is configured. Returns an
         empty stream when depreciation is unconfigured or the cost basis is zero.
         """
-        if asset_config.depreciation is None or not construction_stream.entries:
+        if self._config.depreciation is None or not construction_stream.entries:
             return CashFlowStream()
         capex_basis = construction_stream.filter(pro_forma_category=ProFormaCategory.CAPITAL_COST)
         if not capex_basis.entries:
             return CashFlowStream()
         basis = (
-            itc_adjusted_basis(capex_basis, asset_config.itc_rate)
-            if asset_config.itc_rate is not None
+            itc_adjusted_basis(capex_basis, self._config.itc_rate)
+            if self._config.itc_rate is not None
             else abs(capex_basis.sum())
         )
         if basis == 0.0:
@@ -2326,7 +2172,7 @@ class EnergyProject:
         placed = self._require_timeline_date("operations_start")
         ops_start = self._config.timeline.operations_start
         ops_end = self._config.timeline.operations_end
-        match asset_config.depreciation:
+        match self._config.depreciation:
             case _MacrsDepreciationConfig() as config:
                 return self._remap_event_dates(
                     macrs_schedule(
@@ -2366,7 +2212,6 @@ class EnergyProject:
 
     def _build_debt(
         self,
-        asset_config: _AssetConfig,
         construction_stream: CashFlowStream,
     ) -> CashFlowStream:
         """Build the debt service stream from construction debt or schedule config.
@@ -2376,8 +2221,8 @@ class EnergyProject:
         Returns an empty stream when no debt is configured.
         """
         # Explicit schedule override takes precedence
-        if asset_config.debt_schedule is not None:
-            sched = asset_config.debt_schedule
+        if self._config.debt_schedule is not None:
+            sched = self._config.debt_schedule
             if isinstance(sched.schedule, AmortizationSchedule):
                 return CashFlowStream.from_streams(
                     sched.schedule.interest,
@@ -2386,7 +2231,7 @@ class EnergyProject:
             return sched.schedule
 
         # Construction-debt path
-        debt = asset_config.construction_debt
+        debt = self._config.construction_debt
         if debt is None:
             return CashFlowStream()
         if debt.amortization_term <= 0:
@@ -2459,25 +2304,24 @@ class EnergyProject:
             inferred_rates.append(rate)
             return True
 
-        for asset_config in self._config.assets.values():
-            if (
-                isinstance(asset_config.construction, _ConstructionScheduleConfig)
-                and asset_config.construction.overnight_cost != 0.0
-            ):
-                if not collect(asset_config.construction.escalation):
+        if (
+            isinstance(self._config.construction, _ConstructionScheduleConfig)
+            and self._config.construction.overnight_cost != 0.0
+        ):
+            if not collect(self._config.construction.escalation):
+                return None
+        for recurring_cost in self._config.fixed_opex_items.values():
+            if recurring_cost.amount != 0.0:
+                if not collect(recurring_cost.escalation):
                     return None
-            for recurring_cost in asset_config.fixed_opex_items.values():
-                if recurring_cost.amount != 0.0:
-                    if not collect(recurring_cost.escalation):
-                        return None
-            if asset_config.ptc is not None and asset_config.ptc.rate_per_unit != 0.0:
-                if not collect(asset_config.ptc.escalation):
-                    return None
+        if self._config.ptc is not None and self._config.ptc.rate_per_unit != 0.0:
+            if not collect(self._config.ptc.escalation):
+                return None
 
-        for market in self._config.markets.values():
-            if market.sell_price_per_unit != 0.0:
-                if not collect(market.escalation):
-                    return None
+        market = self._config.market
+        if market is not None and market.sell_price_per_unit != 0.0:
+            if not collect(market.escalation):
+                return None
 
         if not inferred_rates:
             return 0.0
@@ -2491,7 +2335,6 @@ class EnergyProject:
 
     def _operating_schedule(
         self,
-        asset_name: str,
         section: str,
         *,
         start: date,
@@ -2501,7 +2344,7 @@ class EnergyProject:
         phase_start: date | None = None,
         phase_end: date | None = None,
     ) -> tuple[_ScheduledPeriod, ...]:
-        """Build the sequence of modeled operating periods for an asset and section.
+        """Build the sequence of modeled operating periods for a section.
 
         When *periods* is specified, generates exactly that many full-period
         entries. Otherwise infers the schedule from ``timeline.operations_end``,
@@ -2515,7 +2358,7 @@ class EnergyProject:
 
         if periods is not None:
             if periods <= 0:
-                raise ValueError(f"{section} periods must be positive for asset '{asset_name}'")
+                raise ValueError(f"{section} periods must be positive")
             delta = time_delta_per_period(frequency)
             current = start
             schedule: list[_ScheduledPeriod] = []
@@ -2533,10 +2376,7 @@ class EnergyProject:
 
         exclusive_end = self._require_timeline_date("operations_end")
         if exclusive_end <= start:
-            raise ValueError(
-                f"timeline.operations_end must be after the {section} start "
-                f"for asset '{asset_name}'"
-            )
+            raise ValueError(f"timeline.operations_end must be after the {section} start")
 
         operations_end_inclusive = exclusive_end - relativedelta(days=1)
         effective_phase_end = (

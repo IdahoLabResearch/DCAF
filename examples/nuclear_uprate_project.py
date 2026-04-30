@@ -81,8 +81,6 @@ project = (
         capacity_factor=CAPACITY_FACTOR,
         operations_start=OPERATIONS_START,
         operations_end=OPERATIONS_END,
-        carrier="electricity",
-        source="nuclear-uprate",
         label="Uprate Generation",
     )
     .construction(
@@ -169,16 +167,12 @@ print(f"Operating years:    {analysis.timeline.operating_years:.2f}")
 print(f"Discount rate:      {discount_rate:.4%}")
 print()
 print(f"Total generation (MWh):      {analysis.generation.sum():,.0f}")
-print(
-    f"Construction cash flow ($):  {analysis.cashflow_components['default:construction'].sum():,.0f}"
-)
-print(f"Revenue cash flow ($):       {analysis.cashflow_components['default:revenue'].sum():,.0f}")
-print(f"PTC cash flow ($):           {analysis.cashflow_components['default:ptc'].sum():,.0f}")
-print(
-    f"Debt service cash flow ($):  {analysis.cashflow_components['default:debt_service'].sum():,.0f}"
-)
+print(f"Construction cash flow ($):  {analysis.cashflow_components['construction'].sum():,.0f}")
+print(f"Revenue cash flow ($):       {analysis.cashflow_components['revenue'].sum():,.0f}")
+print(f"PTC cash flow ($):           {analysis.cashflow_components['ptc'].sum():,.0f}")
+print(f"Debt service cash flow ($):  {analysis.cashflow_components['debt_service'].sum():,.0f}")
 for outage_name in ("refueling_1", "refueling_2"):
-    component = analysis.cashflow_components[f"default:construction_outage:{outage_name}"]
+    component = analysis.cashflow_components[f"construction_outage:{outage_name}"]
     print(f"Outage impact ({outage_name}) ($):  {component.sum():,.0f}")
 print()
 print(f"NPV ($):                     {npv:,.0f}")

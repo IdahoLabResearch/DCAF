@@ -164,8 +164,6 @@ generation = GenerationStream.from_capacity(
     start=OPERATIONS_START,
     periods=OPERATING_YEARS,
     frequency="year",
-    source="nuclear-uprate",
-    carrier="electricity",
     label="Uprate Generation",
 )
 
@@ -227,7 +225,6 @@ outage_generation_streams = [
         capacity_factor=BASELINE_CAPACITY_FACTOR,
         start=outage_start,
         end=outage_end,
-        source="baseline-plant",
         label=f"{name} Lost MWh",
     )
     for name, outage_start, outage_end in OUTAGE_WINDOWS

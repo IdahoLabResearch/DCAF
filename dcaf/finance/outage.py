@@ -28,8 +28,6 @@ def generator_outage(
     end: date,
     capacity_reduction: float = 1.0,
     timing: TimingConvention = "end",
-    source: str = "",
-    carrier: str = "electricity",
     label: str = "Generator Outage",
 ) -> GenerationStream:
     """
@@ -57,10 +55,6 @@ def generator_outage(
         Default is ``1.0``.
     timing : {"begin", "middle", "end"}, optional
         Date assigned to the negative generation entry. Default is ``"end"``.
-    source : str, optional
-        Source identifier for the outage entry. Default is ``""``.
-    carrier : str, optional
-        Energy carrier. Default is ``"electricity"``.
     label : str, optional
         Label for the negative generation entry. Default is ``"Generator Outage"``.
 
@@ -95,8 +89,6 @@ def generator_outage(
         end=end,
         capacity_reduction=capacity_reduction,
         timing=timing,
-        source=source,
-        carrier=carrier,
         label=label,
     )
 
@@ -112,8 +104,6 @@ def construction_outage(
     fixed_cost: float = 0.0,
     cost_per_day: float = 0.0,
     timing: TimingConvention = "end",
-    source: str = "",
-    carrier: str = "electricity",
     lost_revenue_label: str = "Outage Lost Revenue",
     fixed_cost_label: str = "Outage Fixed Cost",
     daily_cost_label: str = "Outage Replacement Power",
@@ -166,12 +156,6 @@ def construction_outage(
     timing : {"begin", "middle", "end"}, optional
         Booking-date convention for all generated cashflows. Default is
         ``"end"``.
-    source : str, optional
-        Source identifier on the underlying negative generation entry.
-        Default is ``""``.
-    carrier : str, optional
-        Energy carrier on the underlying generation entry. Default is
-        ``"electricity"``.
     lost_revenue_label : str, optional
         Label for the lost-revenue cashflow. Default is ``"Outage Lost Revenue"``.
     fixed_cost_label : str, optional
@@ -233,8 +217,6 @@ def construction_outage(
         end=end,
         capacity_reduction=capacity_reduction,
         timing=timing,
-        source=source,
-        carrier=carrier,
         label=lost_revenue_label,
     )
 
