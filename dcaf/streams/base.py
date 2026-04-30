@@ -9,13 +9,19 @@ user-facing API, domain language, and full end-user documentation.
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Callable, Collection, Iterable, Iterator, Protocol, Self, cast, overload
+from typing import Any, Callable, Collection, Generic, Iterable, Iterator, Protocol, Self, TypeVar, cast, overload
 
 from dcaf.shared.types import Period, SupportsLessThan
 from dcaf.shared.time import period_start
 
+EntryT = TypeVar("EntryT")
+KeyT = TypeVar("KeyT")
+StreamT = TypeVar("StreamT")
+_KeyT = TypeVar("_KeyT")
+_T = TypeVar("_T")
 
-class _StreamProtocol[EntryT](Protocol):
+
+class _StreamProtocol(Protocol[EntryT]):
     """Minimal protocol required by :class:`BaseGroup`."""
 
     entries: list[EntryT]
@@ -28,7 +34,7 @@ class _StreamProtocol[EntryT](Protocol):
 
 
 @dataclass
-class BaseStream[EntryT]:
+class BaseStream(Generic[EntryT]):
     """Reusable collection behavior for entry-based stream classes.
 
     Subclasses are expected to store their records in ``entries`` and define
@@ -39,7 +45,7 @@ class BaseStream[EntryT]:
     entries: list[EntryT] = field(default_factory=list)
 
     @classmethod
-    def _validate_stream_type(cls, stream: "BaseStream[object]") -> None:
+    def _validate_stream_type(cls, stream: "BaseStream[Any]") -> None:
         """Reject combining streams from different concrete domains."""
         if type(stream) is not cls:
             raise TypeError(f"Cannot combine {cls.__name__} with {type(stream).__name__}")
@@ -317,18 +323,18 @@ class BaseStream[EntryT]:
             result = [entry for entry in result if getattr(entry, "date") < end]
         return self._new(result)
 
-    def _grouped_entries_by_key[KeyT](
-        self, fn: Callable[[EntryT], KeyT]
-    ) -> dict[KeyT, list[EntryT]]:
+    def _grouped_entries_by_key(
+        self, fn: Callable[[EntryT], _KeyT]
+    ) -> "dict[_KeyT, list[EntryT]]":
         """Group entries by an arbitrary key function."""
-        groups: defaultdict[KeyT, list[EntryT]] = defaultdict(list)
+        groups: defaultdict[_KeyT, list[EntryT]] = defaultdict(list)
         for entry in self.entries:
             groups[fn(entry)].append(entry)
         return dict(groups)
 
-    def _grouped_entries_by_attr[KeyT](self, attr: str) -> dict[KeyT, list[EntryT]]:
+    def _grouped_entries_by_attr(self, attr: str) -> "dict[_KeyT, list[EntryT]]":
         """Group entries by a named attribute."""
-        groups: defaultdict[KeyT, list[EntryT]] = defaultdict(list)
+        groups: defaultdict[_KeyT, list[EntryT]] = defaultdict(list)
         for entry in self.entries:
             groups[getattr(entry, attr)].append(entry)
         return dict(groups)
@@ -340,7 +346,7 @@ class BaseStream[EntryT]:
             groups[period_start(getattr(entry, "date"), period)].append(entry)
         return dict(groups)
 
-    def _grouped_streams[KeyT](self, groups: dict[KeyT, list[EntryT]]) -> dict[KeyT, Self]:
+    def _grouped_streams(self, groups: "dict[_KeyT, list[EntryT]]") -> "dict[_KeyT, Self]":
         """Wrap grouped entry lists into same-type stream instances."""
         return {key: self._new(entries) for key, entries in groups.items()}
 
@@ -422,7 +428,7 @@ class BaseStream[EntryT]:
 
 
 @dataclass
-class BaseGroup[KeyT, EntryT, StreamT]:
+class BaseGroup(Generic[KeyT, EntryT, StreamT]):
     """Reusable grouped-container behavior for stream grouping results.
 
     The group container remains intentionally small: subclasses still own the
@@ -440,7 +446,7 @@ class BaseGroup[KeyT, EntryT, StreamT]:
         """Construct an empty stream for empty-group ``ungroup()`` calls."""
         raise NotImplementedError
 
-    def aggregate[T](self, fn: Callable[[StreamT], T]) -> dict[KeyT, T]:
+    def aggregate(self, fn: Callable[[StreamT], _T]) -> "dict[KeyT, _T]":
         """
         Apply a function to each group and return a dict of results.
 
@@ -449,12 +455,12 @@ class BaseGroup[KeyT, EntryT, StreamT]:
 
         Parameters
         ----------
-        fn : Callable[[StreamT], T]
+        fn : Callable[[StreamT], _T]
             Function applied independently to each grouped stream.
 
         Returns
         -------
-        dict[KeyT, T]
+        dict[KeyT, _T]
             Mapping of each group key to the value returned by *fn*.
         """
         return {key: fn(stream) for key, stream in self.groups.items()}

@@ -16,7 +16,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace as dc_replace
 from datetime import date
 from math import isclose, isfinite
-from typing import Callable, Literal, Self
+from typing import Callable, Literal, Self, TypeAlias
 
 from dateutil.relativedelta import relativedelta
 
@@ -56,7 +56,7 @@ from dcaf.shared.types import (
 from dcaf.shared.formatting import format_label
 from dcaf.shared.time import elapsed_periods, event_date, hours_per_period, time_delta_per_period
 
-type CashFlowComponentModifier = Callable[
+CashFlowComponentModifier: TypeAlias = Callable[
     [CashFlowGroup[str]],
     CashFlowGroup[str] | Mapping[str, CashFlowStream],
 ]
@@ -190,7 +190,7 @@ class _GenerationStreamConfig:
     stream: GenerationStream
 
 
-type _GenerationConfig = _CapacityGenerationConfig | _GenerationStreamConfig | None
+_GenerationConfig: TypeAlias = _CapacityGenerationConfig | _GenerationStreamConfig | None
 
 
 @dataclass(frozen=True)
@@ -273,7 +273,7 @@ class _ConstructionStreamConfig:
     stream: CashFlowStream
 
 
-type _ConstructionConfig = _ConstructionScheduleConfig | _ConstructionStreamConfig | None
+_ConstructionConfig: TypeAlias = _ConstructionScheduleConfig | _ConstructionStreamConfig | None
 
 
 @dataclass(frozen=True)
@@ -328,7 +328,7 @@ class _VdbDepreciationConfig:
     label: str = "VDB Depreciation"
 
 
-type _DepreciationConfig = _MacrsDepreciationConfig | _VdbDepreciationConfig | None
+_DepreciationConfig: TypeAlias = _MacrsDepreciationConfig | _VdbDepreciationConfig | None
 
 
 @dataclass(frozen=True)

@@ -15,6 +15,7 @@ from typing import (
     Callable,
     Iterable,
     Literal,
+    TypeVar,
     assert_never,
     overload,
 )
@@ -44,6 +45,8 @@ from dcaf.shared.types import (
 )
 from dcaf.streams.base import BaseGroup, BaseStream
 from dcaf.metrics.npv import npv
+
+KeyType = TypeVar("KeyType")
 
 
 @dataclass(frozen=True)
@@ -194,7 +197,7 @@ def _outage_event_date(*, start: date, end: date, timing: TimingConvention) -> d
 
 
 @dataclass
-class GenerationGroup[KeyType](BaseGroup[KeyType, Generation, "GenerationStream"]):
+class GenerationGroup(BaseGroup[KeyType, Generation, "GenerationStream"]):
     """
     Dictionary-like container mapping group keys to ``GenerationStream`` objects.
 
@@ -587,7 +590,7 @@ class GenerationStream(BaseStream[Generation]):
         return self._filter_by_attrs(source=source, carrier=carrier)
 
     @overload
-    def group_by[KeyType](
+    def group_by(
         self, fn: Callable[[Generation], KeyType]
     ) -> "GenerationGroup[KeyType]": ...
     @overload

@@ -1,17 +1,17 @@
 from enum import StrEnum
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, TypeAlias
 
 
-type Period = Literal["day", "month", "quarter", "year"]
-type TimingConvention = Literal["end", "begin", "middle"]
-type DayCountConvention = Literal["actual/365"]
-type MACRSPropertyClass = Literal[3, 5, 7, 10, 15, 20]
-type MACRSConvention = Literal["half-year", "mid-quarter"]
-type VDBConvention = Literal["none", "half-year", "mid-quarter", "best-of-half-year-mid-quarter"]
-type SpendSchedulePoint = tuple[float, float]
-type SpendSchedule = tuple[SpendSchedulePoint, ...]
-type InterestTreatment = Literal["capitalize", "pay"]
-type SpendScheduleName = Literal["flat", "bell", "ramped", "triangle", "linear", "upfront"]
+Period: TypeAlias = Literal["day", "month", "quarter", "year"]
+TimingConvention: TypeAlias = Literal["end", "begin", "middle"]
+DayCountConvention: TypeAlias = Literal["actual/365"]
+MACRSPropertyClass: TypeAlias = Literal[3, 5, 7, 10, 15, 20]
+MACRSConvention: TypeAlias = Literal["half-year", "mid-quarter"]
+VDBConvention: TypeAlias = Literal["none", "half-year", "mid-quarter", "best-of-half-year-mid-quarter"]
+SpendSchedulePoint: TypeAlias = tuple[float, float]
+SpendSchedule: TypeAlias = tuple[SpendSchedulePoint, ...]
+InterestTreatment: TypeAlias = Literal["capitalize", "pay"]
+SpendScheduleName: TypeAlias = Literal["flat", "bell", "ramped", "triangle", "linear", "upfront"]
 
 
 class ProFormaCategory(StrEnum):

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace as dc_replace
 from datetime import date, timedelta
-from typing import Self, cast
+from typing import Self, TypeAlias, cast
 
 from dcaf.streams.cashflows import CashFlow, CashFlowStream
 from dcaf.finance.escalation import (
@@ -181,7 +181,7 @@ class SpendProfile:
         return cls(schedule=schedule)
 
 
-type ConstructionProfileInput = SpendProfile | SpendScheduleName
+ConstructionProfileInput: TypeAlias = SpendProfile | SpendScheduleName
 
 
 @dataclass(frozen=True)

@@ -12,14 +12,14 @@ from __future__ import annotations
 from bisect import bisect_right
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Literal, Protocol, cast, runtime_checkable
+from typing import Literal, Protocol, TypeAlias, cast, runtime_checkable
 
 from dcaf.shared.types import DayCountConvention, Period, parse_period
 from dcaf.shared.time import compound_factor, elapsed_periods
 
-type IndexPoint = tuple[date, float]
-type IndexSeries = tuple[IndexPoint, ...]
-type IndexInterpolation = Literal["step"]
+IndexPoint: TypeAlias = tuple[date, float]
+IndexSeries: TypeAlias = tuple[IndexPoint, ...]
+IndexInterpolation: TypeAlias = Literal["step"]
 
 
 @runtime_checkable

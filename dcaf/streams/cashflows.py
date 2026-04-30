@@ -12,6 +12,7 @@ from typing import (
     Any,
     Callable,
     Optional,
+    TypeVar,
     overload,
 )
 
@@ -36,6 +37,8 @@ from dcaf.shared.types import (
 )
 from dcaf.metrics.npv import npv as _npv
 from dcaf.metrics.irr import irr as _irr
+
+KeyType = TypeVar("KeyType")
 
 
 class _UnsetType:
@@ -191,7 +194,7 @@ class CashFlow:
 
 
 @dataclass
-class CashFlowGroup[KeyType](BaseGroup[KeyType, CashFlow, "CashFlowStream"]):
+class CashFlowGroup(BaseGroup[KeyType, CashFlow, "CashFlowStream"]):
     """
     Dictionary-like container mapping group keys to ``CashFlowStream`` objects.
 
@@ -488,9 +491,9 @@ class CashFlowStream(BaseStream[CashFlow]):
         return self._filter_where(lambda flow: flow.is_cash)
 
     @overload
-    def group_by[KeyType](self, fn: Callable[[CashFlow], KeyType]) -> CashFlowGroup[KeyType]: ...
+    def group_by(self, fn: Callable[[CashFlow], KeyType]) -> "CashFlowGroup[KeyType]": ...
     @overload
-    def group_by(self, *, period: Period) -> CashFlowGroup[date]: ...
+    def group_by(self, *, period: Period) -> "CashFlowGroup[date]": ...
 
     def group_by(
         self,
