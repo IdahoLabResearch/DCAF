@@ -11,7 +11,7 @@ from datetime import date, timedelta
 from math import isfinite
 from typing import assert_never
 
-from dcaf.tax._macrs_tables import MACRS_MID_QUARTER_RATES, MACRS_RATES
+from dcaf.tax._macrs_tables import _MACRS_MID_QUARTER_RATES, _MACRS_RATES
 from dcaf.streams.cashflows import CashFlow, CashFlowStream
 from dcaf.shared.types import (
     MACRSConvention,
@@ -339,10 +339,10 @@ def macrs_schedule(
     """
     match convention:
         case "half-year":
-            rates = MACRS_RATES[property_class]
+            rates = _MACRS_RATES[property_class]
         case "mid-quarter":
             quarter = (placed_in_service.month - 1) // 3 + 1
-            rates = MACRS_MID_QUARTER_RATES[property_class][quarter]
+            rates = _MACRS_MID_QUARTER_RATES[property_class][quarter]
         case _:
             assert_never(convention)
     resolved_category, resolved_tax_treatment = normalize_cashflow_classification(

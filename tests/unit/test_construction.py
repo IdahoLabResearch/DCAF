@@ -263,7 +263,6 @@ def test_construction_spend_config_normalizes_profile_and_financing():
 
     assert config.profile.name == "linear"
     assert config.financing == ConstructionFinancing()
-    assert isinstance(ConstructionSpendBuilder.from_config(config).build(), CashFlowStream)
 
 
 def test_construction_spend_config_rejects_invalid_financing_type():

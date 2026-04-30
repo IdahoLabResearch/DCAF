@@ -662,34 +662,6 @@ class ConstructionSpendBuilder:
         )
         self._escalation_policy: EscalationPolicy | None = None
 
-    @classmethod
-    def from_config(cls, config: ConstructionSpendConfig) -> Self:
-        """Create a builder from an existing validated config.
-
-        Parameters
-        ----------
-        config : ConstructionSpendConfig
-            Validated construction spend configuration to wrap.
-
-        Returns
-        -------
-        ConstructionSpendBuilder
-            Builder initialized from ``config``.
-
-        Examples
-        --------
-        >>> from datetime import date
-        >>> from dcaf.finance.construction import ConstructionSpendBuilder, ConstructionSpendConfig
-        >>> config = ConstructionSpendConfig(1_000_000, date(2025, 1, 1), date(2026, 1, 1))
-        >>> builder = ConstructionSpendBuilder.from_config(config)
-        >>> builder.config.total_cost
-        1000000
-        """
-        builder = cls.__new__(cls)
-        builder._config = config
-        builder._escalation_policy = None
-        return builder
-
     def _copy(
         self,
         *,

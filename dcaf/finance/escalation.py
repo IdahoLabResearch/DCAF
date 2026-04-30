@@ -117,21 +117,6 @@ def _resolve_escalation_policy_override(
     return policy
 
 
-def _constant_discount_policy(
-    *,
-    valuation_date: date,
-    rate: float,
-    convention: DayCountConvention = "actual/365",
-) -> "ConstantRateEscalation":
-    """Build the internal constant-rate policy used for discounting."""
-    return ConstantRateEscalation(
-        reference_date=valuation_date,
-        rate=rate,
-        period="year",
-        day_count_convention=convention,
-    )
-
-
 # ===================================================================
 # ESCALATION POLICY IMPLEMENTATIONS
 # ===================================================================
