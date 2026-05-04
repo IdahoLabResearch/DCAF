@@ -1,0 +1,913 @@
+"""Private compiler for turning project builder configuration into analysis results."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field, replace as dc_replace
+from datetime import date
+from math import isclose
+from typing import Literal
+
+from dateutil.relativedelta import relativedelta
+
+from dcaf.finance.amortization import AmortizationSchedule
+from dcaf.finance.construction import ConstructionFinancing, construction_spend_schedule
+from dcaf.finance.escalation import ConstantRateEscalation, EscalationPolicy
+from dcaf.finance.outage import construction_outage as construction_outage_helper
+from dcaf.project._builder_config import (
+    CapacityGenerationConfig,
+    ConstructionFinancingConfig,
+    ConstructionOutageConfig,
+    ConstructionScheduleConfig,
+    EscalationSettings,
+    FixedOpexConfig,
+    MacrsDepreciationConfig,
+    ProjectConfig,
+    VariableCostConfig,
+    VdbDepreciationConfig,
+    constant_annual_escalation_rate,
+    effective_escalation,
+)
+from dcaf.project.analysis import ProjectAnalysis
+from dcaf.project.timeline import ProjectTimeline
+from dcaf.shared.formatting import format_label
+from dcaf.shared.time import elapsed_periods, event_date, hours_per_period, time_delta_per_period
+from dcaf.shared.types import Period, ProFormaCategory, TaxTreatment, TimingConvention
+from dcaf.streams.cashflows import CashFlow, CashFlowGroup, CashFlowStream
+from dcaf.streams.generation import Generation, GenerationStream
+from dcaf.tax.depreciation import macrs_schedule, vdb_schedule
+from dcaf.tax.incentives import itc, itc_adjusted_basis, ptc
+from dcaf.tax.liability import compute_taxable_income, tax_liability
+
+
+@dataclass(frozen=True, slots=True)
+class AnalysisContext:
+    """Resolved configuration and helpers for one project analysis compile."""
+
+    source_config: ProjectConfig
+    timeline: ProjectTimeline = field(init=False)
+    config: ProjectConfig = field(init=False)
+
+    def __post_init__(self) -> None:
+        timeline = self.resolve_timeline(self.source_config)
+        object.__setattr__(self, "timeline", timeline)
+        object.__setattr__(self, "config", dc_replace(self.source_config, timeline=timeline))
+
+    def require_timeline_date(
+        self,
+        field_name: Literal["construction_start", "operations_start", "operations_end"],
+    ) -> date:
+        """Return the named timeline date or raise ``ValueError`` if it is not set."""
+        value = getattr(self.timeline, field_name)
+        if value is None:
+            raise ValueError(f"timeline.{field_name} is required for this project configuration")
+        return value
+
+    def effective_escalation(self, local: EscalationSettings) -> EscalationSettings:
+        """Return the local escalation settings or the project default."""
+        return effective_escalation(local, self.config.default_escalation)
+
+    @staticmethod
+    def resolve_timeline(config: ProjectConfig) -> ProjectTimeline:
+        """Assemble an internal timeline from generation and construction configs."""
+        operations_start: date | None = None
+        operations_end: date | None = None
+        construction_start: date | None = None
+
+        gen = config.generation
+        if isinstance(gen, CapacityGenerationConfig):
+            if gen.operations_start is not None:
+                operations_start = gen.operations_start
+            if gen.operations_end is not None:
+                operations_end = gen.operations_end
+        elif isinstance(gen, GenerationStream):
+            if gen.entries:
+                dates = [entry.date for entry in gen.entries]
+                operations_start = min(dates)
+                # operations_end is exclusive; the latest entry date is
+                # within the operating window, so the boundary is the
+                # following day.
+                operations_end = max(dates) + relativedelta(days=1)
+
+        con = config.construction
+        if isinstance(con, ConstructionScheduleConfig):
+            if con.construction_start is not None:
+                construction_start = con.construction_start
+
+        return ProjectTimeline(
+            construction_start=construction_start,
+            operations_start=operations_start,
+            operations_end=operations_end,
+            frequency=config.frequency,
+            timing=config.timing,
+        )
+
+
+@dataclass(frozen=True)
+class ScheduledPeriod:
+    """One modeled operating period with an optional partial-period fraction.
+
+    ``event_date`` is the booking date for the period, computed from the timing
+    convention and phase boundaries. It defaults to ``start`` when not provided.
+    """
+
+    start: date
+    event_date: date
+    fraction: float = 1.0
+
+
+@dataclass(slots=True)
+class ComponentAccumulator:
+    """Accumulate generated component streams while skipping empty streams."""
+
+    streams: dict[str, CashFlowStream] = field(default_factory=dict)
+
+    def add(self, key: str, stream: CashFlowStream) -> None:
+        """Insert a generated stream when it contains entries."""
+        if stream.entries:
+            self.streams[key] = stream
+
+    def add_named(self, prefix: str, name: str, stream: CashFlowStream) -> None:
+        """Insert a generated stream using the default or named component key."""
+        key = prefix if name == "default" else f"{prefix}:{name}"
+        self.add(key, stream)
+
+    def add_custom(self, name: str, stream: CashFlowStream) -> None:
+        """Insert a caller-provided stream, preserving existing empty-stream behavior."""
+        self.streams[name] = stream
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectCompiler:
+    """Compile an immutable project configuration into a project analysis."""
+
+    context: AnalysisContext
+
+    @classmethod
+    def from_config(cls, config: ProjectConfig) -> ProjectCompiler:
+        """Build a compiler with a resolved analysis context."""
+        return cls(AnalysisContext(config))
+
+    @property
+    def config(self) -> ProjectConfig:
+        """Return the resolved config used by moved compile helpers."""
+        return self.context.config
+
+    def compile(self) -> ProjectAnalysis:
+        """Compile all project configuration into a :class:`ProjectAnalysis`."""
+        component_streams = ComponentAccumulator()
+        levelized_revenue_basis = ComponentAccumulator()
+
+        generation = self.build_generation()
+
+        construction_stream = self.build_construction()
+        component_streams.add("construction", construction_stream)
+
+        revenue_stream = self.build_revenue(generation)
+        component_streams.add("revenue", revenue_stream)
+        revenue_basis_stream = self.build_revenue(generation, price_per_mwh=1.0)
+        levelized_revenue_basis.add("revenue", revenue_basis_stream)
+
+        for cost_name, cost_config in self.config.fixed_opex_items.items():
+            component_streams.add_named(
+                "fixed_opex",
+                cost_name,
+                self.build_fixed_opex(cost_config),
+            )
+
+        for vc_name, vc_config in self.config.variable_cost_items.items():
+            component_streams.add_named(
+                "variable_cost",
+                vc_name,
+                self.build_variable_cost(vc_config, generation),
+            )
+
+        for outage_name, outage_config in self.config.construction_outages.items():
+            component_streams.add_named(
+                "construction_outage",
+                outage_name,
+                self.build_construction_outage(outage_config),
+            )
+
+        itc_stream = self.build_itc(construction_stream)
+        component_streams.add("itc", itc_stream)
+
+        ptc_stream = self.build_ptc(generation)
+        component_streams.add("ptc", ptc_stream)
+
+        depreciation_stream = self.build_depreciation(construction_stream)
+        component_streams.add("depreciation", depreciation_stream)
+
+        debt_stream = self.build_debt(construction_stream)
+        component_streams.add("debt_service", debt_stream)
+
+        for name, stream in self.config.custom_cashflows.items():
+            component_streams.add_custom(name, stream)
+
+        per_asset_taxable_components: list[CashFlowStream] = []
+        per_asset_deductible_components: list[CashFlowStream] = []
+        for stream in component_streams.streams.values():
+            if not stream.entries:
+                continue
+            taxable = stream.filter(tax_treatment=TaxTreatment.TAXABLE)
+            deductible = stream.filter(tax_treatment=TaxTreatment.DEDUCTIBLE)
+            if taxable.entries:
+                per_asset_taxable_components.append(taxable)
+            if deductible.entries:
+                per_asset_deductible_components.append(deductible)
+
+        revenue_for_tax = CashFlowStream.from_streams(*per_asset_taxable_components)
+        deductions_for_tax = CashFlowStream.from_streams(*per_asset_deductible_components)
+        taxable_income = compute_taxable_income(revenue_for_tax, deductions_for_tax)
+
+        taxes = (
+            tax_liability(
+                taxable_income,
+                tax_rate=self.config.tax_rate,
+                allow_refund=self.config.tax_allow_refund,
+            )
+            if self.config.tax_rate is not None
+            else CashFlowStream()
+        )
+        component_streams.add("project:tax_liability", taxes)
+
+        return ProjectAnalysis(
+            timeline=self.context.timeline,
+            valuation=self.config.valuation,
+            generation=generation,
+            cashflow_components=CashFlowGroup(component_streams.streams),
+            taxable_income=taxable_income,
+            taxes=taxes,
+            tax_rate=self.config.tax_rate,
+            levelized_revenue_basis=CashFlowGroup(levelized_revenue_basis.streams),
+            levelized_cost_escalation_rate=self.infer_levelized_cost_escalation_rate(),
+        )
+
+    def build_generation(self) -> GenerationStream:
+        """Build the generation stream from project configuration.
+
+        Returns an empty stream when generation is unconfigured.
+        """
+        generation = self.config.generation
+        if generation is None:
+            if self.config.generation_outages:
+                raise ValueError("generation_outage requires generation to be configured")
+            return GenerationStream()
+        if isinstance(generation, GenerationStream):
+            base_generation = generation
+        else:
+            frequency = (
+                generation.frequency
+                if generation.frequency is not None
+                else self.config.timeline.frequency
+            )
+            start = (
+                generation.start
+                if generation.start is not None
+                else self.require_timeline_date("operations_start")
+            )
+            timing = generation.timing or self.config.timeline.timing
+            ops_start = self.config.timeline.operations_start
+            ops_end = self.config.timeline.operations_end
+            schedule = self.operating_schedule(
+                "generation",
+                start=start,
+                periods=generation.periods,
+                frequency=frequency,
+                timing=timing,
+                phase_start=ops_start,
+                phase_end=ops_end,
+            )
+            entries: list[Generation] = []
+            hours = hours_per_period(frequency)
+            for index, modeled_period in enumerate(schedule, start=1):
+                label = format_label(generation.label, index)
+                entries.append(
+                    Generation(
+                        amount_mwh=(
+                            generation.capacity_mw
+                            * generation.capacity_factor
+                            * hours
+                            * modeled_period.fraction
+                        ),
+                        date=modeled_period.event_date,
+                        label=label,
+                    )
+                )
+            base_generation = GenerationStream(entries)
+
+        outage_generation = self.build_generation_outages()
+        if not outage_generation.entries:
+            return base_generation
+        return GenerationStream.from_streams(base_generation, outage_generation).sort()
+
+    def build_generation_outages(self) -> GenerationStream:
+        """Build negative generation entries for configured modeled outages."""
+        if not self.config.generation_outages:
+            return GenerationStream()
+
+        generation = self.config.generation
+        capacity_defaults: CapacityGenerationConfig | None = (
+            generation if isinstance(generation, CapacityGenerationConfig) else None
+        )
+        ops_start = self.config.timeline.operations_start
+        ops_end = self.config.timeline.operations_end
+
+        outage_streams: list[GenerationStream] = []
+        for outage in self.config.generation_outages:
+            if ops_start is not None and outage.start < ops_start:
+                raise ValueError(
+                    f"generation_outage {outage.name!r} starts before operations_start"
+                )
+            if ops_end is not None and outage.end > ops_end:
+                raise ValueError(f"generation_outage {outage.name!r} ends after operations_end")
+
+            capacity_mw = outage.capacity_mw
+            if capacity_mw is None and capacity_defaults is not None:
+                capacity_mw = capacity_defaults.capacity_mw
+            if capacity_mw is None:
+                raise ValueError(
+                    f"generation_outage {outage.name!r} requires capacity_mw "
+                    "when capacity-based generation is not configured"
+                )
+
+            capacity_factor = outage.capacity_factor
+            if capacity_factor is None and capacity_defaults is not None:
+                capacity_factor = capacity_defaults.capacity_factor
+            if capacity_factor is None:
+                raise ValueError(
+                    f"generation_outage {outage.name!r} requires capacity_factor "
+                    "when capacity-based generation is not configured"
+                )
+
+            timing = outage.timing
+            if capacity_defaults is not None:
+                timing = timing or capacity_defaults.timing
+
+            outage_streams.append(
+                GenerationStream.from_outage(
+                    capacity_mw=capacity_mw,
+                    capacity_factor=capacity_factor,
+                    start=outage.start,
+                    end=outage.end,
+                    capacity_reduction=outage.capacity_reduction,
+                    timing=timing or self.config.timeline.timing,
+                    label=outage.label,
+                )
+            )
+        return GenerationStream.from_streams(*outage_streams)
+
+    def build_construction_outage(
+        self,
+        outage: ConstructionOutageConfig,
+    ) -> CashFlowStream:
+        """Build operating-cost cashflows for a construction outage on baseline generation."""
+        if outage.sell_price_per_unit is None:
+            market = self.config.market
+            if market is None:
+                raise ValueError(
+                    f"construction_outage {outage.name!r} requires sell_price_per_unit "
+                    "or a configured market"
+                )
+            price_per_mwh = market.sell_price_per_unit
+            escalation = self.context.effective_escalation(market.escalation)
+        else:
+            price_per_mwh = outage.sell_price_per_unit
+            escalation = self.context.effective_escalation(outage.escalation)
+
+        return construction_outage_helper(
+            capacity_mw=outage.capacity_mw,
+            capacity_factor=outage.capacity_factor,
+            start=outage.start,
+            end=outage.end,
+            sell_price_per_unit=price_per_mwh,
+            capacity_reduction=outage.capacity_reduction,
+            fixed_cost=outage.fixed_cost,
+            cost_per_day=outage.cost_per_day,
+            timing=outage.timing or self.config.timeline.timing,
+            lost_revenue_label=outage.lost_revenue_label,
+            fixed_cost_label=outage.fixed_cost_label,
+            daily_cost_label=outage.daily_cost_label,
+            pro_forma_category=ProFormaCategory.OPERATING_COST,
+            tax_treatment=TaxTreatment.DEDUCTIBLE,
+            escalation=escalation.escalation,
+            escalation_period=escalation.escalation_period,
+            amount_reference_date=escalation.amount_reference_date,
+            escalation_policy=escalation.policy,
+        )
+
+    def build_revenue(
+        self,
+        generation: GenerationStream,
+        *,
+        price_per_mwh: float | None = None,
+    ) -> CashFlowStream:
+        """Build the revenue stream from generation and market config.
+
+        Returns an empty stream when generation is empty or no market price is set.
+        """
+        if not generation.entries:
+            return CashFlowStream()
+        market = self.config.market
+        if market is None:
+            return CashFlowStream()
+        resolved_price_per_mwh = (
+            market.sell_price_per_unit if price_per_mwh is None else price_per_mwh
+        )
+        escalation = self.context.effective_escalation(market.escalation)
+        if escalation.policy is not None:
+            return generation.to_revenue(
+                price_per_mwh=resolved_price_per_mwh,
+                label=market.label,
+                escalation_policy=escalation.policy,
+            )
+        return generation.to_revenue(
+            price_per_mwh=resolved_price_per_mwh,
+            label=market.label,
+            escalation=escalation.escalation,
+            escalation_period=escalation.escalation_period,
+            amount_reference_date=escalation.amount_reference_date,
+        )
+
+    def build_fixed_opex(self, fixed: FixedOpexConfig) -> CashFlowStream:
+        """Build a fixed OPEX cash-flow stream from *fixed* configuration.
+
+        Each period's amount is scaled by the escalation factor and the
+        partial-period fraction.
+        """
+        frequency = (
+            fixed.frequency if fixed.frequency is not None else self.config.timeline.frequency
+        )
+        start = (
+            fixed.start
+            if fixed.start is not None
+            else self.require_timeline_date("operations_start")
+        )
+        timing = fixed.timing or self.config.timeline.timing
+        ops_start = self.config.timeline.operations_start
+        ops_end = self.config.timeline.operations_end
+        schedule = self.operating_schedule(
+            "fixed_opex",
+            start=start,
+            periods=fixed.periods,
+            frequency=frequency,
+            timing=timing,
+            phase_start=ops_start,
+            phase_end=ops_end,
+        )
+        escalation = self.context.effective_escalation(fixed.escalation)
+        escalation_policy = recurring_policy(start, escalation)
+        entries: list[CashFlow] = []
+        for index, modeled_period in enumerate(schedule, start=1):
+            label = format_label(fixed.label, index)
+            entries.append(
+                CashFlow(
+                    amount=(
+                        -abs(fixed.amount)
+                        * escalation_policy.factor(modeled_period.event_date)
+                        * modeled_period.fraction
+                    ),
+                    date=modeled_period.event_date,
+                    label=label,
+                    is_cash=True,
+                    pro_forma_category=ProFormaCategory.OPERATING_COST,
+                    tax_treatment=TaxTreatment.DEDUCTIBLE,
+                )
+            )
+        return CashFlowStream(entries)
+
+    def build_variable_cost(
+        self,
+        variable: VariableCostConfig,
+        generation: GenerationStream,
+    ) -> CashFlowStream:
+        """Build a variable cost stream by applying *variable* rate to generation.
+
+        Returns an empty stream when generation is unavailable.
+        """
+        if not generation.entries:
+            return CashFlowStream()
+        escalation = self.context.effective_escalation(variable.escalation)
+        if escalation.policy is not None:
+            return generation.to_cost(
+                rate_per_mwh=variable.rate_per_unit,
+                label=variable.label,
+                escalation_policy=escalation.policy,
+            )
+        return generation.to_cost(
+            rate_per_mwh=variable.rate_per_unit,
+            label=variable.label,
+            escalation=escalation.escalation,
+            escalation_period=escalation.escalation_period,
+            amount_reference_date=escalation.amount_reference_date,
+        )
+
+    def build_construction(self) -> CashFlowStream:
+        """Build the construction spend stream from project construction configuration.
+
+        Returns the pre-built stream directly when a stream override is provided.
+        When no spend profile is given, books the overnight cost as a single
+        cash flow on the COD date. Otherwise distributes the cost over the
+        construction period using the spend schedule.
+        """
+        construction = self.config.construction
+        if construction is None:
+            return CashFlowStream()
+        if isinstance(construction, CashFlowStream):
+            if self.config.construction_debt is not None:
+                raise ValueError(
+                    "construction stream overrides cannot be combined with construction debt"
+                )
+            return construction
+
+        # Resolve COD date: explicit > operations_start
+        cod = (
+            construction.cod_date
+            if construction.cod_date is not None
+            else self.require_timeline_date("operations_start")
+        )
+
+        # Overnight-only path: no spend profile, book as single cash flow at COD
+        if construction.spend_profile is None:
+            return CashFlowStream(
+                [
+                    CashFlow(
+                        amount=-abs(construction.overnight_cost),
+                        date=cod,
+                        label="Construction",
+                        is_cash=True,
+                        pro_forma_category=ProFormaCategory.CAPITAL_COST,
+                    )
+                ]
+            )
+
+        # Spend-profile path: distribute cost over construction period
+        start = (
+            construction.construction_start
+            if construction.construction_start is not None
+            else self.require_timeline_date("construction_start")
+        )
+        end = construction.construction_end if construction.construction_end is not None else cod
+
+        # Convert ConstructionFinancingConfig to ConstructionFinancing for the
+        # lower-level construction_spend_schedule function.
+        financing = self.construction_financing(self.config.construction_debt)
+
+        escalation = self.context.effective_escalation(construction.escalation)
+        if escalation.policy is not None:
+            return construction_spend_schedule(
+                total_cost=construction.overnight_cost,
+                start_date=start,
+                end_date=end,
+                period=construction.period,
+                profile=construction.spend_profile,
+                financing=financing,
+                escalation_policy=escalation.policy,
+            )
+        return construction_spend_schedule(
+            total_cost=construction.overnight_cost,
+            start_date=start,
+            end_date=end,
+            period=construction.period,
+            profile=construction.spend_profile,
+            financing=financing,
+            escalation=escalation.escalation,
+            escalation_period=escalation.escalation_period,
+            amount_reference_date=escalation.amount_reference_date,
+        )
+
+    @staticmethod
+    def construction_financing(
+        debt_config: ConstructionFinancingConfig | None,
+    ) -> ConstructionFinancing:
+        """Convert a construction debt config to a ConstructionFinancing for the spend schedule."""
+        if debt_config is None:
+            return ConstructionFinancing()
+        return ConstructionFinancing(
+            debt_fraction=debt_config.debt_fraction,
+            interest_rate=debt_config.construction_interest_rate,
+            interest_treatment=debt_config.interest_treatment,
+            servicing_period=debt_config.servicing_period,
+        )
+
+    def build_itc(
+        self,
+        construction_stream: CashFlowStream,
+    ) -> CashFlowStream:
+        """Build an ITC cash-flow stream from capital-cost construction flows.
+
+        Returns an empty stream when no ITC rate is configured or construction
+        has no capital-cost entries.
+        """
+        if self.config.itc_rate is None or not construction_stream.entries:
+            return CashFlowStream()
+        capex_basis = construction_stream.filter(pro_forma_category=ProFormaCategory.CAPITAL_COST)
+        if not capex_basis.entries:
+            return CashFlowStream()
+        return itc(
+            capex_stream=capex_basis,
+            rate=self.config.itc_rate,
+            placed_in_service=self.require_timeline_date("operations_start"),
+        )
+
+    def build_ptc(
+        self,
+        generation: GenerationStream,
+    ) -> CashFlowStream:
+        """Build a PTC cash-flow stream from generation and PTC configuration.
+
+        Returns an empty stream when no PTC is configured or generation is empty.
+        """
+        if self.config.ptc is None or not generation.entries:
+            return CashFlowStream()
+        ptc_config = self.config.ptc
+        escalation = self.context.effective_escalation(ptc_config.escalation)
+        if escalation.policy is not None:
+            return ptc(
+                generation_stream=generation,
+                rate_per_mwh=ptc_config.rate_per_unit,
+                years=ptc_config.years,
+                label=ptc_config.label,
+                escalation_policy=escalation.policy,
+            )
+        return ptc(
+            generation_stream=generation,
+            rate_per_mwh=ptc_config.rate_per_unit,
+            years=ptc_config.years,
+            label=ptc_config.label,
+            escalation=escalation.escalation,
+            escalation_period=escalation.escalation_period,
+            amount_reference_date=escalation.amount_reference_date,
+        )
+
+    def remap_event_dates(
+        self,
+        stream: CashFlowStream,
+        frequency: Period,
+        phase_start: date | None,
+        phase_end: date | None,
+    ) -> CashFlowStream:
+        """Remap cashflow dates according to the project timing convention.
+
+        Applies the timeline's timing convention to each cashflow in *stream*,
+        replacing each date with the computed event date. ``phase_end`` is the
+        exclusive end of the phase and is converted to the inclusive last
+        allowable date for :func:`event_date`.
+        """
+        timing = self.config.timeline.timing
+        phase_end_inclusive = phase_end - relativedelta(days=1) if phase_end is not None else None
+        return stream.apply(
+            lambda cf: dc_replace(
+                cf,
+                date=event_date(cf.date, frequency, timing, phase_start, phase_end_inclusive),
+            )
+        )
+
+    def build_depreciation(
+        self,
+        construction_stream: CashFlowStream,
+    ) -> CashFlowStream:
+        """Build a depreciation stream from construction capital costs and depreciation config.
+
+        Applies ITC basis adjustment when an ITC rate is configured. Returns an
+        empty stream when depreciation is unconfigured or the cost basis is zero.
+        """
+        if self.config.depreciation is None or not construction_stream.entries:
+            return CashFlowStream()
+        capex_basis = construction_stream.filter(pro_forma_category=ProFormaCategory.CAPITAL_COST)
+        if not capex_basis.entries:
+            return CashFlowStream()
+        basis = (
+            itc_adjusted_basis(capex_basis, self.config.itc_rate)
+            if self.config.itc_rate is not None
+            else abs(capex_basis.sum())
+        )
+        if basis == 0.0:
+            return CashFlowStream()
+        placed = self.require_timeline_date("operations_start")
+        ops_start = self.config.timeline.operations_start
+        ops_end = self.config.timeline.operations_end
+        match self.config.depreciation:
+            case MacrsDepreciationConfig() as config:
+                return self.remap_event_dates(
+                    macrs_schedule(
+                        cost_basis=basis,
+                        placed_in_service=placed,
+                        property_class=config.property_class,
+                        convention=config.convention,
+                        label=config.label,
+                    ),
+                    frequency="year",
+                    phase_start=ops_start,
+                    phase_end=ops_end,
+                )
+            case VdbDepreciationConfig() as config:
+                return self.remap_event_dates(
+                    vdb_schedule(
+                        cost_basis=basis,
+                        salvage_value=config.salvage_value,
+                        placed_in_service=placed,
+                        life=config.life,
+                        frequency=config.frequency,
+                        factor=config.factor,
+                        switch_to_straight_line=config.switch_to_straight_line,
+                        convention=config.convention,
+                        schedule_dates=config.schedule_dates,
+                        valuation_rate=config.valuation_rate,
+                        valuation_date=config.valuation_date,
+                        terminal_catch_up=config.terminal_catch_up,
+                        label=config.label,
+                    ),
+                    frequency=config.frequency,
+                    phase_start=ops_start,
+                    phase_end=ops_end,
+                )
+            case _:
+                raise AssertionError("Unexpected depreciation config")
+
+    def build_debt(
+        self,
+        construction_stream: CashFlowStream,
+    ) -> CashFlowStream:
+        """Build the debt service stream from construction debt or schedule config.
+
+        Handles two paths: construction-debt-based amortization (principal
+        derived from construction draws) and explicit schedule overrides.
+        Returns an empty stream when no debt is configured.
+        """
+        # Explicit schedule override takes precedence
+        if self.config.debt_schedule is not None:
+            sched = self.config.debt_schedule
+            if isinstance(sched, AmortizationSchedule):
+                return CashFlowStream.from_streams(
+                    sched.interest,
+                    sched.principal,
+                ).sort()
+            return sched
+
+        # Construction-debt path
+        debt = self.config.construction_debt
+        if debt is None:
+            return CashFlowStream()
+        if debt.amortization_term <= 0:
+            raise ValueError("amortization_term must be positive")
+
+        # Derive principal from construction draws
+        if not construction_stream.entries:
+            raise ValueError(
+                "construction_debt requires a construction schedule to derive "
+                "the debt principal — call construction() first"
+            )
+        capex = construction_stream.filter(pro_forma_category=ProFormaCategory.CAPITAL_COST)
+        debt_draws = abs(capex.cash_only().sum()) * debt.debt_fraction
+        capitalized_interest = abs(capex.filter(is_cash=False).sum())
+        principal = debt_draws + capitalized_interest
+
+        start = (
+            debt.amortization_start
+            if debt.amortization_start is not None
+            else self.require_timeline_date("operations_start")
+        )
+        schedule = AmortizationSchedule.build(
+            principal=principal,
+            annual_rate=debt.amortization_rate,
+            term=debt.amortization_term,
+            start_date=start,
+            frequency=debt.amortization_frequency,
+        )
+        ops_start = self.config.timeline.operations_start
+        ops_end = self.config.timeline.operations_end
+        return self.remap_event_dates(
+            CashFlowStream.from_streams(schedule.interest, schedule.principal).sort(),
+            frequency=debt.amortization_frequency,
+            phase_start=ops_start,
+            phase_end=ops_end,
+        )
+
+    def infer_levelized_cost_escalation_rate(self) -> float | None:
+        """Infer a shared annual escalation rate for constant-dollar LCOE when possible."""
+
+        inferred_rates: list[float] = []
+
+        def collect(local: EscalationSettings) -> bool:
+            effective = self.context.effective_escalation(local)
+            rate = constant_annual_escalation_rate(effective)
+            if rate is None:
+                return False
+            inferred_rates.append(rate)
+            return True
+
+        if (
+            isinstance(self.config.construction, ConstructionScheduleConfig)
+            and self.config.construction.overnight_cost != 0.0
+        ):
+            if not collect(self.config.construction.escalation):
+                return None
+        for recurring_cost in self.config.fixed_opex_items.values():
+            if recurring_cost.amount != 0.0:
+                if not collect(recurring_cost.escalation):
+                    return None
+        if self.config.ptc is not None and self.config.ptc.rate_per_unit != 0.0:
+            if not collect(self.config.ptc.escalation):
+                return None
+
+        market = self.config.market
+        if market is not None and market.sell_price_per_unit != 0.0:
+            if not collect(market.escalation):
+                return None
+
+        if not inferred_rates:
+            return 0.0
+
+        first_rate = inferred_rates[0]
+        if any(
+            not isclose(rate, first_rate, rel_tol=0.0, abs_tol=1e-12) for rate in inferred_rates[1:]
+        ):
+            return None
+        return first_rate
+
+    def operating_schedule(
+        self,
+        section: str,
+        *,
+        start: date,
+        periods: int | None,
+        frequency: Period,
+        timing: TimingConvention = "end",
+        phase_start: date | None = None,
+        phase_end: date | None = None,
+    ) -> tuple[ScheduledPeriod, ...]:
+        """Build the sequence of modeled operating periods for a section.
+
+        When *periods* is specified, generates exactly that many full-period
+        entries. Otherwise infers the schedule from ``timeline.operations_end``,
+        prorating any trailing partial period using :func:`elapsed_periods`.
+
+        *timing*, *phase_start*, and *phase_end* (all exclusive ends) control
+        event-date placement. ``phase_end`` is converted to the inclusive
+        last-allowable date when forwarded to :func:`event_date`.
+        """
+        phase_end_inclusive = phase_end - relativedelta(days=1) if phase_end is not None else None
+
+        if periods is not None:
+            if periods <= 0:
+                raise ValueError(f"{section} periods must be positive")
+            delta = time_delta_per_period(frequency)
+            current = start
+            schedule: list[ScheduledPeriod] = []
+            for _ in range(periods):
+                schedule.append(
+                    ScheduledPeriod(
+                        start=current,
+                        event_date=event_date(
+                            current, frequency, timing, phase_start, phase_end_inclusive
+                        ),
+                    )
+                )
+                current += delta
+            return tuple(schedule)
+
+        exclusive_end = self.require_timeline_date("operations_end")
+        if exclusive_end <= start:
+            raise ValueError(f"timeline.operations_end must be after the {section} start")
+
+        operations_end_inclusive = exclusive_end - relativedelta(days=1)
+        effective_phase_end = (
+            phase_end_inclusive if phase_end_inclusive is not None else operations_end_inclusive
+        )
+
+        delta = time_delta_per_period(frequency)
+        current = start
+        schedule = []
+        while current < exclusive_end:
+            window_end = min(current + delta, exclusive_end)
+            schedule.append(
+                ScheduledPeriod(
+                    start=current,
+                    event_date=event_date(
+                        current, frequency, timing, phase_start, effective_phase_end
+                    ),
+                    fraction=elapsed_periods(current, window_end, frequency),
+                )
+            )
+            current += delta
+        return tuple(schedule)
+
+    def require_timeline_date(
+        self,
+        field_name: Literal["construction_start", "operations_start", "operations_end"],
+    ) -> date:
+        """Return the named timeline date or raise ``ValueError`` if it is not set."""
+        return self.context.require_timeline_date(field_name)
+
+
+def recurring_policy(start: date, escalation: EscalationSettings) -> EscalationPolicy:
+    """Resolve recurring-cost escalation settings into a concrete policy."""
+    if escalation.policy is not None:
+        return escalation.policy
+    return ConstantRateEscalation(
+        reference_date=start
+        if escalation.amount_reference_date is None
+        else escalation.amount_reference_date,
+        rate=escalation.escalation,
+        period=escalation.escalation_period,
+    )
