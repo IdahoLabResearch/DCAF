@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace as dc_replace
 from datetime import date
-from math import isclose, isfinite
+from math import isfinite
 from typing import Literal, Self, TypeAlias
 
 from dateutil.relativedelta import relativedelta

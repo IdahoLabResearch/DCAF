@@ -10,7 +10,7 @@ wheels/
 # Virtual environments
 .venv
 
-# AI 
+# AI
 .claude/
 
 # Documentation artifacts
