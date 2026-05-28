@@ -30,8 +30,14 @@ from dcaf.project._builder_config import (
 from dcaf.project.analysis import ProjectAnalysis
 from dcaf.project.timeline import ProjectTimeline
 from dcaf.shared.formatting import format_label
-from dcaf.shared.time import elapsed_periods, event_date, hours_per_period, time_delta_per_period
-from dcaf.shared.types import Period, ProFormaCategory, TaxTreatment, TimingConvention
+from dcaf.shared.time import elapsed_hours, elapsed_periods, event_date, time_delta_per_period
+from dcaf.shared.types import (
+    DayCountConvention,
+    Period,
+    ProFormaCategory,
+    TaxTreatment,
+    TimingConvention,
+)
 from dcaf.streams.cashflows import CashFlow, CashFlowGroup, CashFlowStream
 from dcaf.streams.generation import Generation, GenerationStream
 from dcaf.tax.depreciation import macrs_schedule, vdb_schedule
@@ -99,6 +105,7 @@ class AnalysisContext:
             operations_end=operations_end,
             frequency=config.frequency,
             timing=config.timing,
+            day_count_convention=config.day_count_convention,
         )
 
 
@@ -111,6 +118,7 @@ class ScheduledPeriod:
     """
 
     start: date
+    end: date
     event_date: date
     fraction: float = 1.0
 
@@ -278,16 +286,19 @@ class ProjectCompiler:
                 phase_end=ops_end,
             )
             entries: list[Generation] = []
-            hours = hours_per_period(frequency)
             for index, modeled_period in enumerate(schedule, start=1):
                 label = format_label(generation.label, index)
+                hours = elapsed_hours(
+                    modeled_period.start,
+                    modeled_period.end,
+                    self.config.day_count_convention,
+                )
                 entries.append(
                     Generation(
                         amount_mwh=(
                             generation.capacity_mw
                             * generation.capacity_factor
                             * hours
-                            * modeled_period.fraction
                         ),
                         date=modeled_period.event_date,
                         label=label,
@@ -352,6 +363,7 @@ class ProjectCompiler:
                     capacity_reduction=outage.capacity_reduction,
                     timing=timing or self.config.timeline.timing,
                     label=outage.label,
+                    day_count_convention=self.config.day_count_convention,
                 )
             )
         return GenerationStream.from_streams(*outage_streams)
@@ -393,6 +405,7 @@ class ProjectCompiler:
             escalation_period=escalation.escalation_period,
             amount_reference_date=escalation.amount_reference_date,
             escalation_policy=escalation.policy,
+            day_count_convention=self.config.day_count_convention,
         )
 
     def build_revenue(
@@ -426,6 +439,7 @@ class ProjectCompiler:
             escalation=escalation.escalation,
             escalation_period=escalation.escalation_period,
             amount_reference_date=escalation.amount_reference_date,
+            day_count_convention=self.config.day_count_convention,
         )
 
     def build_fixed_opex(self, fixed: FixedOpexConfig) -> CashFlowStream:
@@ -455,7 +469,11 @@ class ProjectCompiler:
             phase_end=ops_end,
         )
         escalation = self.context.effective_escalation(fixed.escalation)
-        escalation_policy = recurring_policy(start, escalation)
+        escalation_policy = recurring_policy(
+            start,
+            escalation,
+            self.config.day_count_convention,
+        )
         entries: list[CashFlow] = []
         for index, modeled_period in enumerate(schedule, start=1):
             label = format_label(fixed.label, index)
@@ -499,6 +517,7 @@ class ProjectCompiler:
             escalation=escalation.escalation,
             escalation_period=escalation.escalation_period,
             amount_reference_date=escalation.amount_reference_date,
+            day_count_convention=self.config.day_count_convention,
         )
 
     def build_construction(self) -> CashFlowStream:
@@ -562,6 +581,7 @@ class ProjectCompiler:
                 profile=construction.spend_profile,
                 financing=financing,
                 escalation_policy=escalation.policy,
+                day_count_convention=self.config.day_count_convention,
             )
         return construction_spend_schedule(
             total_cost=construction.overnight_cost,
@@ -573,6 +593,7 @@ class ProjectCompiler:
             escalation=escalation.escalation,
             escalation_period=escalation.escalation_period,
             amount_reference_date=escalation.amount_reference_date,
+            day_count_convention=self.config.day_count_convention,
         )
 
     @staticmethod
@@ -628,6 +649,7 @@ class ProjectCompiler:
                 years=ptc_config.years,
                 label=ptc_config.label,
                 escalation_policy=escalation.policy,
+                day_count_convention=self.config.day_count_convention,
             )
         return ptc(
             generation_stream=generation,
@@ -637,6 +659,7 @@ class ProjectCompiler:
             escalation=escalation.escalation,
             escalation_period=escalation.escalation_period,
             amount_reference_date=escalation.amount_reference_date,
+            day_count_convention=self.config.day_count_convention,
         )
 
     def remap_event_dates(
@@ -858,6 +881,7 @@ class ProjectCompiler:
                 schedule.append(
                     ScheduledPeriod(
                         start=current,
+                        end=current + delta,
                         event_date=event_date(
                             current, frequency, timing, phase_start, phase_end_inclusive
                         ),
@@ -883,10 +907,16 @@ class ProjectCompiler:
             schedule.append(
                 ScheduledPeriod(
                     start=current,
+                    end=window_end,
                     event_date=event_date(
                         current, frequency, timing, phase_start, effective_phase_end
                     ),
-                    fraction=elapsed_periods(current, window_end, frequency),
+                    fraction=elapsed_periods(
+                        current,
+                        window_end,
+                        frequency,
+                        self.config.day_count_convention,
+                    ),
                 )
             )
             current += delta
@@ -900,7 +930,11 @@ class ProjectCompiler:
         return self.context.require_timeline_date(field_name)
 
 
-def recurring_policy(start: date, escalation: EscalationSettings) -> EscalationPolicy:
+def recurring_policy(
+    start: date,
+    escalation: EscalationSettings,
+    day_count_convention: DayCountConvention,
+) -> EscalationPolicy:
     """Resolve recurring-cost escalation settings into a concrete policy."""
     if escalation.policy is not None:
         return escalation.policy
@@ -910,4 +944,5 @@ def recurring_policy(start: date, escalation: EscalationSettings) -> EscalationP
         else escalation.amount_reference_date,
         rate=escalation.escalation,
         period=escalation.escalation_period,
+        day_count_convention=day_count_convention,
     )

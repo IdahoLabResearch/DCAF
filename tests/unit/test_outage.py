@@ -7,6 +7,7 @@ import pytest
 from dcaf import EnergyProject
 from dcaf.finance.escalation import ConstantRateEscalation
 from dcaf.finance.outage import construction_outage, generator_outage
+from dcaf.shared.time import timedelta_fractional_years
 from dcaf.shared.types import ProFormaCategory, TaxTreatment
 from dcaf.streams import GenerationStream
 
@@ -132,7 +133,7 @@ def test_construction_outage_escalation_applied():
     )
 
     lost_mwh = 1000.0 * 0.92 * 24.0 * 10.0
-    years = (booking - reference).days / 365.0
+    years = timedelta_fractional_years(reference, booking)
     expected = -lost_mwh * 50.0 * (1.02**years)
     assert stream.entries[0].amount == pytest.approx(expected, rel=1e-6)
 

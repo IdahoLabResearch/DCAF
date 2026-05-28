@@ -75,7 +75,7 @@ def test_from_capacity_monthly():
         frequency="month",
     )
     assert gs.count() == 3
-    expected_mwh = 100 * 1.0 * (8760 / 12)
+    expected_mwh = 100 * 1.0 * 31 * 24
     assert abs(gs.entries[0].amount_mwh - expected_mwh) < 1e-6
     assert gs.entries[1].date == date(2030, 2, 1)
 
@@ -90,8 +90,37 @@ def test_from_capacity_quarterly():
         frequency="quarter",
     )
     assert gs.count() == 4
-    expected_mwh = 50 * 0.80 * (8760 / 4)
+    expected_mwh = 50 * 0.80 * 90 * 24
     assert abs(gs.entries[0].amount_mwh - expected_mwh) < 1e-6
+
+
+def test_from_capacity_day_count_convention_controls_leap_year_hours():
+    """Capacity generation uses the selected convention for elapsed hours."""
+    no_leap = GenerationStream.from_capacity(
+        capacity_mw=1.0,
+        capacity_factor=1.0,
+        start=date(2024, 1, 1),
+        periods=1,
+        day_count_convention="actual/365-no-leap",
+    )
+    fixed = GenerationStream.from_capacity(
+        capacity_mw=1.0,
+        capacity_factor=1.0,
+        start=date(2024, 1, 1),
+        periods=1,
+        day_count_convention="actual/365-fixed",
+    )
+    actual = GenerationStream.from_capacity(
+        capacity_mw=1.0,
+        capacity_factor=1.0,
+        start=date(2024, 1, 1),
+        periods=1,
+        day_count_convention="actual/actual",
+    )
+
+    assert no_leap.sum() == pytest.approx(8760.0)
+    assert fixed.sum() == pytest.approx(8784.0)
+    assert actual.sum() == pytest.approx(8784.0)
 
 
 def test_from_capacity_default_label():
@@ -145,6 +174,26 @@ def test_from_outage_supports_partial_reduction_and_timing():
 
     assert outage.entries[0].amount_mwh == pytest.approx(-(100.0 * 0.5 * 0.25 * 24.0 * 4.0))
     assert outage.entries[0].date == date(2030, 1, 2)
+
+
+def test_from_outage_actual_365_excludes_feb_29():
+    outage = GenerationStream.from_outage(
+        capacity_mw=1.0,
+        capacity_factor=1.0,
+        start=date(2024, 2, 28),
+        end=date(2024, 3, 1),
+        day_count_convention="actual/365-no-leap",
+    )
+    fixed = GenerationStream.from_outage(
+        capacity_mw=1.0,
+        capacity_factor=1.0,
+        start=date(2024, 2, 28),
+        end=date(2024, 3, 1),
+        day_count_convention="actual/365-fixed",
+    )
+
+    assert outage.sum() == pytest.approx(-24.0)
+    assert fixed.sum() == pytest.approx(-48.0)
 
 
 def test_from_outage_rejects_invalid_inputs():
@@ -495,7 +544,11 @@ def test_discounted_sum_uses_constant_rate_escalation_for_discounting():
             Generation(1000.0, date(2031, 1, 1)),
         ]
     )
-    policy = ConstantRateEscalation(valuation_date, rate=0.10, day_count_convention="actual/365")
+    policy = ConstantRateEscalation(
+        valuation_date,
+        rate=0.10,
+        day_count_convention="actual/365-no-leap",
+    )
 
     expected = sum(entry.amount_mwh / policy.factor(entry.date) for entry in gs.entries)
 

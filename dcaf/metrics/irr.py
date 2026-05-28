@@ -16,7 +16,7 @@ _IRR_MIN_RATE = -1.0 + 1e-8
 
 def irr(
     stream: CashFlowStream,
-    convention: DayCountConvention = "actual/365",
+    convention: DayCountConvention = "actual/actual",
     *,
     tol: float = 1e-8,
     max_iter: int = 100,
@@ -32,7 +32,7 @@ def irr(
         Cashflow stream to evaluate. Only ``is_cash=True`` entries are
         used.
     convention : DayCountConvention, optional
-        Day-count convention. Default is ``"actual/365"``.
+        Day-count convention. Default is ``"actual/actual"``.
     tol : float, optional
         Relative convergence tolerance. Iteration stops when
         ``|NPV(r)| < tol * Σ|CFᵢ|``. Default is ``1e-8``.

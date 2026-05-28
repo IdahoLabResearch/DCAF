@@ -58,7 +58,7 @@ The public API is re-exported from `dcaf/__init__.py`. Business logic is organiz
 - **Functional composition**: Methods accept callables (`Callable[[CashFlow], ...]`) for customizable transformations, filtering, and grouping.
 - **Exhaustive matching**: Uses `match/case` with `assert_never()` instead of catch-all exceptions.
 - **Modern Python 3.13+**: PEP 695 type aliases (`type X = ...`), generic syntax on methods (`group_by[KeyType]`), `Literal` types for constrained parameters.
-- **Day count conventions**: NPV calculations use configurable `DayCountConvention` (currently `"actual/365"`), centralized in `utils.timedelta_fractional_years()`.
+- **Day count conventions**: NPV calculations use configurable `DayCountConvention` (currently `"actual/actual"`), centralized in `utils.timedelta_fractional_years()`.
 - **Generation-to-cashflow bridge**: `GenerationStream` converts physical quantities (MWh) to financial cashflows, while tax incentives like PTC are modeled in `tax_incentives.py`.
 
 ## Conventions

@@ -9,7 +9,13 @@ from math import isclose, isfinite
 from os import PathLike
 from typing import TYPE_CHECKING
 
-from dcaf.shared.types import DayCountConvention, Period, ProFormaCategory, TaxTreatment
+from dcaf.shared.types import (
+    DayCountConvention,
+    Period,
+    ProFormaCategory,
+    TaxTreatment,
+    parse_day_count_convention,
+)
 from dcaf.project.config import ProjectValuation
 from dcaf.project.timeline import ProjectTimeline
 from dcaf.metrics import lcoe as _lcoe
@@ -59,6 +65,7 @@ class ProjectMetrics:
     """
 
     valuation_date: date
+    day_count_convention: DayCountConvention
     discount_rate: float
     npv: float
     xirr: float | None
@@ -70,6 +77,7 @@ class ProjectMetrics:
     def __str__(self) -> str:
         lines = [
             f"Valuation Date: {self.valuation_date.isoformat()}",
+            f"Day Count Convention: {self.day_count_convention}",
             f"Discount Rate: {self.discount_rate:.6f}",
             f"NPV: {self.npv:.6f}",
             f"Total Cash: {self.total_cash:.6f}",
@@ -170,7 +178,7 @@ class ProjectProForma:
         Examples
         --------
         >>> pf = project.pro_forma()
-        >>> pf.to_csv("pro_forma.csv")
+        >>> pf.to_csv("pro_forma.csv")  # doctest: +SKIP
         """
         with open(path, "w", newline="", encoding="utf-8") as csvfile:
             writer = csv.writer(csvfile)
@@ -249,7 +257,7 @@ class ProjectAnalysis:
         self,
         discount_rate: float | None = None,
         valuation_date: date | None = None,
-        convention: DayCountConvention = "actual/365",
+        convention: DayCountConvention | None = None,
         levelized_cost_escalation_rate: float | None = None,
         levelized_cost_escalation_policy: EscalationPolicy | None = None,
     ) -> ProjectMetrics:
@@ -264,8 +272,8 @@ class ProjectAnalysis:
             Reference date for discounting. Defaults to the construction start
             date or the earliest cash-flow date.
         convention : DayCountConvention, optional
-            Day count convention for fractional-year calculations.
-            Default is ``"actual/365"``.
+            Day count convention for fractional-year calculations. Defaults to
+            the project timeline convention.
         levelized_cost_escalation_rate : float, optional
             Constant annual escalation rate for the levelized price stream.
             Used only when an explicit ``levelized_cost_escalation_policy`` is
@@ -291,18 +299,20 @@ class ProjectAnalysis:
         """
         effective_rate = self._discount_rate(discount_rate)
         effective_valuation_date = self._valuation_date(valuation_date)
+        effective_convention = self._day_count_convention(convention)
         total_stream = self.cashflows
         cash_only = total_stream.cash_only()
         generation = self.generation
         levelized_revenue_basis = self._levelized_revenue_basis_stream(
             levelized_cost_escalation_rate=levelized_cost_escalation_rate,
             levelized_cost_escalation_policy=levelized_cost_escalation_policy,
+            convention=effective_convention,
         )
         discounted_generation = (
             levelized_revenue_basis.npv(
                 rate=effective_rate,
                 valuation_date=effective_valuation_date,
-                convention=convention,
+                convention=effective_convention,
             )
             if levelized_revenue_basis.entries
             else 0.0
@@ -314,24 +324,25 @@ class ProjectAnalysis:
                 tax_rate=self.tax_rate,
                 discount_rate=effective_rate,
                 valuation_date=effective_valuation_date,
-                convention=convention,
+                convention=effective_convention,
             )
             if levelized_revenue_basis.entries
             else None
         )
 
         try:
-            project_irr = cash_only.irr(convention=convention)
+            project_irr = cash_only.irr(convention=effective_convention)
         except Exception:
             project_irr = None
 
         return ProjectMetrics(
             valuation_date=effective_valuation_date,
+            day_count_convention=effective_convention,
             discount_rate=effective_rate,
             npv=cash_only.npv(
                 rate=effective_rate,
                 valuation_date=effective_valuation_date,
-                convention=convention,
+                convention=effective_convention,
             ),
             xirr=project_irr,
             total_cash=cash_only.sum(),
@@ -519,6 +530,13 @@ class ProjectAnalysis:
             return min(flow.date for flow in self.cashflows.entries)
         raise ValueError("valuation_date is required when the project has no dated cashflows")
 
+    def _day_count_convention(
+        self,
+        convention: DayCountConvention | None,
+    ) -> DayCountConvention:
+        raw_convention = self.timeline.day_count_convention if convention is None else convention
+        return parse_day_count_convention(str(raw_convention)).value
+
     def _levelized_cost_escalation_rate(self, rate: float | None) -> float:
         resolved_rate = self.levelized_cost_escalation_rate if rate is None else rate
         if resolved_rate is None:
@@ -533,6 +551,7 @@ class ProjectAnalysis:
         *,
         levelized_cost_escalation_rate: float | None,
         levelized_cost_escalation_policy: EscalationPolicy | None,
+        convention: DayCountConvention,
     ) -> CashFlowStream:
         if (
             levelized_cost_escalation_policy is not None
@@ -556,6 +575,7 @@ class ProjectAnalysis:
             return self.generation.to_revenue(
                 price_per_mwh=1.0,
                 escalation=resolved_rate,
+                day_count_convention=convention,
             )
 
         #
@@ -572,6 +592,7 @@ class ProjectAnalysis:
         return self.generation.to_revenue(
             price_per_mwh=1.0,
             escalation=resolved_rate,
+            day_count_convention=convention,
         )
 
 

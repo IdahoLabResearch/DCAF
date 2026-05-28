@@ -15,6 +15,7 @@ from typing import (
     Iterable,
     TypeVar,
     assert_never,
+    cast,
     overload,
 )
 
@@ -29,7 +30,7 @@ from dcaf.finance.escalation import (
 )
 from dcaf.shared.formatting import format_label
 from dcaf.shared.time import (
-    hours_per_period,
+    elapsed_hours,
     time_delta_per_period,
 )
 from dcaf.shared.types import (
@@ -118,6 +119,7 @@ def _generation_escalation(
     escalation: float,
     escalation_period: Period,
     amount_reference_date: date | None,
+    day_count_convention: DayCountConvention,
     escalation_policy: EscalationPolicy | None,
 ) -> EscalationPolicy:
     """Normalize generation escalation kwargs into a date-based policy."""
@@ -139,6 +141,7 @@ def _generation_escalation(
         reference_date=reference_date,
         rate=escalation,
         period=escalation_period,
+        day_count_convention=day_count_convention,
     )
 
 
@@ -263,6 +266,7 @@ class GenerationStream(BaseStream[Generation]):
         periods: int,
         frequency: Period = "year",
         label: str = "Generation",
+        day_count_convention: DayCountConvention = "actual/actual",
     ) -> "GenerationStream":
         """
         Generate a stream of periodic generation from capacity parameters.
@@ -281,6 +285,8 @@ class GenerationStream(BaseStream[Generation]):
             Generation frequency. Default ``"year"``.
         label : str, optional
             Label template. ``{n}`` is replaced with the 1-based period index.
+        day_count_convention : DayCountConvention, optional
+            Day-count convention used to compute elapsed capacity hours.
 
         Returns
         -------
@@ -299,10 +305,11 @@ class GenerationStream(BaseStream[Generation]):
         2
         """
         entries: list[Generation] = []
-        hours = hours_per_period(frequency)
         time_delta = time_delta_per_period(frequency)
         current_date = start
         for i in range(periods):
+            period_end = current_date + time_delta
+            hours = elapsed_hours(current_date, period_end, day_count_convention)
             mwh = capacity_mw * capacity_factor * hours
             gen_label = format_label(label, i + 1)
             entries.append(
@@ -326,6 +333,7 @@ class GenerationStream(BaseStream[Generation]):
         capacity_reduction: float = 1.0,
         timing: TimingConvention = "end",
         label: str = "Generation Outage",
+        day_count_convention: DayCountConvention = "actual/actual",
     ) -> "GenerationStream":
         """
         Create a negative generation stream for an explicit outage interval.
@@ -356,6 +364,8 @@ class GenerationStream(BaseStream[Generation]):
             uses the midpoint of the inclusive outage dates.
         label : str, optional
             Label for the negative generation entry.
+        day_count_convention : DayCountConvention, optional
+            Day-count convention used to compute elapsed outage hours.
 
         Returns
         -------
@@ -388,8 +398,8 @@ class GenerationStream(BaseStream[Generation]):
             end=end,
             capacity_reduction=capacity_reduction,
         )
-        days = (end - start).days
-        lost_mwh = capacity_mw * capacity_factor * capacity_reduction * 24.0 * days
+        hours = elapsed_hours(start, end, day_count_convention)
+        lost_mwh = capacity_mw * capacity_factor * capacity_reduction * hours
         return cls(
             [
                 Generation(
@@ -435,6 +445,7 @@ class GenerationStream(BaseStream[Generation]):
         periods: int,
         frequency: Period = "year",
         label: str = "Generation",
+        day_count_convention: DayCountConvention = "actual/actual",
     ) -> "GenerationStream":
         """
         Generate additional capacity-based entries and append them to this stream.
@@ -454,6 +465,8 @@ class GenerationStream(BaseStream[Generation]):
         label : str, optional
             Label template for the appended entries. ``{n}`` is
             replaced with the 1-based period index.
+        day_count_convention : DayCountConvention, optional
+            Day-count convention used to compute elapsed capacity hours.
 
         Returns
         -------
@@ -474,6 +487,7 @@ class GenerationStream(BaseStream[Generation]):
             periods=periods,
             frequency=frequency,
             label=label,
+            day_count_convention=day_count_convention,
         )
         return self.extend(new)
 
@@ -550,11 +564,15 @@ class GenerationStream(BaseStream[Generation]):
 
         if fn is not None:
             groups = self._grouped_entries_by_key(fn)
-            return GenerationGroup(self._grouped_streams(groups))
+            return GenerationGroup(
+                cast(dict[Any, GenerationStream], self._grouped_streams(groups))
+            )
 
         assert period is not None
         per_groups = self._grouped_entries_by_period(period)
-        return GenerationGroup(self._grouped_streams(per_groups))
+        return GenerationGroup(
+            cast(dict[date, GenerationStream], self._grouped_streams(per_groups))
+        )
 
     @overload
     def sort(
@@ -637,7 +655,7 @@ class GenerationStream(BaseStream[Generation]):
         self,
         rate: float,
         valuation_date: date,
-        convention: DayCountConvention = "actual/365",
+        convention: DayCountConvention = "actual/actual",
     ) -> float:
         """
         Compute the present-value-weighted sum of MWh (for LCOE denominator).
@@ -678,6 +696,7 @@ class GenerationStream(BaseStream[Generation]):
         *,
         escalation_period: Period = "year",
         amount_reference_date: date | None = None,
+        day_count_convention: DayCountConvention = "actual/actual",
         escalation_policy: EscalationPolicy | None = None,
     ) -> CashFlowStream:
         """
@@ -698,6 +717,8 @@ class GenerationStream(BaseStream[Generation]):
         amount_reference_date : date, optional
             Date at which ``price_per_mwh`` is known. Defaults to the earliest
             generation entry date.
+        day_count_convention : DayCountConvention, optional
+            Day-count convention used for annual price escalation.
         escalation_policy : EscalationPolicy, optional
             Advanced override for custom escalation behavior. When provided, it
             must not be combined with ``escalation``, ``escalation_period``, or
@@ -726,6 +747,7 @@ class GenerationStream(BaseStream[Generation]):
             escalation=escalation,
             escalation_period=escalation_period,
             amount_reference_date=amount_reference_date,
+            day_count_convention=day_count_convention,
             escalation_policy=escalation_policy,
         )
         resolved_category, resolved_tax_treatment = normalize_cashflow_classification(
@@ -758,6 +780,7 @@ class GenerationStream(BaseStream[Generation]):
         *,
         escalation_period: Period = "year",
         amount_reference_date: date | None = None,
+        day_count_convention: DayCountConvention = "actual/actual",
         escalation_policy: EscalationPolicy | None = None,
     ) -> CashFlowStream:
         """
@@ -777,6 +800,8 @@ class GenerationStream(BaseStream[Generation]):
         amount_reference_date : date, optional
             Date at which ``rate_per_mwh`` is known. Defaults to the earliest
             generation entry date.
+        day_count_convention : DayCountConvention, optional
+            Day-count convention used for annual cost escalation.
         escalation_policy : EscalationPolicy, optional
             Advanced override for custom escalation behavior. When provided, it
             must not be combined with ``escalation``, ``escalation_period``, or
@@ -805,6 +830,7 @@ class GenerationStream(BaseStream[Generation]):
             escalation=escalation,
             escalation_period=escalation_period,
             amount_reference_date=amount_reference_date,
+            day_count_convention=day_count_convention,
             escalation_policy=escalation_policy,
         )
         resolved_category, resolved_tax_treatment = normalize_cashflow_classification(

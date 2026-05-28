@@ -13,6 +13,7 @@ from typing import (
     Callable,
     Optional,
     TypeVar,
+    cast,
     overload,
 )
 
@@ -54,6 +55,7 @@ def _recurring_escalation(
     escalation: float,
     escalation_period: Period,
     amount_reference_date: date | None,
+    day_count_convention: DayCountConvention,
     escalation_policy: EscalationPolicy | None,
 ) -> EscalationPolicy:
     """Normalize recurring cashflow escalation kwargs into a date-based policy."""
@@ -70,6 +72,7 @@ def _recurring_escalation(
         reference_date=start if amount_reference_date is None else amount_reference_date,
         rate=escalation,
         period=escalation_period,
+        day_count_convention=day_count_convention,
     )
 
 
@@ -310,6 +313,7 @@ class CashFlowStream(BaseStream[CashFlow]):
         *,
         escalation_period: Period = "year",
         amount_reference_date: date | None = None,
+        day_count_convention: DayCountConvention = "actual/actual",
         escalation_policy: EscalationPolicy | None = None,
     ) -> "CashFlowStream":
         """
@@ -349,6 +353,8 @@ class CashFlowStream(BaseStream[CashFlow]):
         amount_reference_date : date, optional
             Date at which ``amount`` is known. Escalation is evaluated from this
             date to each payment date. Defaults to ``start``.
+        day_count_convention : DayCountConvention, optional
+            Day-count convention used for annual escalation.
         escalation_policy : EscalationPolicy, optional
             Advanced override for custom escalation behavior. When provided, it
             must not be combined with ``escalation``, ``escalation_period``, or
@@ -381,6 +387,7 @@ class CashFlowStream(BaseStream[CashFlow]):
             escalation=escalation,
             escalation_period=escalation_period,
             amount_reference_date=amount_reference_date,
+            day_count_convention=day_count_convention,
             escalation_policy=escalation_policy,
         )
         resolved_category, resolved_tax_treatment = normalize_cashflow_classification(
@@ -530,12 +537,14 @@ class CashFlowStream(BaseStream[CashFlow]):
 
         if fn is not None:
             groups = self._grouped_entries_by_key(fn)
-            return CashFlowGroup(self._grouped_streams(groups))
+            return CashFlowGroup(cast(dict[Any, CashFlowStream], self._grouped_streams(groups)))
 
         # period path
         assert period is not None
         period_groups = self._grouped_entries_by_period(period)
-        return CashFlowGroup(self._grouped_streams(period_groups))
+        return CashFlowGroup(
+            cast(dict[date, CashFlowStream], self._grouped_streams(period_groups))
+        )
 
     def group_by_pro_forma_category(self) -> CashFlowGroup[ProFormaCategory | None]:
         """
@@ -806,7 +815,7 @@ class CashFlowStream(BaseStream[CashFlow]):
         self,
         rate: float,
         valuation_date: date,
-        convention: DayCountConvention = "actual/365",
+        convention: DayCountConvention = "actual/actual",
     ) -> float:
         """
         Calculate the Net Present Value (NPV) of the cashflow stream.
@@ -825,7 +834,7 @@ class CashFlowStream(BaseStream[CashFlow]):
             point for all discounting/compounding calculations.
         convention : DayCountConvention, optional
             The day count convention for converting days to year fractions.
-            Default is "actual/365" (standard economics convention).
+            Default is ``"actual/actual"``, which uses calendar elapsed days.
 
         Returns
         -------
@@ -861,7 +870,7 @@ class CashFlowStream(BaseStream[CashFlow]):
         - Only cashflows with ``is_cash=True`` are included; non-cash items (e.g.,
           depreciation) do not represent actual cash movements.
         - Time differences are calculated in days and converted to years using the
-          specified day count convention (default: actual/365).
+          specified day count convention (default: actual/actual).
         - The discount formula is: PV = CF / (1 + r)^t where t can be positive
           (future cashflows) or negative (past cashflows).
         - When t is negative (past cashflows), dividing by (1+r)^negative effectively
@@ -873,7 +882,7 @@ class CashFlowStream(BaseStream[CashFlow]):
 
     def irr(
         self,
-        convention: DayCountConvention = "actual/365",
+        convention: DayCountConvention = "actual/actual",
         *,
         tol: float = 1e-8,
         max_iter: int = 100,
@@ -891,7 +900,7 @@ class CashFlowStream(BaseStream[CashFlow]):
         ----------
         convention : DayCountConvention, optional
             The day count convention for converting days to year fractions.
-            Default is ``"actual/365"`` (standard economics convention).
+            Default is ``"actual/actual"``, which uses calendar elapsed days.
         tol : float, optional
             Relative convergence tolerance. Iteration stops when
             ``|NPV(r)| < tol * Σ|CFᵢ|``, i.e. when the NPV residual is less

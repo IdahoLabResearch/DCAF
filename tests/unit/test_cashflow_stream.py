@@ -555,10 +555,10 @@ def test_npv_main(_create_cf_stream):
 
 
 def test_npv_default_convention(_create_cf_stream):
-    """Tests that the default day count convention is actual/365."""
+    """Tests that the default day count convention is actual/actual."""
     cf_stream = _create_cf_stream[0]
     npv_default = cf_stream.npv(0.1, date(2026, 1, 31))
-    npv_explicit = cf_stream.npv(0.1, date(2026, 1, 31), convention="actual/365")
+    npv_explicit = cf_stream.npv(0.1, date(2026, 1, 31), convention="actual/actual")
     assert npv_default == npv_explicit
 
 
@@ -566,7 +566,11 @@ def test_npv_uses_constant_rate_escalation_for_discounting(_create_cf_stream):
     """NPV matches evaluation through the shared constant-rate policy."""
     cf_stream = _create_cf_stream[0]
     valuation_date = date(2026, 1, 31)
-    policy = ConstantRateEscalation(valuation_date, rate=0.1, day_count_convention="actual/365")
+    policy = ConstantRateEscalation(
+        valuation_date,
+        rate=0.1,
+        day_count_convention="actual/actual",
+    )
 
     expected = sum(
         flow.amount / policy.factor(flow.date) for flow in cf_stream.entries if flow.is_cash
@@ -897,7 +901,7 @@ def test_irr_multi_cashflow():
 
 
 def test_irr_convention_default():
-    """Default 'actual/365' convention produces the same result as the explicit argument."""
+    """Default 'actual/actual' convention produces the same result as the explicit argument."""
     stream = CashFlowStream(
         [
             CashFlow(-5_000.0, date(2025, 3, 1)),
@@ -905,7 +909,7 @@ def test_irr_convention_default():
             CashFlow(4_500.0, date(2027, 3, 1)),
         ]
     )
-    assert stream.irr() == stream.irr(convention="actual/365")
+    assert stream.irr() == stream.irr(convention="actual/actual")
 
 
 def test_irr_npv_is_zero_at_irr():

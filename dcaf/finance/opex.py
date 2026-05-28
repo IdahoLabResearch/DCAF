@@ -8,7 +8,7 @@ For variable OPEX, use ``GenerationStream.to_cost()`` directly.
 from datetime import date
 
 from dcaf.finance.escalation import EscalationPolicy
-from dcaf.shared.types import Period, ProFormaCategory, TaxTreatment
+from dcaf.shared.types import DayCountConvention, Period, ProFormaCategory, TaxTreatment
 from dcaf.streams.cashflows import CashFlowStream
 
 
@@ -24,6 +24,7 @@ def fixed_opex(
     *,
     escalation_period: Period = "year",
     amount_reference_date: date | None = None,
+    day_count_convention: DayCountConvention = "actual/actual",
     escalation_policy: EscalationPolicy | None = None,
 ) -> CashFlowStream:
     """
@@ -52,6 +53,8 @@ def fixed_opex(
     amount_reference_date : date, optional
         Date at which ``amount`` is known. Escalation is evaluated from this
         date to each payment date. Defaults to ``start``.
+    day_count_convention : DayCountConvention, optional
+        Day-count convention used for annual escalation.
     escalation_policy : EscalationPolicy, optional
         Advanced override for custom escalation behavior. When provided, it
         must not be combined with ``escalation``, ``escalation_period``, or
@@ -85,6 +88,7 @@ def fixed_opex(
         escalation=escalation,
         escalation_period=escalation_period,
         amount_reference_date=amount_reference_date,
+        day_count_convention=day_count_convention,
         escalation_policy=escalation_policy,
         label=label,
         pro_forma_category=pro_forma_category,

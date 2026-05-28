@@ -44,6 +44,7 @@ from dcaf.shared.types import (
     SpendScheduleName,
     TimingConvention,
     VDBConvention,
+    parse_day_count_convention,
 )
 
 
@@ -87,6 +88,7 @@ class EnergyProject:
         *,
         frequency: Period = "year",
         timing: TimingConvention = "end",
+        day_count_convention: DayCountConvention = "actual/actual",
     ) -> None:
         """Initialize a new immutable project builder.
 
@@ -100,10 +102,14 @@ class EnergyProject:
             the end of the calendar period, capped by the phase boundary.
             ``"begin"`` books events at the start of the calendar period,
             floored by the phase start.
+        day_count_convention : DayCountConvention, optional
+            Project-wide day-count convention. Default ``"actual/actual"``
+            uses real calendar days and calendar-year denominators.
         """
         self._config = ProjectConfig(
             frequency=frequency,
             timing=timing,
+            day_count_convention=day_count_convention,
         )
 
     def _with(self, **config_changes: Any) -> Self:
@@ -111,6 +117,12 @@ class EnergyProject:
         project = self.__class__.__new__(self.__class__)
         project._config = dc_replace(self._config, **config_changes)
         return project
+
+    def day_count_convention(self, convention: DayCountConvention) -> Self:
+        """Set the project-wide day-count convention."""
+        return self._with(
+            day_count_convention=parse_day_count_convention(str(convention)).value,
+        )
 
     def discount_rate(
         self,
@@ -1081,7 +1093,7 @@ class EnergyProject:
         self,
         discount_rate: float | None = None,
         valuation_date: date | None = None,
-        convention: DayCountConvention = "actual/365",
+        convention: DayCountConvention | None = None,
         levelized_cost_escalation_rate: float | None = None,
         levelized_cost_escalation_policy: EscalationPolicy | None = None,
     ) -> ProjectMetrics:
@@ -1096,7 +1108,7 @@ class EnergyProject:
         valuation_date : date, optional
             Reference date for discounting.
         convention : DayCountConvention, optional
-            Day count convention. Default is ``"actual/365"``.
+            Day count convention. Defaults to the project-wide convention.
         levelized_cost_escalation_rate : float, optional
             Annual escalation rate assumed for the levelized price stream.
             When omitted, DCAF uses an inferred project-level rate when one

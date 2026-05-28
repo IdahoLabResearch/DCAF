@@ -13,7 +13,7 @@ def npv(
     values: Iterable[tuple[float, date]],
     rate: float,
     valuation_date: date,
-    convention: DayCountConvention = "actual/365",
+    convention: DayCountConvention = "actual/actual",
 ) -> float:
     """Compute the net present value of a series of dated values.
 
@@ -36,7 +36,7 @@ def npv(
         Reference date for discounting/compounding.
     convention : DayCountConvention, optional
         Day-count convention for year-fraction conversion.
-        Default is ``"actual/365"``.
+        Default is ``"actual/actual"``.
 
     Returns
     -------

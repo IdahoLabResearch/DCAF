@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import date
 
 from dcaf.shared.time import timedelta_fractional_years
-from dcaf.shared.types import Period, TimingConvention
+from dcaf.shared.types import DayCountConvention, Period, TimingConvention, parse_day_count_convention
 
 
 @dataclass(frozen=True)
@@ -44,11 +44,17 @@ class ProjectTimeline:
     operations_end: date | None = None
     frequency: Period = "year"
     timing: TimingConvention = "end"
+    day_count_convention: DayCountConvention = "actual/actual"
 
     def __post_init__(self) -> None:
         if self.operations_start is not None and self.operations_end is not None:
             if self.operations_end <= self.operations_start:
                 raise ValueError("operations_end must be after operations_start")
+        object.__setattr__(
+            self,
+            "day_count_convention",
+            parse_day_count_convention(str(self.day_count_convention)).value,
+        )
 
     @property
     def operating_years(self) -> float | None:
@@ -63,7 +69,11 @@ class ProjectTimeline:
         """
         if self.operations_start is None or self.operations_end is None:
             return None
-        return timedelta_fractional_years(self.operations_start, self.operations_end)
+        return timedelta_fractional_years(
+            self.operations_start,
+            self.operations_end,
+            self.day_count_convention,
+        )
 
 
 __all__ = ["ProjectTimeline"]

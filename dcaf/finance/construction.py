@@ -15,6 +15,7 @@ from dcaf.finance.escalation import (
 )
 from dcaf.finance._spend_curves import get_spend_curve
 from dcaf.shared.types import (
+    DayCountConvention,
     InterestTreatment,
     Period,
     ProFormaCategory,
@@ -23,6 +24,7 @@ from dcaf.shared.types import (
     TaxTreatment,
     _InterestTreatmentEnum,
     _PeriodEnum,
+    parse_day_count_convention,
     parse_interest_treatment,
     parse_period,
 )
@@ -325,6 +327,9 @@ class ConstructionSpendConfig:
     amount_reference_date : date, optional
         Date at which ``total_cost`` is known. Escalation is evaluated from this
         date to each spend-period midpoint. Defaults to ``start_date``.
+    day_count_convention : {"actual/365-no-leap", "actual/365-fixed", "actual/actual"}, optional
+        Day-count convention used for annual construction escalation and
+        construction-period interest.
 
     Notes
     -----
@@ -354,6 +359,7 @@ class ConstructionSpendConfig:
     escalation: float = 0.0
     escalation_period: Period | _PeriodEnum = "year"
     amount_reference_date: date | None = None
+    day_count_convention: DayCountConvention = "actual/actual"
 
     def __post_init__(self) -> None:
         if self.total_cost <= 0:
@@ -367,6 +373,11 @@ class ConstructionSpendConfig:
         object.__setattr__(self, "profile", _normalize_profile(self.profile))
         object.__setattr__(self, "financing", _normalize_financing(self.financing))
         object.__setattr__(self, "escalation_period", parse_period(str(self.escalation_period)))
+        object.__setattr__(
+            self,
+            "day_count_convention",
+            parse_day_count_convention(str(self.day_count_convention)).value,
+        )
 
 
 @dataclass(frozen=True)
@@ -387,6 +398,7 @@ def _construction_simple_escalation(config: ConstructionSpendConfig) -> Constant
         else config.amount_reference_date,
         rate=config.escalation,
         period=cast(Period, parse_period(str(config.escalation_period)).value),
+        day_count_convention=config.day_count_convention,
     )
 
 
@@ -565,7 +577,11 @@ def _build_cashflows(
             debt_balance += scheduled_draws[draw_index][1]
             draw_index += 1
 
-        period_years = timedelta_fractional_years(service_start, service_end)
+        period_years = timedelta_fractional_years(
+            service_start,
+            service_end,
+            config.day_count_convention,
+        )
         interest = debt_balance * config.financing.interest_rate * period_years
         interest_flow = _construction_interest_cashflow(
             interest,
@@ -648,6 +664,7 @@ class ConstructionSpendBuilder:
         escalation: float = 0.0,
         escalation_period: Period = "year",
         amount_reference_date: date | None = None,
+        day_count_convention: DayCountConvention = "actual/actual",
     ) -> None:
         self._config = ConstructionSpendConfig(
             total_cost=total_cost,
@@ -659,6 +676,7 @@ class ConstructionSpendBuilder:
             escalation=escalation,
             escalation_period=parse_period(str(escalation_period)),
             amount_reference_date=amount_reference_date,
+            day_count_convention=day_count_convention,
         )
         self._escalation_policy: EscalationPolicy | None = None
 
@@ -914,8 +932,18 @@ class ConstructionSpendBuilder:
                     if isinstance(amount_reference_date, _UnsetType)
                     else amount_reference_date
                 ),
+                day_count_convention=self._config.day_count_convention,
             ),
             escalation_policy=None,
+        )
+
+    def day_count_convention(self, convention: DayCountConvention) -> Self:
+        """Set the day-count convention used for annual escalation and interest."""
+        return self._copy(
+            config=dc_replace(
+                self._config,
+                day_count_convention=parse_day_count_convention(str(convention)).value,
+            )
         )
 
     def build(self) -> CashFlowStream:
@@ -955,6 +983,7 @@ def construction_spend_schedule(
     escalation: float = 0.0,
     escalation_period: Period = "year",
     amount_reference_date: date | None = None,
+    day_count_convention: DayCountConvention = "actual/actual",
     escalation_policy: EscalationPolicy | None = None,
 ) -> CashFlowStream:
     """Build a construction spend schedule directly.
@@ -990,6 +1019,8 @@ def construction_spend_schedule(
         Advanced override for custom escalation behavior. When provided, it
         must not be combined with ``escalation``, ``escalation_period``, or
         ``amount_reference_date``.
+    day_count_convention : DayCountConvention, optional
+        Day-count convention used for annual escalation and construction interest.
 
     Returns
     -------
@@ -1042,6 +1073,7 @@ def construction_spend_schedule(
         escalation=escalation,
         escalation_period=escalation_period,
         amount_reference_date=amount_reference_date,
+        day_count_convention=day_count_convention,
     )
     if policy_override is not None:
         builder = builder.escalation_policy(policy_override)

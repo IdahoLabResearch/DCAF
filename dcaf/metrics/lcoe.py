@@ -17,7 +17,7 @@ def lcoe(
     tax_rate: float | None,
     discount_rate: float,
     valuation_date: date,
-    convention: DayCountConvention = "actual/365",
+    convention: DayCountConvention = "actual/actual",
 ) -> float | None:
     """Solve for the levelized cost of energy.
 
@@ -41,7 +41,7 @@ def lcoe(
     valuation_date : date
         Reference date for discounting.
     convention : DayCountConvention, optional
-        Day-count convention. Default is ``"actual/365"``.
+        Day-count convention. Default is ``"actual/actual"``.
 
     Returns
     -------

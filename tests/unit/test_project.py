@@ -6,7 +6,8 @@ import pytest
 from dcaf import EnergyProject
 from dcaf.finance import ConstantRateEscalation
 from dcaf.finance.amortization import AmortizationSchedule
-from dcaf.shared.types import ProFormaCategory, TaxTreatment
+from dcaf.project.timeline import ProjectTimeline
+from dcaf.shared.types import DayCountConvention, ProFormaCategory, TaxTreatment
 from dcaf.streams import CashFlow, CashFlowStream, Generation, GenerationStream
 
 
@@ -166,7 +167,7 @@ def test_energy_project_levelized_cost_matches_real_carrying_charge_methodology(
             tax_rate=tax_rate,
             discount_rate=wacc_aftertax,
             valuation_date=operations_start,
-            convention="actual/365",
+            convention=metrics.day_count_convention,
         )
         assert obj == pytest.approx(0.0, abs=1.0)
         return metrics.levelized_cost
@@ -306,6 +307,191 @@ def test_energy_project_allows_custom_cashflow_streams():
 
     analysis = project.analyze()
     assert analysis.cashflow_components["grant"].sum() == pytest.approx(100.0)
+
+
+def test_energy_project_day_count_convention_defaults_metrics_and_allows_override():
+    stream = CashFlowStream(
+        [
+            CashFlow(-1000.0, date(2024, 1, 1)),
+            CashFlow(1100.0, date(2025, 1, 1)),
+        ]
+    )
+    default = (
+        EnergyProject()
+        .discount_rate(rate=0.10)
+        .add_cashflow_stream(name="case", stream=stream)
+    )
+    no_leap = (
+        EnergyProject(day_count_convention="actual/365-no-leap")
+        .discount_rate(rate=0.10)
+        .add_cashflow_stream(name="case", stream=stream)
+    )
+    fixed = (
+        EnergyProject(day_count_convention="actual/365-fixed")
+        .discount_rate(rate=0.10)
+        .add_cashflow_stream(name="case", stream=stream)
+    )
+
+    default_metrics = default.metrics(valuation_date=date(2024, 1, 1))
+    no_leap_metrics = no_leap.metrics(valuation_date=date(2024, 1, 1))
+    fixed_metrics = fixed.metrics(valuation_date=date(2024, 1, 1))
+    overridden = no_leap.metrics(
+        valuation_date=date(2024, 1, 1),
+        convention="actual/365-fixed",
+    )
+
+    assert default_metrics.day_count_convention == "actual/actual"
+    assert no_leap_metrics.day_count_convention == "actual/365-no-leap"
+    assert fixed_metrics.day_count_convention == "actual/365-fixed"
+    assert default_metrics.npv == pytest.approx(0.0)
+    assert default_metrics.xirr == pytest.approx(0.10)
+    assert no_leap_metrics.npv == pytest.approx(0.0)
+    assert no_leap_metrics.xirr == pytest.approx(0.10)
+    assert fixed_metrics.npv == pytest.approx(
+        -1000.0 + 1100.0 / (1.10 ** (366.0 / 365.0))
+    )
+    assert fixed_metrics.xirr != pytest.approx(no_leap_metrics.xirr)
+    assert overridden.npv == pytest.approx(fixed_metrics.npv)
+
+
+def test_energy_project_day_count_convention_affects_lcoe_and_generation_hours():
+    def metrics(convention: DayCountConvention):
+        return (
+            EnergyProject(day_count_convention=convention)
+            .discount_rate(rate=0.10)
+            .generation(
+                capacity_mw=1.0,
+                capacity_factor=1.0,
+                operations_start=date(2024, 1, 1),
+                operations_end=date(2025, 1, 1),
+            )
+            .construction(overnight_cost=1000.0, cod_date=date(2024, 1, 1))
+            .metrics(valuation_date=date(2024, 1, 1))
+        )
+
+    no_leap = metrics("actual/365-no-leap")
+    fixed = metrics("actual/365-fixed")
+    actual = metrics("actual/actual")
+
+    assert no_leap.total_generation == pytest.approx(8760.0)
+    assert fixed.total_generation == pytest.approx(8784.0)
+    assert actual.total_generation == pytest.approx(8784.0)
+    assert no_leap.levelized_cost is not None
+    assert fixed.levelized_cost is not None
+    assert actual.levelized_cost is not None
+    assert no_leap.levelized_cost != pytest.approx(fixed.levelized_cost)
+    assert no_leap.levelized_cost != pytest.approx(actual.levelized_cost)
+
+
+def test_project_day_count_convention_affects_constant_rate_escalation():
+    def fixed_opex_amount(convention: DayCountConvention) -> float:
+        return (
+            EnergyProject(day_count_convention=convention)
+            .fixed_opex(
+                amount=100.0,
+                start=date(2024, 1, 1),
+                periods=1,
+                escalation=0.10,
+                amount_reference_date=date(2024, 1, 1),
+            )
+            .analyze()
+            .cashflow_components["fixed_opex"]
+            .sum()
+        )
+
+    assert fixed_opex_amount("actual/365-no-leap") == pytest.approx(
+        -100.0 * 1.10 ** (364.0 / 365.0)
+    )
+    assert fixed_opex_amount("actual/365-fixed") == pytest.approx(-110.0)
+    assert fixed_opex_amount("actual/actual") == pytest.approx(
+        -100.0 * 1.10 ** (365.0 / 366.0)
+    )
+
+
+def test_project_timeline_operating_years_uses_configured_day_count():
+    no_leap = ProjectTimeline(
+        operations_start=date(2024, 1, 1),
+        operations_end=date(2025, 1, 1),
+        day_count_convention="actual/365-no-leap",
+    )
+    fixed = ProjectTimeline(
+        operations_start=date(2024, 1, 1),
+        operations_end=date(2025, 1, 1),
+        day_count_convention="actual/365-fixed",
+    )
+    actual = ProjectTimeline(
+        operations_start=date(2024, 1, 1),
+        operations_end=date(2025, 1, 1),
+        day_count_convention="actual/actual",
+    )
+
+    assert no_leap.operating_years == pytest.approx(1.0)
+    assert fixed.operating_years == pytest.approx(366.0 / 365.0)
+    assert actual.operating_years == pytest.approx(1.0)
+
+
+def test_project_day_count_convention_affects_annual_schedule_proration():
+    def opex_total(convention: DayCountConvention) -> float:
+        return (
+            EnergyProject(day_count_convention=convention)
+            .generation(
+                capacity_mw=0.0,
+                capacity_factor=0.0,
+                operations_start=date(2024, 1, 1),
+                operations_end=date(2024, 3, 1),
+            )
+            .fixed_opex(amount=365.0, frequency="year")
+            .analyze()
+            .cashflow_components["fixed_opex"]
+            .sum()
+        )
+
+    assert opex_total("actual/365-no-leap") == pytest.approx(-59.0)
+    assert opex_total("actual/365-fixed") == pytest.approx(-60.0)
+    assert opex_total("actual/actual") == pytest.approx(-365.0 * 60.0 / 366.0)
+
+
+def test_project_day_count_convention_affects_construction_interest():
+    def first_interest(convention: DayCountConvention) -> tuple[float, float]:
+        analysis = (
+            EnergyProject(day_count_convention=convention)
+            .generation(
+                capacity_mw=0.0,
+                capacity_factor=0.0,
+                operations_start=date(2024, 4, 1),
+                operations_end=date(2025, 1, 1),
+            )
+            .construction(
+                overnight_cost=1200.0,
+                spend_profile="flat",
+                construction_start=date(2024, 1, 1),
+                construction_end=date(2024, 4, 1),
+                period="month",
+            )
+            .construction_financing(
+                debt_fraction=1.0,
+                construction_interest_rate=0.12,
+                interest_treatment="pay",
+                amortization_rate=0.0,
+                amortization_term=1,
+            )
+            .analyze()
+        )
+        construction = analysis.cashflow_components["construction"]
+        first_draw = abs(next(cf.amount for cf in construction if cf.label == "Construction Spend"))
+        first_interest_payment = next(
+            cf.amount for cf in construction if cf.label == "Interest Payment"
+        )
+        return first_draw, first_interest_payment
+
+    draw, no_leap_interest = first_interest("actual/365-no-leap")
+    assert no_leap_interest == pytest.approx(-(draw * 0.12 * 28.0 / 365.0))
+    assert first_interest("actual/365-fixed")[1] == pytest.approx(
+        -(draw * 0.12 * 29.0 / 365.0)
+    )
+    assert first_interest("actual/actual")[1] == pytest.approx(
+        -(draw * 0.12 * 29.0 / 366.0)
+    )
 
 
 def test_energy_project_generation_outage_reduces_modeled_generation_economics():
@@ -449,7 +635,7 @@ def test_energy_project_construction_outage_models_two_construction_outages():
     analysis = project.analyze()
     expected_per_outage = -(1000.0 * 0.92 * 24.0 * 10.0 * 45.0)
 
-    assert analysis.generation.sum() == pytest.approx(220.0 * 0.92 * 8760.0 * 366.0 / 365.0)
+    assert analysis.generation.sum() == pytest.approx(220.0 * 0.92 * 8784.0)
     assert analysis.cashflow_components["construction_outage:refueling_1"].sum() == (
         pytest.approx(expected_per_outage)
     )

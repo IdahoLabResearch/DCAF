@@ -3,6 +3,7 @@
 from dcaf.shared.formatting import format_label
 from dcaf.shared.time import (
     compound_factor,
+    elapsed_hours,
     elapsed_periods,
     event_date,
     hours_per_period,
@@ -24,6 +25,7 @@ from dcaf.shared.types import (
     TaxTreatment,
     TimingConvention,
     VDBConvention,
+    parse_day_count_convention,
 )
 
 __all__ = [
@@ -40,6 +42,7 @@ __all__ = [
     "TimingConvention",
     "VDBConvention",
     "compound_factor",
+    "elapsed_hours",
     "elapsed_periods",
     "event_date",
     "format_label",
@@ -48,4 +51,5 @@ __all__ = [
     "period_start",
     "time_delta_per_period",
     "timedelta_fractional_years",
+    "parse_day_count_convention",
 ]

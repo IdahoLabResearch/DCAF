@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Literal, Protocol, TypeAlias, cast, runtime_checkable
 
-from dcaf.shared.types import DayCountConvention, Period, parse_period
+from dcaf.shared.types import DayCountConvention, Period, parse_day_count_convention, parse_period
 from dcaf.shared.time import compound_factor, elapsed_periods
 
 IndexPoint: TypeAlias = tuple[date, float]
@@ -135,9 +135,9 @@ class ConstantRateEscalation:
         ``0.025`` for 2.5%.
     period : {"day", "month", "quarter", "year"}, optional
         Compounding period associated with ``rate``. Default is ``"year"``.
-    day_count_convention : {"actual/365"}, optional
+    day_count_convention : {"actual/365-no-leap", "actual/365-fixed", "actual/actual"}, optional
         Day-count convention used when converting annual rates to fractional
-        periods. Default is ``"actual/365"``.
+        periods. Default is ``"actual/actual"``.
 
     Notes
     -----
@@ -164,7 +164,18 @@ class ConstantRateEscalation:
     reference_date: date
     rate: float
     period: Period = "year"
-    day_count_convention: DayCountConvention = "actual/365"
+    day_count_convention: DayCountConvention = "actual/actual"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "period", cast(Period, parse_period(str(self.period)).value))
+        object.__setattr__(
+            self,
+            "day_count_convention",
+            cast(
+                DayCountConvention,
+                parse_day_count_convention(str(self.day_count_convention)).value,
+            ),
+        )
 
     def factor(self, target_date: date) -> float:
         """Return the escalation factor from ``reference_date`` to ``target_date``.
@@ -493,7 +504,7 @@ class EscalationBuilder:
         *,
         period: Period = "year",
         start_date: date | None = None,
-        day_count_convention: DayCountConvention = "actual/365",
+        day_count_convention: DayCountConvention = "actual/actual",
     ) -> "EscalationBuilder":
         """Append a constant-rate escalation segment.
 
@@ -507,9 +518,9 @@ class EscalationBuilder:
             Date at which the segment becomes active. For the first segment this
             defaults to ``reference_date`` and may be earlier when needed. For
             later segments it must be supplied explicitly.
-        day_count_convention : {"actual/365"}, optional
+        day_count_convention : {"actual/365-no-leap", "actual/365-fixed", "actual/actual"}, optional
             Day-count convention used when ``period="year"``. Default is
-            ``"actual/365"``.
+            ``"actual/actual"``.
 
         Returns
         -------

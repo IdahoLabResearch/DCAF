@@ -4,7 +4,7 @@ from typing import Any, Literal, Protocol, TypeAlias
 
 Period: TypeAlias = Literal["day", "month", "quarter", "year"]
 TimingConvention: TypeAlias = Literal["end", "begin", "middle"]
-DayCountConvention: TypeAlias = Literal["actual/365"]
+DayCountConvention: TypeAlias = Literal["actual/365-no-leap", "actual/365-fixed", "actual/actual"]
 MACRSPropertyClass: TypeAlias = Literal[3, 5, 7, 10, 15, 20]
 MACRSConvention: TypeAlias = Literal["half-year", "mid-quarter"]
 VDBConvention: TypeAlias = Literal["none", "half-year", "mid-quarter", "best-of-half-year-mid-quarter"]
@@ -44,6 +44,12 @@ class _InterestTreatmentEnum(StrEnum):
     PAY = "pay"
 
 
+class _DayCountConventionEnum(StrEnum):
+    ACTUAL_365_NO_LEAP = "actual/365-no-leap"
+    ACTUAL_365_FIXED = "actual/365-fixed"
+    ACTUAL_ACTUAL = "actual/actual"
+
+
 def _normalize_enum_value(value: str) -> str:
     """Normalize user-facing enum strings for permissive parsing."""
     return value.strip().lower().replace(" ", "_").replace("-", "_")
@@ -66,6 +72,25 @@ def parse_interest_treatment(treatment: str) -> _InterestTreatmentEnum:
     except ValueError as exc:
         raise ValueError(
             f"Unknown interest treatment '{treatment}'. Expected one of: 'capitalize', 'pay'"
+        ) from exc
+
+
+def parse_day_count_convention(convention: str) -> _DayCountConventionEnum:
+    """Normalize user-facing day-count convention strings to an internal enum."""
+    normalized = convention.strip().lower().replace(" ", "").replace("_", "-")
+    aliases = {
+        "actual/365nl": _DayCountConventionEnum.ACTUAL_365_NO_LEAP,
+        "actual/365-nl": _DayCountConventionEnum.ACTUAL_365_NO_LEAP,
+        "actual/365noleap": _DayCountConventionEnum.ACTUAL_365_NO_LEAP,
+    }
+    if normalized in aliases:
+        return aliases[normalized]
+    try:
+        return _DayCountConventionEnum(normalized)
+    except ValueError as exc:
+        valid = ", ".join(member.value for member in _DayCountConventionEnum)
+        raise ValueError(
+            f"Unknown day count convention '{convention}'. Expected one of: {valid}"
         ) from exc
 
 

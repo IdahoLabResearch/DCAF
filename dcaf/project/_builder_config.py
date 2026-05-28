@@ -18,6 +18,7 @@ from dcaf.finance.escalation import (
 from dcaf.project.config import ProjectValuation
 from dcaf.project.timeline import ProjectTimeline
 from dcaf.shared.types import (
+    DayCountConvention,
     InterestTreatment,
     MACRSConvention,
     MACRSPropertyClass,
@@ -25,6 +26,7 @@ from dcaf.shared.types import (
     SpendScheduleName,
     TimingConvention,
     VDBConvention,
+    parse_day_count_convention,
 )
 from dcaf.streams.cashflows import CashFlowStream
 from dcaf.streams.generation import GenerationStream
@@ -362,6 +364,7 @@ class ProjectConfig:
 
     frequency: Period = "year"
     timing: TimingConvention = "end"
+    day_count_convention: DayCountConvention = "actual/actual"
     timeline: ProjectTimeline = field(default_factory=ProjectTimeline)
     generation: GenerationConfig = None
     generation_outages: tuple[GenerationOutageConfig, ...] = ()
@@ -382,6 +385,11 @@ class ProjectConfig:
     custom_cashflows: dict[str, CashFlowStream] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "day_count_convention",
+            parse_day_count_convention(str(self.day_count_convention)).value,
+        )
         if self.itc_rate is not None:
             validate_finite(self.itc_rate, "itc rate")
         if self.tax_rate is not None:

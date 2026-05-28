@@ -10,6 +10,7 @@ from datetime import date
 
 from dcaf.finance.escalation import EscalationPolicy
 from dcaf.shared.types import (
+    DayCountConvention,
     Period,
     ProFormaCategory,
     TaxTreatment,
@@ -29,6 +30,7 @@ def generator_outage(
     capacity_reduction: float = 1.0,
     timing: TimingConvention = "end",
     label: str = "Generator Outage",
+    day_count_convention: DayCountConvention = "actual/actual",
 ) -> GenerationStream:
     """
     Create a negative ``GenerationStream`` for an explicit outage interval.
@@ -57,6 +59,8 @@ def generator_outage(
         Date assigned to the negative generation entry. Default is ``"end"``.
     label : str, optional
         Label for the negative generation entry. Default is ``"Generator Outage"``.
+    day_count_convention : DayCountConvention, optional
+        Day-count convention used to compute elapsed outage hours.
 
     Returns
     -------
@@ -90,6 +94,7 @@ def generator_outage(
         capacity_reduction=capacity_reduction,
         timing=timing,
         label=label,
+        day_count_convention=day_count_convention,
     )
 
 
@@ -112,6 +117,7 @@ def construction_outage(
     escalation: float = 0.0,
     escalation_period: Period = "year",
     amount_reference_date: date | None = None,
+    day_count_convention: DayCountConvention = "actual/actual",
     escalation_policy: EscalationPolicy | None = None,
 ) -> CashFlowStream:
     """
@@ -127,8 +133,9 @@ def construction_outage(
     same ``pro_forma_category`` and ``tax_treatment``:
 
     - **Lost revenue** at ``sell_price_per_unit * lost_mwh``, where
-      ``lost_mwh = capacity_mw * capacity_factor * capacity_reduction * 24 *
-      (end - start).days``. Sign is negative (a cost).
+      ``lost_mwh`` is computed from capacity, capacity factor, capacity
+      reduction, and convention-aware elapsed outage hours. Sign is negative
+      (a cost).
     - **Fixed cost** of ``-abs(fixed_cost)`` at the booked outage date,
       omitted when ``fixed_cost == 0``.
     - **Daily cost** of ``-abs(cost_per_day) * (end - start).days`` at the
@@ -176,6 +183,8 @@ def construction_outage(
     amount_reference_date : date, optional
         Date at which ``sell_price_per_unit`` is known. Defaults to the booked
         outage date.
+    day_count_convention : DayCountConvention, optional
+        Day-count convention used for lost-generation hours and annual price escalation.
     escalation_policy : EscalationPolicy, optional
         Advanced escalation override. When provided it must not be combined
         with ``escalation``, ``escalation_period``, or ``amount_reference_date``.
@@ -218,6 +227,7 @@ def construction_outage(
         capacity_reduction=capacity_reduction,
         timing=timing,
         label=lost_revenue_label,
+        day_count_convention=day_count_convention,
     )
 
     if escalation_policy is not None:
@@ -241,6 +251,7 @@ def construction_outage(
             escalation=escalation,
             escalation_period=escalation_period,
             amount_reference_date=amount_reference_date,
+            day_count_convention=day_count_convention,
         )
 
     booking_date = _outage_event_date(start=start, end=end, timing=timing)

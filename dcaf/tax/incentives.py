@@ -15,6 +15,7 @@ from dcaf.streams.cashflows import CashFlow, CashFlowStream
 from dcaf.finance.escalation import EscalationPolicy
 from dcaf.streams.generation import GenerationStream, _generation_escalation
 from dcaf.shared.types import (
+    DayCountConvention,
     Period,
     ProFormaCategory,
     TaxTreatment,
@@ -34,6 +35,7 @@ def ptc(
     *,
     escalation_period: Period = "year",
     amount_reference_date: date | None = None,
+    day_count_convention: DayCountConvention = "actual/actual",
     escalation_policy: EscalationPolicy | None = None,
 ) -> CashFlowStream:
     """
@@ -78,6 +80,8 @@ def ptc(
     amount_reference_date : date, optional
         Date at which ``rate_per_mwh`` is known. If omitted, the earliest
         generation entry date is used as the escalation reference point.
+    day_count_convention : DayCountConvention, optional
+        Day-count convention used for annual PTC escalation.
     escalation_policy : EscalationPolicy, optional
         Advanced override for custom escalation behavior. When provided, it
         must not be combined with ``escalation``, ``escalation_period``, or
@@ -141,6 +145,7 @@ def ptc(
         escalation=escalation,
         escalation_period=escalation_period,
         amount_reference_date=amount_reference_date,
+        day_count_convention=day_count_convention,
         escalation_policy=escalation_policy,
     )
     resolved_category, resolved_tax_treatment = normalize_cashflow_classification(

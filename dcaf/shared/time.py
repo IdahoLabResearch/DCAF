@@ -10,7 +10,9 @@ from dcaf.shared.types import (
     DayCountConvention,
     Period,
     TimingConvention,
+    _DayCountConventionEnum,
     _PeriodEnum,
+    parse_day_count_convention,
     parse_period,
 )
 
@@ -18,6 +20,13 @@ from dcaf.shared.types import (
 def _normalize_period(period: Period) -> _PeriodEnum:
     try:
         return parse_period(period)
+    except ValueError as exc:
+        raise AssertionError(str(exc)) from exc
+
+
+def _normalize_day_count_convention(convention: DayCountConvention) -> _DayCountConventionEnum:
+    try:
+        return parse_day_count_convention(str(convention))
     except ValueError as exc:
         raise AssertionError(str(exc)) from exc
 
@@ -138,7 +147,7 @@ def event_date(
 
 
 def timedelta_fractional_years(
-    start: date, end: date, convention: DayCountConvention = "actual/365"
+    start: date, end: date, convention: DayCountConvention = "actual/actual"
 ) -> float:
     """Calculate the year fraction between two dates using the given day count convention.
 
@@ -148,11 +157,79 @@ def timedelta_fractional_years(
     >>> round(timedelta_fractional_years(date(2025, 1, 1), date(2025, 7, 2)), 4)
     0.4986
     """
-    match convention:
-        case "actual/365":
+    normalized_convention = _normalize_day_count_convention(convention)
+    match normalized_convention:
+        case _DayCountConventionEnum.ACTUAL_365_NO_LEAP:
+            return _days_excluding_leap_days(start, end) / 365.0
+        case _DayCountConventionEnum.ACTUAL_365_FIXED:
             return (end - start).days / 365.0
+        case _DayCountConventionEnum.ACTUAL_ACTUAL:
+            return _actual_actual_fractional_years(start, end)
         case _:
-            assert_never(convention)
+            assert_never(normalized_convention)
+
+
+def elapsed_hours(
+    start: date,
+    end: date,
+    convention: DayCountConvention = "actual/actual",
+) -> float:
+    """Return elapsed physical hours under the supplied day-count convention.
+
+    ``actual/365-no-leap`` uses no-leap elapsed days, excluding Feb. 29. The fixed and
+    actual/actual conventions use calendar elapsed days.
+    """
+    normalized_convention = _normalize_day_count_convention(convention)
+    match normalized_convention:
+        case _DayCountConventionEnum.ACTUAL_365_NO_LEAP:
+            return _days_excluding_leap_days(start, end) * 24.0
+        case _DayCountConventionEnum.ACTUAL_365_FIXED | _DayCountConventionEnum.ACTUAL_ACTUAL:
+            return (end - start).days * 24.0
+        case _:
+            assert_never(normalized_convention)
+
+
+def _is_leap_year(year: int) -> bool:
+    """Return whether *year* has a Feb. 29."""
+    return year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+
+
+def _days_in_year(year: int) -> int:
+    """Return the number of days in *year*."""
+    return 366 if _is_leap_year(year) else 365
+
+
+def _days_excluding_leap_days(start: date, end: date) -> int:
+    """Return calendar days in ``[start, end)`` with Feb. 29 removed."""
+    if end < start:
+        return -_days_excluding_leap_days(end, start)
+
+    elapsed_days = (end - start).days
+    leap_days = 0
+    for year in range(start.year, end.year + 1):
+        if not _is_leap_year(year):
+            continue
+        leap_day = date(year, 2, 29)
+        if start <= leap_day < end:
+            leap_days += 1
+    return elapsed_days - leap_days
+
+
+def _actual_actual_fractional_years(start: date, end: date) -> float:
+    """Return ISDA-style actual/actual year fraction over ``[start, end)``."""
+    if end < start:
+        return -_actual_actual_fractional_years(end, start)
+    if end == start:
+        return 0.0
+
+    total = 0.0
+    current = start
+    while current < end:
+        next_year = date(current.year + 1, 1, 1)
+        segment_end = min(end, next_year)
+        total += (segment_end - current).days / _days_in_year(current.year)
+        current = segment_end
+    return total
 
 
 def compound_factor(rate: float, periods: float) -> float:
@@ -188,7 +265,7 @@ def elapsed_periods(
     start_date: date,
     end_date: date,
     period: Period,
-    convention: DayCountConvention = "actual/365",
+    convention: DayCountConvention = "actual/actual",
 ) -> float:
     """Return the fractional number of periods between two dates.
 
