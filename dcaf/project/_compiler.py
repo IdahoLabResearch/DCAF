@@ -30,7 +30,13 @@ from dcaf.project._builder_config import (
 from dcaf.project.analysis import ProjectAnalysis
 from dcaf.project.timeline import ProjectTimeline
 from dcaf.shared.formatting import format_label
-from dcaf.shared.time import elapsed_hours, elapsed_periods, event_date, time_delta_per_period
+from dcaf.shared.time import (
+    elapsed_hours,
+    elapsed_periods,
+    event_date,
+    period_windows,
+    time_delta_per_period,
+)
 from dcaf.shared.types import (
     DayCountConvention,
     Period,
@@ -853,7 +859,7 @@ class ProjectCompiler:
         section: str,
         *,
         start: date,
-        periods: int | None,
+        periods: int | float | None,
         frequency: Period,
         timing: TimingConvention = "end",
         phase_start: date | None = None,
@@ -861,9 +867,11 @@ class ProjectCompiler:
     ) -> tuple[ScheduledPeriod, ...]:
         """Build the sequence of modeled operating periods for a section.
 
-        When *periods* is specified, generates exactly that many full-period
-        entries. Otherwise infers the schedule from ``timeline.operations_end``,
-        prorating any trailing partial period using :func:`elapsed_periods`.
+        When *periods* is specified, generates that many period entries and
+        allows a final fractional period, truncated to complete days because
+        DCAF events are stored as ``datetime.date`` values. Otherwise infers the
+        schedule from ``timeline.operations_end``, prorating any trailing
+        partial period using :func:`elapsed_periods`.
 
         *timing*, *phase_start*, and *phase_end* (all exclusive ends) control
         event-date placement. ``phase_end`` is converted to the inclusive
@@ -874,20 +882,34 @@ class ProjectCompiler:
         if periods is not None:
             if periods <= 0:
                 raise ValueError(f"{section} periods must be positive")
-            delta = time_delta_per_period(frequency)
-            current = start
             schedule: list[ScheduledPeriod] = []
-            for _ in range(periods):
+            for window in period_windows(
+                start,
+                periods,
+                frequency,
+                self.config.day_count_convention,
+                context=f"{section} periods",
+            ):
+                window_end_inclusive = window.end - relativedelta(days=1)
+                effective_phase_end = (
+                    min(phase_end_inclusive, window_end_inclusive)
+                    if phase_end_inclusive is not None
+                    else window_end_inclusive
+                )
                 schedule.append(
                     ScheduledPeriod(
-                        start=current,
-                        end=current + delta,
+                        start=window.start,
+                        end=window.end,
                         event_date=event_date(
-                            current, frequency, timing, phase_start, phase_end_inclusive
+                            window.start,
+                            frequency,
+                            timing,
+                            phase_start,
+                            effective_phase_end,
                         ),
+                        fraction=window.fraction,
                     )
                 )
-                current += delta
             return tuple(schedule)
 
         exclusive_end = self.require_timeline_date("operations_end")

@@ -1,8 +1,11 @@
 """Shared time and compounding utilities."""
 
-from datetime import date, timedelta
+from dataclasses import dataclass
+from datetime import date, datetime, time, timedelta
 from functools import cache
+from math import floor, isclose, isfinite
 from typing import assert_never
+import warnings
 
 from dateutil.relativedelta import relativedelta
 
@@ -15,6 +18,22 @@ from dcaf.shared.types import (
     parse_day_count_convention,
     parse_period,
 )
+
+
+_FLOAT_TOLERANCE = 1e-12
+
+
+class PeriodTruncationWarning(UserWarning):
+    """Warning raised when fractional periods are truncated to complete days."""
+
+
+@dataclass(frozen=True, slots=True)
+class PeriodWindow:
+    """A half-open schedule interval and its fraction of one nominal period."""
+
+    start: date
+    end: date
+    fraction: float = 1.0
 
 
 def _normalize_period(period: Period) -> _PeriodEnum:
@@ -321,3 +340,139 @@ def time_delta_per_period(period: Period) -> relativedelta:
             return relativedelta(days=1)
         case _:
             assert_never(normalized_period)
+
+
+def _validate_period_count(periods: int | float) -> float:
+    """Validate a user-supplied schedule duration count."""
+    if isinstance(periods, bool) or not isinstance(periods, (int, float)):
+        raise TypeError("periods must be a finite non-negative number")
+
+    normalized = float(periods)
+    if not isfinite(normalized):
+        raise ValueError("periods must be finite")
+    if normalized < 0.0:
+        raise ValueError("periods must be non-negative")
+
+    nearest_integer = round(normalized)
+    if isclose(normalized, nearest_integer, rel_tol=0.0, abs_tol=_FLOAT_TOLERANCE):
+        return float(nearest_integer)
+    return normalized
+
+
+def _format_period_count(periods: int | float) -> str:
+    """Format a period count compactly for warning messages."""
+    if isinstance(periods, int):
+        return str(periods)
+    return f"{periods:g}"
+
+
+def _whole_days_with_truncation(days: float) -> tuple[int, bool]:
+    """Return complete days and whether a partial day was discarded."""
+    nearest_integer = round(days)
+    if isclose(days, nearest_integer, rel_tol=0.0, abs_tol=_FLOAT_TOLERANCE):
+        return nearest_integer, False
+    return floor(days), True
+
+
+def _warn_period_truncation(
+    *,
+    context: str,
+    periods: int | float,
+    frequency: Period,
+    start: date,
+    requested_end: datetime,
+    truncated_end: date,
+    final_interval: str,
+) -> None:
+    """Emit a transparent warning for partial-day truncation."""
+    last_included_date = (
+        (truncated_end - timedelta(days=1)).isoformat()
+        if truncated_end > start
+        else "none"
+    )
+
+    warnings.warn(
+        (
+            f"{context} requested {_format_period_count(periods)} {frequency} periods "
+            f"from {start.isoformat()}, which resolves to "
+            f"{requested_end.isoformat(sep=' ', timespec='seconds')}. "
+            "DCAF stores event timestamps as datetime.date values, so the "
+            f"incomplete final day was omitted. The truncated exclusive end is "
+            f"{truncated_end.isoformat()}, the last included date is "
+            f"{last_included_date}, and the final included period is {final_interval}."
+        ),
+        PeriodTruncationWarning,
+        stacklevel=3,
+    )
+
+
+def period_windows(
+    start: date,
+    periods: int | float,
+    frequency: Period,
+    convention: DayCountConvention = "actual/actual",
+    *,
+    context: str = "periods",
+) -> tuple[PeriodWindow, ...]:
+    """Resolve a schedule duration into complete-day half-open windows.
+
+    Integer counts produce one full window per period. Fractional tails are
+    converted to complete calendar days because DCAF stream events are dated
+    with ``datetime.date``. If the requested fractional endpoint lands within a
+    day, the incomplete day is omitted and :class:`PeriodTruncationWarning` is
+    raised.
+    """
+    normalized_periods = _validate_period_count(periods)
+    if normalized_periods == 0.0:
+        return ()
+
+    delta = time_delta_per_period(frequency)
+    whole_periods = int(floor(normalized_periods))
+    fractional_period = normalized_periods - whole_periods
+
+    windows: list[PeriodWindow] = []
+    current = start
+    for _ in range(whole_periods):
+        window_end = current + delta
+        windows.append(PeriodWindow(start=current, end=window_end, fraction=1.0))
+        current = window_end
+
+    if isclose(fractional_period, 0.0, rel_tol=0.0, abs_tol=_FLOAT_TOLERANCE):
+        return tuple(windows)
+
+    next_period_end = current + delta
+    period_days = (next_period_end - current).days
+    requested_tail_days = fractional_period * period_days
+    requested_end = datetime.combine(current, time.min) + timedelta(days=requested_tail_days)
+    complete_tail_days, truncated = _whole_days_with_truncation(requested_tail_days)
+    truncated_end = current + timedelta(days=complete_tail_days)
+
+    if truncated:
+        _warn_period_truncation(
+            context=context,
+            periods=periods,
+            frequency=frequency,
+            start=start,
+            requested_end=requested_end,
+            truncated_end=truncated_end,
+            final_interval=(
+                f"[{current.isoformat()}, {truncated_end.isoformat()})"
+                if truncated_end > current
+                else (
+                    f"[{windows[-1].start.isoformat()}, {windows[-1].end.isoformat()})"
+                    if windows
+                    else "none; no complete days were included"
+                )
+            ),
+        )
+
+    if truncated_end > current:
+        windows.append(
+            PeriodWindow(
+                start=current,
+                end=truncated_end,
+                fraction=elapsed_periods(current, truncated_end, frequency, convention),
+            )
+        )
+
+    return tuple(windows)

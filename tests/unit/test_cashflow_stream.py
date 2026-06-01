@@ -2,6 +2,7 @@ from datetime import date
 import pytest
 
 from dcaf.shared.types import ProFormaCategory, TaxTreatment
+from dcaf.shared.time import PeriodTruncationWarning
 from dcaf.streams import CashFlow, CashFlowGroup, CashFlowStream, GenerationStream
 from dcaf.finance.escalation import ConstantRateEscalation, EscalationBuilder, IndexSeriesEscalation
 
@@ -72,6 +73,20 @@ def test_from_recurring_bad_frequency():
             amount=1000.0,
             frequency="weekly",
         )
+
+
+def test_from_recurring_fractional_period_prorates_complete_days_and_warns():
+    with pytest.warns(PeriodTruncationWarning, match="last included date is 2026-01-15"):
+        cf_stream = CashFlowStream.from_recurring(
+            start=date(2026, 1, 1),
+            periods=0.5,
+            amount=3100.0,
+            frequency="month",
+        )
+
+    assert cf_stream.count() == 1
+    assert cf_stream.entries[0].date == date(2026, 1, 1)
+    assert cf_stream.entries[0].amount == pytest.approx(1500.0)
 
 
 def test_from_recurring_annual_escalation_is_date_based():

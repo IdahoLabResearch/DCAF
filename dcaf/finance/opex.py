@@ -15,7 +15,7 @@ from dcaf.streams.cashflows import CashFlowStream
 def fixed_opex(
     amount: float,
     start: date,
-    periods: int,
+    periods: int | float,
     frequency: Period = "year",
     escalation: float = 0.0,
     label: str = "Fixed OPEX",
@@ -36,8 +36,11 @@ def fixed_opex(
         Base cost for the first period (positive or negative; always stored as negative).
     start : date
         Date of the first cashflow.
-    periods : int
-        Number of cashflows to generate.
+    periods : int or float
+        Number of periods to generate. Fractional periods include the final
+        complete days that fit in the requested period count. If the requested
+        end falls within a day, the incomplete day is omitted and a warning is
+        raised.
     frequency : Period
         Payment frequency. One of ``"day"``, ``"month"``, ``"quarter"``, ``"year"``.
         Default is ``"year"``.

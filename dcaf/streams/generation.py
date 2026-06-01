@@ -31,7 +31,7 @@ from dcaf.finance.escalation import (
 from dcaf.shared.formatting import format_label
 from dcaf.shared.time import (
     elapsed_hours,
-    time_delta_per_period,
+    period_windows,
 )
 from dcaf.shared.types import (
     DayCountConvention,
@@ -263,7 +263,7 @@ class GenerationStream(BaseStream[Generation]):
         capacity_mw: float,
         capacity_factor: float,
         start: date,
-        periods: int,
+        periods: int | float,
         frequency: Period = "year",
         label: str = "Generation",
         day_count_convention: DayCountConvention = "actual/actual",
@@ -279,8 +279,11 @@ class GenerationStream(BaseStream[Generation]):
             Capacity factor as a decimal (e.g. 0.92 for 92%).
         start : date
             Date of the first generation entry.
-        periods : int
-            Number of periods.
+        periods : int or float
+            Number of periods. Fractional periods include the final complete
+            days that fit in the requested period count. If the requested end
+            falls within a day, the incomplete day is omitted and a warning is
+            raised.
         frequency : Period, optional
             Generation frequency. Default ``"year"``.
         label : str, optional
@@ -305,21 +308,24 @@ class GenerationStream(BaseStream[Generation]):
         2
         """
         entries: list[Generation] = []
-        time_delta = time_delta_per_period(frequency)
-        current_date = start
-        for i in range(periods):
-            period_end = current_date + time_delta
-            hours = elapsed_hours(current_date, period_end, day_count_convention)
+        windows = period_windows(
+            start,
+            periods,
+            frequency,
+            day_count_convention,
+            context="GenerationStream.from_capacity periods",
+        )
+        for i, window in enumerate(windows, start=1):
+            hours = elapsed_hours(window.start, window.end, day_count_convention)
             mwh = capacity_mw * capacity_factor * hours
-            gen_label = format_label(label, i + 1)
+            gen_label = format_label(label, i)
             entries.append(
                 Generation(
                     amount_mwh=mwh,
-                    date=current_date,
+                    date=window.start,
                     label=gen_label,
                 )
             )
-            current_date += time_delta
         return cls(entries)
 
     @classmethod
@@ -442,7 +448,7 @@ class GenerationStream(BaseStream[Generation]):
         capacity_mw: float,
         capacity_factor: float,
         start: date,
-        periods: int,
+        periods: int | float,
         frequency: Period = "year",
         label: str = "Generation",
         day_count_convention: DayCountConvention = "actual/actual",
@@ -458,8 +464,9 @@ class GenerationStream(BaseStream[Generation]):
             Capacity factor as a decimal.
         start : date
             Date of the first appended generation entry.
-        periods : int
-            Number of periods to generate.
+        periods : int or float
+            Number of periods to generate. Fractional periods include the final
+            complete days that fit in the requested period count.
         frequency : Period, optional
             Generation frequency. Default ``"year"``.
         label : str, optional

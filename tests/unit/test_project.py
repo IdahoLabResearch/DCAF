@@ -7,6 +7,7 @@ from dcaf import EnergyProject
 from dcaf.finance import ConstantRateEscalation
 from dcaf.finance.amortization import AmortizationSchedule
 from dcaf.project.timeline import ProjectTimeline
+from dcaf.shared.time import PeriodTruncationWarning
 from dcaf.shared.types import DayCountConvention, ProFormaCategory, TaxTreatment
 from dcaf.streams import CashFlow, CashFlowStream, Generation, GenerationStream
 
@@ -667,6 +668,35 @@ def test_energy_project_prorates_partial_operating_periods_from_generation_dates
     assert analysis.generation.count() == 2
     assert analysis.generation.sum() == pytest.approx(expected_generation)
     assert analysis.cashflow_components["fixed_opex"].sum() == pytest.approx(expected_opex)
+
+
+def test_energy_project_explicit_fractional_periods_use_complete_day_truncation():
+    project = (
+        EnergyProject()
+        .generation(
+            capacity_mw=1.0,
+            capacity_factor=1.0,
+            operations_start=date(2026, 1, 1),
+            start=date(2026, 1, 1),
+            periods=1.5,
+            frequency="year",
+        )
+        .fixed_opex(
+            amount=365.0,
+            start=date(2026, 1, 1),
+            periods=1.5,
+            frequency="year",
+        )
+    )
+
+    with pytest.warns(PeriodTruncationWarning) as caught:
+        analysis = project.analyze()
+
+    assert len(caught) == 2
+    assert all("last included date is 2027-07-01" in str(item.message) for item in caught)
+    assert analysis.generation.count() == 2
+    assert analysis.generation.sum() == pytest.approx((365 + 182) * 24)
+    assert analysis.cashflow_components["fixed_opex"].sum() == pytest.approx(-547.0)
 
 
 def test_project_pro_forma_can_write_csv(tmp_path):

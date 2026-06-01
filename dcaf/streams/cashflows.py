@@ -24,7 +24,7 @@ from dcaf.finance.escalation import (
     _resolve_escalation_policy_override,
 )
 from dcaf.shared.formatting import format_label
-from dcaf.shared.time import time_delta_per_period
+from dcaf.shared.time import period_windows
 from dcaf.shared.types import (
     DayCountConvention,
     Period,
@@ -302,7 +302,7 @@ class CashFlowStream(BaseStream[CashFlow]):
     def from_recurring(
         cls,
         start: date,
-        periods: int,
+        periods: int | float,
         amount: float,
         frequency: Period = "year",
         escalation: float = 0.0,
@@ -327,9 +327,12 @@ class CashFlowStream(BaseStream[CashFlow]):
         ----------
         start : date
             The date of the first cashflow.
-        periods : int
+        periods : int or float
             Number of periods (e.g., years if frequency='year', months if
-            frequency='month').
+            frequency='month'). Fractional periods include the final complete
+            days that fit in the requested period count. If the requested end
+            falls within a day, the incomplete day is omitted and a warning is
+            raised.
         amount : float
             Base amount known at ``amount_reference_date``. Can be positive
             (inflows) or negative (outflows). If ``amount_reference_date`` is not
@@ -381,7 +384,6 @@ class CashFlowStream(BaseStream[CashFlow]):
           is then evaluated at each payment date using the configured reference date.
         - Date arithmetic handles month-end edge cases (e.g., Jan 31 + 1 month = Feb 28/29).
         """
-        delta = time_delta_per_period(frequency)
         escalation_policy = _recurring_escalation(
             start=start,
             escalation=escalation,
@@ -395,10 +397,17 @@ class CashFlowStream(BaseStream[CashFlow]):
             tax_treatment,
         )
         entries = []
-        for i in range(periods):
-            flow_date = start + delta * i
-            escalated_amount = amount * escalation_policy.factor(flow_date)
-            flow_label = format_label(label, i + 1)
+        windows = period_windows(
+            start,
+            periods,
+            frequency,
+            day_count_convention,
+            context="CashFlowStream.from_recurring periods",
+        )
+        for i, window in enumerate(windows, start=1):
+            flow_date = window.start
+            escalated_amount = amount * escalation_policy.factor(flow_date) * window.fraction
+            flow_label = format_label(label, i)
             entries.append(
                 CashFlow(
                     amount=escalated_amount,

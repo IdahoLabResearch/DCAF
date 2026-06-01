@@ -5,6 +5,7 @@ from datetime import date
 import pytest
 
 from dcaf.shared.types import ProFormaCategory, TaxTreatment
+from dcaf.shared.time import PeriodTruncationWarning
 from dcaf.streams import CashFlowStream, Generation, GenerationGroup, GenerationStream
 from dcaf.finance.escalation import ConstantRateEscalation, IndexSeriesEscalation
 
@@ -121,6 +122,21 @@ def test_from_capacity_day_count_convention_controls_leap_year_hours():
     assert no_leap.sum() == pytest.approx(8760.0)
     assert fixed.sum() == pytest.approx(8784.0)
     assert actual.sum() == pytest.approx(8784.0)
+
+
+def test_from_capacity_fractional_period_uses_complete_days_and_warns():
+    with pytest.warns(PeriodTruncationWarning, match="last included date is 2030-01-15"):
+        stream = GenerationStream.from_capacity(
+            capacity_mw=1.0,
+            capacity_factor=1.0,
+            start=date(2030, 1, 1),
+            periods=0.5,
+            frequency="month",
+        )
+
+    assert stream.count() == 1
+    assert stream.entries[0].date == date(2030, 1, 1)
+    assert stream.entries[0].amount_mwh == pytest.approx(15 * 24)
 
 
 def test_from_capacity_default_label():

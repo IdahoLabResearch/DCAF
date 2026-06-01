@@ -6,6 +6,7 @@ import pytest
 
 from dcaf.finance.opex import fixed_opex
 from dcaf.finance.escalation import IndexSeriesEscalation
+from dcaf.shared.time import PeriodTruncationWarning
 from dcaf.shared.types import ProFormaCategory, TaxTreatment
 
 
@@ -19,6 +20,20 @@ def test_basic_call():
     assert len(stream.entries) == 5
     assert all(f.amount < 0 for f in stream.entries)
     assert stream.entries[0].amount == -100_000
+
+
+def test_fractional_period_prorates_complete_days_and_warns():
+    with pytest.warns(PeriodTruncationWarning, match="last included date is 2025-01-15"):
+        stream = fixed_opex(
+            amount=3100,
+            start=date(2025, 1, 1),
+            periods=0.5,
+            frequency="month",
+        )
+
+    assert stream.count() == 1
+    assert stream.entries[0].date == date(2025, 1, 1)
+    assert stream.entries[0].amount == pytest.approx(-1500.0)
 
 
 def test_positive_amount_produces_negative_flows():

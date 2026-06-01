@@ -167,7 +167,7 @@ class CapacityGenerationConfig:
     operations_start: date | None = None
     operations_end: date | None = None
     start: date | None = None
-    periods: int | None = None
+    periods: int | float | None = None
     frequency: Period | None = None
     label: str = "Generation"
     timing: TimingConvention | None = None
@@ -238,7 +238,7 @@ class FixedOpexConfig:
 
     amount: float
     start: date | None = None
-    periods: int | None = None
+    periods: int | float | None = None
     frequency: Period | None = None
     label: str = "Fixed OPEX"
     escalation: EscalationSettings = field(default_factory=EscalationSettings)

@@ -235,7 +235,7 @@ class EnergyProject:
         operations_start: date | None = None,
         operations_end: date | None = None,
         start: date | None = None,
-        periods: int | None = None,
+        periods: int | float | None = None,
         frequency: Period | None = None,
         label: str | None = None,
         timing: TimingConvention | None = None,
@@ -266,9 +266,11 @@ class EnergyProject:
             period.
         start : date, optional
             First generation period start date. Defaults to ``operations_start``.
-        periods : int, optional
-            Number of generation periods. Inferred from ``operations_end`` when
-            omitted.
+        periods : int or float, optional
+            Number of generation periods. Fractional periods include the final
+            complete days that fit in the requested period count. If the
+            requested end falls within a day, the incomplete day is omitted and
+            a warning is raised. Inferred from ``operations_end`` when omitted.
         frequency : Period, optional
             Generation period frequency. Defaults to the project-wide frequency
             set at construction time.
@@ -534,7 +536,7 @@ class EnergyProject:
         name: str = "default",
         amount: float,
         start: date | None = None,
-        periods: int | None = None,
+        periods: int | float | None = None,
         frequency: Period | None = None,
         escalation: float | None = None,
         escalation_period: Period | None = None,
@@ -554,8 +556,11 @@ class EnergyProject:
             Cost amount per period (sign is ignored; applied as an outflow).
         start : date, optional
             First period start date. Defaults to ``timeline.operations_start``.
-        periods : int, optional
-            Number of periods. Inferred from ``timeline.operations_end`` when omitted.
+        periods : int or float, optional
+            Number of periods. Fractional periods include the final complete
+            days that fit in the requested period count. If the requested end
+            falls within a day, the incomplete day is omitted and a warning is
+            raised. Inferred from ``timeline.operations_end`` when omitted.
         frequency : Period, optional
             Cost period frequency. Defaults to ``timeline.frequency``.
         escalation : float, optional
