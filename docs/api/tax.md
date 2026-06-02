@@ -1,7 +1,11 @@
 # Tax
 
-```{admonition} Coming Soon!
-:class: warning
+Tax and depreciation modeling helpers: MACRS and variable-declining-balance
+depreciation schedules, production and investment tax credits (PTC/ITC), and
+taxable-income and tax-liability computation. See
+[the tax calculations reference](../calculations/tax.md) for the underlying rules
+and IRS conventions.
 
-This part of the documentation is currently under construction.
+```{eval-rst}
+.. automodule:: dcaf.tax
 ```

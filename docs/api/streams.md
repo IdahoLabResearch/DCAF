@@ -1,7 +1,11 @@
 # Streams
 
-```{admonition} Coming Soon!
-:class: warning
+Lower-level financial and generation primitives. `CashFlow`/`CashFlowStream` and
+`Generation`/`GenerationStream` are the immutable building blocks the
+[project builder](project.md) produces under the hood. Reach for them directly when
+you need fine-grained control — custom data sources, bespoke incentive structures,
+or transformations the builder does not expose.
 
-This part of the documentation is currently under construction.
+```{eval-rst}
+.. automodule:: dcaf.streams
 ```
