@@ -1,3 +1,20 @@
+"""Shared type aliases, enums, and parsing helpers used across DCAF.
+
+Defines the constrained vocabularies the rest of the library builds on:
+
+- Time and convention aliases: :data:`Period`, :data:`TimingConvention`,
+  :data:`DayCountConvention`.
+- Depreciation aliases: :data:`MACRSPropertyClass`, :data:`MACRSConvention`,
+  :data:`VDBConvention`.
+- Construction spend aliases: :data:`SpendSchedule`, :data:`SpendScheduleName`.
+- Classification enums attached to every cashflow: :class:`ProFormaCategory`
+  (how a flow appears in a pro forma) and :class:`TaxTreatment` (whether a flow
+  is taxable, deductible, or neutral).
+
+The ``parse_*`` helpers normalize loosely-typed user input (strings) into these
+canonical values.
+"""
+
 from enum import StrEnum
 from typing import Any, Literal, Protocol, TypeAlias
 
