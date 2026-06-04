@@ -7,7 +7,7 @@ calculator, and factory functions for generating depreciation
 """
 
 from collections.abc import Iterator, Sequence
-from datetime import date, timedelta
+from datetime import date
 from math import isfinite
 from typing import assert_never
 
@@ -100,6 +100,17 @@ def _vdb_segments(
         elapsed += segment_length
 
 
+def _placed_in_service_quarter(placed_in_service: date) -> int:
+    """Return the calendar quarter (1-4) a placed-in-service date falls in.
+
+    Shared by the MACRS and VDB mid-quarter paths so both derive the
+    placed-in-service quarter identically. The quarter is read directly from
+    the calendar month; the date is a point-in-time event, so no half-open
+    interval adjustment applies (e.g. a 3/31 asset is in Q1, a 12/31 asset Q4).
+    """
+    return (placed_in_service.month - 1) // 3 + 1
+
+
 def _vdb_convention_shift(convention: VDBConvention, placed_in_service: date) -> float:
     """Return the fractional first-period shift for convention-aware schedules."""
     match convention:
@@ -108,7 +119,7 @@ def _vdb_convention_shift(convention: VDBConvention, placed_in_service: date) ->
         case "half-year":
             return 0.5
         case "mid-quarter":
-            in_service_quarter = ((placed_in_service + timedelta(days=1)).month + 2) // 3
+            in_service_quarter = _placed_in_service_quarter(placed_in_service)
             return ((in_service_quarter - 0.5) * 2.0) / 8.0
         case _:
             assert_never(convention)
@@ -341,7 +352,7 @@ def macrs_schedule(
         case "half-year":
             rates = _MACRS_RATES[property_class]
         case "mid-quarter":
-            quarter = (placed_in_service.month - 1) // 3 + 1
+            quarter = _placed_in_service_quarter(placed_in_service)
             rates = _MACRS_MID_QUARTER_RATES[property_class][quarter]
         case _:
             assert_never(convention)

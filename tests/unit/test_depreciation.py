@@ -6,6 +6,7 @@ import pytest
 
 from dcaf.shared.types import ProFormaCategory, TaxTreatment
 from dcaf.tax import vdb, vdb_schedule
+from dcaf.tax.depreciation import _placed_in_service_quarter
 
 
 def test_vdb_matches_documented_excel_example():
@@ -225,7 +226,55 @@ def test_vdb_schedule_mid_quarter_convention_uses_explicit_date_grid():
 
     assert [entry.date for entry in stream.entries] == list(schedule_dates[1:])
     assert stream.entries[0].label == "VDB Depreciation Period 1"
-    assert -stream.entries[0].amount == pytest.approx(150.0)
+    # 6/30 falls in Q2: first-period length 1 - 0.375 = 0.625, so 1000 * (2/5) * 0.625.
+    assert -stream.entries[0].amount == pytest.approx(250.0)
+
+
+@pytest.mark.parametrize(
+    "placed,expected_quarter",
+    [
+        # Interior dates.
+        (date(2030, 2, 15), 1),
+        (date(2030, 5, 15), 2),
+        (date(2030, 8, 15), 3),
+        (date(2030, 11, 15), 4),
+        # Quarter-end boundary dates: the literal calendar quarter, with no day shift.
+        # (A spurious +1 day previously rolled each of these into the next quarter,
+        # and 12/31 all the way back to Q1.)
+        (date(2030, 3, 31), 1),
+        (date(2030, 6, 30), 2),
+        (date(2030, 9, 30), 3),
+        (date(2030, 12, 31), 4),
+    ],
+)
+def test_placed_in_service_quarter_uses_literal_calendar_quarter(placed, expected_quarter):
+    """The shared quarter helper reads the literal calendar quarter of the date."""
+    assert _placed_in_service_quarter(placed) == expected_quarter
+
+
+@pytest.mark.parametrize(
+    "placed,expected_first_period",
+    # life=5, factor=2.0 -> first-year DB rate = 1000 * 2/5 = 400; first period spans
+    # (1 - shift) of the year, with shift = (2*quarter - 1) / 8.
+    [
+        (date(2030, 3, 31), 350.0),  # Q1: 400 * 0.875
+        (date(2030, 6, 30), 250.0),  # Q2: 400 * 0.625
+        (date(2030, 9, 30), 150.0),  # Q3: 400 * 0.375
+        (date(2030, 12, 31), 50.0),  # Q4: 400 * 0.125
+    ],
+)
+def test_vdb_mid_quarter_first_period_by_quarter(placed, expected_first_period):
+    """Mid-quarter VDB front-loads less depreciation for later quarters, boundaries included."""
+    stream = vdb_schedule(
+        cost_basis=1000.0,
+        salvage_value=0.0,
+        placed_in_service=placed,
+        life=5,
+        convention="mid-quarter",
+        schedule_dates=tuple(date(year, 12, 31) for year in range(2029, 2037)),
+        terminal_catch_up=True,
+    )
+    assert -stream.entries[0].amount == pytest.approx(expected_first_period)
 
 
 def test_vdb_schedule_best_of_convention_requires_valuation_inputs():
@@ -246,10 +295,13 @@ def test_vdb_schedule_best_of_convention_requires_valuation_inputs():
 def test_vdb_schedule_best_of_convention_matches_workbook_shape():
     """Best-of mode should select the workbook-like mid-quarter candidate for the fixture case."""
     schedule_dates = tuple(date(year, 12, 31) for year in range(2030, 2047))
+    # Workbook models the asset entering service at the start of 2031 (Q1), with the
+    # first deduction at year-end 2031. Under literal-date quarter semantics that is
+    # the date 2031-01-01 (skips the 2030-12-31 grid point as an exclusive lower bound).
     stream = vdb_schedule(
         cost_basis=877824.3662585187,
         salvage_value=0.0,
-        placed_in_service=date(2030, 12, 31),
+        placed_in_service=date(2031, 1, 1),
         life=15,
         factor=1.5,
         convention="best-of-half-year-mid-quarter",
@@ -276,10 +328,12 @@ def test_vdb_schedule_best_of_convention_matches_workbook_shape():
 def test_vdb_schedule_best_of_convention_prefers_mid_quarter_candidate():
     """The selector should pick the higher-value convention candidate, not always half-year."""
     schedule_dates = tuple(date(year, 12, 31) for year in range(2030, 2047))
+    # Q1 placement (start of 2031): mid-quarter front-loads more than half-year,
+    # so best-of should prefer the mid-quarter candidate over half-year.
     half_year = vdb_schedule(
         cost_basis=877824.3662585187,
         salvage_value=0.0,
-        placed_in_service=date(2030, 12, 31),
+        placed_in_service=date(2031, 1, 1),
         life=15,
         factor=1.5,
         convention="half-year",
@@ -289,7 +343,7 @@ def test_vdb_schedule_best_of_convention_prefers_mid_quarter_candidate():
     best_of = vdb_schedule(
         cost_basis=877824.3662585187,
         salvage_value=0.0,
-        placed_in_service=date(2030, 12, 31),
+        placed_in_service=date(2031, 1, 1),
         life=15,
         factor=1.5,
         convention="best-of-half-year-mid-quarter",
