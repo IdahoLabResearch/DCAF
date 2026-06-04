@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field, replace as dc_replace
 from datetime import date
 from math import isclose
@@ -31,6 +32,7 @@ from dcaf.project.analysis import ProjectAnalysis
 from dcaf.project.timeline import ProjectTimeline
 from dcaf.shared.formatting import format_label
 from dcaf.shared.time import (
+    ScheduleTruncationWarning,
     elapsed_hours,
     elapsed_periods,
     event_date,
@@ -674,21 +676,83 @@ class ProjectCompiler:
         frequency: Period,
         phase_start: date | None,
         phase_end: date | None,
+        *,
+        truncate_after_phase_end: bool = False,
+        component_name: str = "cashflow",
     ) -> CashFlowStream:
         """Remap cashflow dates according to the project timing convention.
 
         Applies the timeline's timing convention to each cashflow in *stream*,
-        replacing each date with the computed event date. ``phase_end`` is the
-        exclusive end of the phase and is converted to the inclusive last
-        allowable date for :func:`event_date`.
+        replacing each date with the computed event date. When
+        ``truncate_after_phase_end`` is true, events are first remapped without
+        capping to ``phase_end`` and then entries on or after the exclusive phase
+        end are dropped with a warning.
         """
         timing = self.config.timeline.timing
-        phase_end_inclusive = phase_end - relativedelta(days=1) if phase_end is not None else None
-        return stream.apply(
+        phase_end_inclusive = (
+            None
+            if truncate_after_phase_end
+            else phase_end - relativedelta(days=1)
+            if phase_end is not None
+            else None
+        )
+        remapped = stream.apply(
             lambda cf: dc_replace(
                 cf,
                 date=event_date(cf.date, frequency, timing, phase_start, phase_end_inclusive),
             )
+        )
+        if truncate_after_phase_end:
+            return self.truncate_cashflow_schedule(
+                remapped,
+                boundary=phase_end,
+                component_name=component_name,
+            )
+        return remapped
+
+    def truncate_cashflow_schedule(
+        self,
+        stream: CashFlowStream,
+        *,
+        boundary: date | None,
+        component_name: str,
+    ) -> CashFlowStream:
+        """Drop scheduled cashflows on or after an exclusive analysis boundary."""
+        if boundary is None:
+            return stream
+        dropped_dates = [cf.date for cf in stream.entries if cf.date >= boundary]
+        if not dropped_dates:
+            return stream
+        self.warn_schedule_truncated(
+            component_name=component_name,
+            dropped_count=len(dropped_dates),
+            first_dropped=min(dropped_dates),
+            last_dropped=max(dropped_dates),
+            boundary=boundary,
+        )
+        return stream.filter_apply(lambda cf: cf if cf.date < boundary else None)
+
+    @staticmethod
+    def warn_schedule_truncated(
+        *,
+        component_name: str,
+        dropped_count: int,
+        first_dropped: date,
+        last_dropped: date,
+        boundary: date,
+    ) -> None:
+        """Warn that a configured schedule was truncated by ``operations_end``."""
+        entry_word = "entry" if dropped_count == 1 else "entries"
+        warnings.warn(
+            (
+                f"{component_name} schedule truncated at operations_end "
+                f"{boundary.isoformat()}: dropped {dropped_count} cashflow "
+                f"{entry_word} dated from {first_dropped.isoformat()} through "
+                f"{last_dropped.isoformat()}. Analyses where operations_end "
+                "falls before a configured schedule completes may be misspecified."
+            ),
+            ScheduleTruncationWarning,
+            stacklevel=4,
         )
 
     def build_depreciation(
@@ -728,6 +792,8 @@ class ProjectCompiler:
                     frequency="year",
                     phase_start=ops_start,
                     phase_end=ops_end,
+                    truncate_after_phase_end=True,
+                    component_name="depreciation",
                 )
             case VdbDepreciationConfig() as config:
                 return self.remap_event_dates(
@@ -749,6 +815,8 @@ class ProjectCompiler:
                     frequency=config.frequency,
                     phase_start=ops_start,
                     phase_end=ops_end,
+                    truncate_after_phase_end=True,
+                    component_name="depreciation",
                 )
             case _:
                 raise AssertionError("Unexpected depreciation config")
@@ -767,11 +835,19 @@ class ProjectCompiler:
         if self.config.debt_schedule is not None:
             sched = self.config.debt_schedule
             if isinstance(sched, AmortizationSchedule):
-                return CashFlowStream.from_streams(
-                    sched.interest,
-                    sched.principal,
-                ).sort()
-            return sched
+                return self.truncate_cashflow_schedule(
+                    CashFlowStream.from_streams(
+                        sched.interest,
+                        sched.principal,
+                    ).sort(),
+                    boundary=self.config.timeline.operations_end,
+                    component_name="debt_service",
+                )
+            return self.truncate_cashflow_schedule(
+                sched,
+                boundary=self.config.timeline.operations_end,
+                component_name="debt_service",
+            )
 
         # Construction-debt path
         debt = self.config.construction_debt
@@ -810,6 +886,8 @@ class ProjectCompiler:
             frequency=debt.amortization_frequency,
             phase_start=ops_start,
             phase_end=ops_end,
+            truncate_after_phase_end=True,
+            component_name="debt_service",
         )
 
     def infer_levelized_cost_escalation_rate(self) -> float | None:
@@ -882,15 +960,37 @@ class ProjectCompiler:
         if periods is not None:
             if periods <= 0:
                 raise ValueError(f"{section} periods must be positive")
-            schedule: list[ScheduledPeriod] = []
-            for window in period_windows(
+            windows = period_windows(
                 start,
                 periods,
                 frequency,
                 self.config.day_count_convention,
                 context=f"{section} periods",
-            ):
-                window_end_inclusive = window.end - relativedelta(days=1)
+            )
+            if phase_end is not None and windows and windows[-1].end > phase_end:
+                self.warn_configured_schedule_truncated(
+                    section=section,
+                    requested_end=windows[-1].end,
+                    boundary=phase_end,
+                )
+            schedule: list[ScheduledPeriod] = []
+            for window in windows:
+                if phase_end is not None and window.start >= phase_end:
+                    break
+                effective_window_end = (
+                    min(window.end, phase_end) if phase_end is not None else window.end
+                )
+                fraction = (
+                    window.fraction
+                    if effective_window_end == window.end
+                    else elapsed_periods(
+                        window.start,
+                        effective_window_end,
+                        frequency,
+                        self.config.day_count_convention,
+                    )
+                )
+                window_end_inclusive = effective_window_end - relativedelta(days=1)
                 effective_phase_end = (
                     min(phase_end_inclusive, window_end_inclusive)
                     if phase_end_inclusive is not None
@@ -899,7 +999,7 @@ class ProjectCompiler:
                 schedule.append(
                     ScheduledPeriod(
                         start=window.start,
-                        end=window.end,
+                        end=effective_window_end,
                         event_date=event_date(
                             window.start,
                             frequency,
@@ -907,7 +1007,7 @@ class ProjectCompiler:
                             phase_start,
                             effective_phase_end,
                         ),
-                        fraction=window.fraction,
+                        fraction=fraction,
                     )
                 )
             return tuple(schedule)
@@ -943,6 +1043,25 @@ class ProjectCompiler:
             )
             current += delta
         return tuple(schedule)
+
+    @staticmethod
+    def warn_configured_schedule_truncated(
+        *,
+        section: str,
+        requested_end: date,
+        boundary: date,
+    ) -> None:
+        """Warn that an explicit period count exceeded ``operations_end``."""
+        warnings.warn(
+            (
+                f"{section} schedule requested through {requested_end.isoformat()} "
+                f"but operations_end is {boundary.isoformat()}; entries after "
+                "operations_end were truncated. Analyses where operations_end "
+                "falls before a configured schedule completes may be misspecified."
+            ),
+            ScheduleTruncationWarning,
+            stacklevel=4,
+        )
 
     def require_timeline_date(
         self,

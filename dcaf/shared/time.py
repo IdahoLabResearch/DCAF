@@ -27,6 +27,10 @@ class PeriodTruncationWarning(UserWarning):
     """Warning raised when fractional periods are truncated to complete days."""
 
 
+class ScheduleTruncationWarning(UserWarning):
+    """Warning raised when scheduled entries are truncated at an analysis boundary."""
+
+
 @dataclass(frozen=True, slots=True)
 class PeriodWindow:
     """A half-open schedule interval and its fraction of one nominal period."""

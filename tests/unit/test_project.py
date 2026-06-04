@@ -7,7 +7,7 @@ from dcaf import EnergyProject
 from dcaf.finance import ConstantRateEscalation
 from dcaf.finance.amortization import AmortizationSchedule
 from dcaf.project.timeline import ProjectTimeline
-from dcaf.shared.time import PeriodTruncationWarning
+from dcaf.shared.time import PeriodTruncationWarning, ScheduleTruncationWarning
 from dcaf.shared.types import DayCountConvention, ProFormaCategory, TaxTreatment
 from dcaf.streams import CashFlow, CashFlowStream, Generation, GenerationStream
 
@@ -42,7 +42,8 @@ def test_energy_project_single_asset_workflow_builds_analysis_and_metrics():
         .tax(rate=0.21)
     )
 
-    analysis = project.analyze()
+    with pytest.warns(ScheduleTruncationWarning, match="depreciation schedule truncated"):
+        analysis = project.analyze()
 
     assert analysis.generation.sum() == pytest.approx(100.0 * 0.5 * 8760.0 * 2)
     assert analysis.valuation is not None
@@ -1213,7 +1214,8 @@ def test_energy_project_generation_stream_infers_operations_dates():
         .fixed_opex(amount=100.0, start=date(2026, 1, 1), periods=1)
     )
 
-    analysis = project.analyze()
+    with pytest.warns(ScheduleTruncationWarning, match="fixed_opex schedule requested"):
+        analysis = project.analyze()
     assert analysis.generation.count() == 2
     assert analysis.timeline.operations_start == date(2026, 1, 1)
     # operations_end is exclusive; inferred boundary is one day past the latest entry.

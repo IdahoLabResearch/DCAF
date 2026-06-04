@@ -9,8 +9,9 @@ from datetime import date, timedelta
 
 import pytest
 
-from dcaf.shared.time import event_date
+from dcaf.shared.time import ScheduleTruncationWarning, event_date
 from dcaf.project.builder import EnergyProject
+from dcaf.finance.amortization import AmortizationSchedule
 
 
 # ---------------------------------------------------------------------------
@@ -415,6 +416,38 @@ class TestDepreciationRemapping:
         assert dep_dates[0] == date(2025, 12, 31)
         assert dep_dates[1] == date(2026, 12, 31)
 
+    def test_macrs_dates_after_operations_end_are_truncated_with_warning(self):
+        project = (
+            EnergyProject()
+            .generation(
+                capacity_mw=100,
+                capacity_factor=0.9,
+                operations_start=date(2026, 1, 1),
+                operations_end=date(2028, 1, 1),
+            )
+            .construction(
+                overnight_cost=1_000,
+                spend_profile="upfront",
+                construction_start=date(2025, 1, 1),
+                period="year",
+            )
+            .revenue_from_generation(sell_price_per_unit=50.0)
+            .depreciation_macrs(property_class=5)
+        )
+
+        with pytest.warns(
+            ScheduleTruncationWarning,
+            match="depreciation schedule truncated at operations_end 2028-01-01",
+        ) as caught:
+            analysis = project.analyze()
+
+        assert len(caught) == 1
+        dep_stream = analysis.cashflow_components["depreciation"]
+        assert [(cf.date, cf.amount) for cf in dep_stream.entries] == [
+            (date(2026, 12, 31), -200.0),
+            (date(2027, 12, 31), -320.0),
+        ]
+
 
 class TestDebtRemapping:
     """Debt service dates remapped per timing convention.
@@ -455,6 +488,119 @@ class TestDebtRemapping:
         assert unique_dates[0] == date(2025, 12, 31)
         assert unique_dates[1] == date(2026, 12, 31)
         assert unique_dates[2] == date(2027, 12, 31)
+
+    def test_construction_debt_after_operations_end_is_truncated_with_warning(self):
+        project = (
+            EnergyProject()
+            .generation(
+                capacity_mw=100,
+                capacity_factor=0.9,
+                operations_start=date(2026, 1, 1),
+                operations_end=date(2028, 1, 1),
+            )
+            .construction(
+                overnight_cost=1_000,
+                spend_profile="upfront",
+                construction_start=date(2025, 1, 1),
+                period="year",
+            )
+            .revenue_from_generation(sell_price_per_unit=50.0)
+            .construction_financing(
+                debt_fraction=1.0,
+                amortization_rate=0.05,
+                amortization_term=10,
+                amortization_frequency="year",
+            )
+        )
+
+        with pytest.warns(
+            ScheduleTruncationWarning,
+            match="debt_service schedule truncated at operations_end 2028-01-01",
+        ) as caught:
+            analysis = project.analyze()
+
+        assert len(caught) == 1
+        debt_stream = analysis.cashflow_components["debt_service"]
+        assert sorted({cf.date for cf in debt_stream.entries}) == [
+            date(2026, 12, 31),
+            date(2027, 12, 31),
+        ]
+        assert debt_stream.count() == 4
+
+    def test_explicit_debt_schedule_after_operations_end_is_truncated_with_warning(self):
+        schedule = AmortizationSchedule.build(
+            principal=1_000.0,
+            annual_rate=0.05,
+            term=3,
+            start_date=date(2026, 1, 1),
+            frequency="year",
+        )
+        project = (
+            EnergyProject()
+            .generation(
+                capacity_mw=100,
+                capacity_factor=0.9,
+                operations_start=date(2026, 1, 1),
+                operations_end=date(2028, 1, 1),
+            )
+            .debt_schedule(schedule=schedule)
+        )
+
+        with pytest.warns(
+            ScheduleTruncationWarning,
+            match="debt_service schedule truncated at operations_end 2028-01-01",
+        ) as caught:
+            analysis = project.analyze()
+
+        assert len(caught) == 1
+        debt_stream = analysis.cashflow_components["debt_service"]
+        assert sorted({cf.date for cf in debt_stream.entries}) == [
+            date(2026, 1, 1),
+            date(2027, 1, 1),
+        ]
+        assert debt_stream.count() == 4
+
+
+class TestOperationsHorizonTruncation:
+    """Explicit operating period counts are truncated at operations_end."""
+
+    def test_explicit_period_generation_and_opex_truncate_at_operations_end(self):
+        project = (
+            EnergyProject()
+            .generation(
+                capacity_mw=1.0,
+                capacity_factor=1.0,
+                operations_start=date(2026, 1, 1),
+                operations_end=date(2027, 7, 1),
+                start=date(2026, 1, 1),
+                periods=3,
+                frequency="year",
+            )
+            .fixed_opex(
+                amount=365.0,
+                start=date(2026, 1, 1),
+                periods=3,
+                frequency="year",
+            )
+        )
+
+        with pytest.warns(ScheduleTruncationWarning) as caught:
+            analysis = project.analyze()
+
+        messages = [str(item.message) for item in caught]
+        assert len(messages) == 2
+        assert any("generation schedule requested through 2029-01-01" in msg for msg in messages)
+        assert any("fixed_opex schedule requested through 2029-01-01" in msg for msg in messages)
+        assert [(g.date, g.amount_mwh) for g in analysis.generation.entries] == [
+            (date(2026, 12, 31), 8760.0),
+            (date(2027, 6, 30), 4344.0),
+        ]
+        assert [
+            (cf.date, cf.amount) for cf in analysis.cashflow_components["fixed_opex"].entries
+        ] == [
+            (date(2026, 12, 31), -365.0),
+            (date(2027, 6, 30), -181.0),
+        ]
 
 
 # ---------------------------------------------------------------------------

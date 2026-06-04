@@ -4,6 +4,7 @@ from dcaf.shared.formatting import format_label
 from dcaf.shared.time import (
     PeriodTruncationWarning,
     PeriodWindow,
+    ScheduleTruncationWarning,
     compound_factor,
     elapsed_hours,
     elapsed_periods,
@@ -46,6 +47,7 @@ __all__ = [
     "VDBConvention",
     "PeriodTruncationWarning",
     "PeriodWindow",
+    "ScheduleTruncationWarning",
     "compound_factor",
     "elapsed_hours",
     "elapsed_periods",
