@@ -6,7 +6,7 @@ import pytest
 
 from dcaf.finance.opex import fixed_opex
 from dcaf.finance.escalation import IndexSeriesEscalation
-from dcaf.shared.time import PeriodTruncationWarning
+from dcaf.shared.time import PeriodTruncationWarning, elapsed_periods
 from dcaf.shared.types import ProFormaCategory, TaxTreatment
 
 
@@ -32,7 +32,7 @@ def test_fractional_period_prorates_complete_days_and_warns():
         )
 
     assert stream.count() == 1
-    assert stream.entries[0].date == date(2025, 1, 1)
+    assert stream.entries[0].date == date(2025, 1, 15)
     assert stream.entries[0].amount == pytest.approx(-1500.0)
 
 
@@ -50,10 +50,15 @@ def test_negative_amount_produces_negative_flows():
 
 def test_escalation_compounds_correctly():
     """Annual escalation compounds multiplicatively across successive periods."""
-    stream = fixed_opex(amount=100_000, start=date(2025, 1, 1), periods=3, escalation=0.02)
-    assert stream.entries[0].amount == pytest.approx(-100_000)
-    assert stream.entries[1].amount == pytest.approx(-102_000)
-    assert stream.entries[2].amount == pytest.approx(-104_040)
+    start = date(2025, 1, 1)
+    stream = fixed_opex(amount=100_000, start=start, periods=3, escalation=0.02)
+    expected_dates = [date(2025, 12, 31), date(2026, 12, 31), date(2027, 12, 31)]
+    expected_amounts = [
+        -100_000 * _annual_factor(start, flow_date, 0.02) for flow_date in expected_dates
+    ]
+    for i, flow in enumerate(stream.entries):
+        assert flow.date == expected_dates[i]
+        assert flow.amount == pytest.approx(expected_amounts[i])
 
 
 def test_annual_escalation_is_date_based_for_monthly_opex():
@@ -66,7 +71,7 @@ def test_annual_escalation_is_date_based_for_monthly_opex():
         frequency="month",
         escalation=0.12,
     )
-    expected_dates = [date(2025, 1, 1), date(2025, 2, 1), date(2025, 3, 1)]
+    expected_dates = [date(2025, 1, 31), date(2025, 2, 28), date(2025, 3, 31)]
     expected_amounts = [
         -12_000 * _annual_factor(start, flow_date, 0.12) for flow_date in expected_dates
     ]
@@ -86,12 +91,13 @@ def test_new_escalation_kwargs_are_forwarded():
         escalation_period="month",
         amount_reference_date=date(2025, 1, 1),
     )
+    expected_dates = [date(2025, 3, 31), date(2025, 4, 30), date(2025, 5, 31)]
     expected_amounts = [
-        -10_000 * (1.01**2),
-        -10_000 * (1.01**3),
-        -10_000 * (1.01**4),
+        -10_000 * (1.01 ** elapsed_periods(date(2025, 1, 1), flow_date, "month"))
+        for flow_date in expected_dates
     ]
     for i, flow in enumerate(stream.entries):
+        assert flow.date == expected_dates[i]
         assert flow.amount == pytest.approx(expected_amounts[i])
 
 
@@ -113,7 +119,7 @@ def test_escalation_policy_is_forwarded():
     )
 
     assert [flow.amount for flow in stream.entries] == pytest.approx(
-        [-10_000.0, -10_200.0, -10_404.0]
+        [-10_200.0, -10_404.0, -10_404.0]
     )
 
 
@@ -121,7 +127,19 @@ def test_non_default_frequency():
     """Quarterly frequency spaces flows three months apart."""
     stream = fixed_opex(amount=10_000, start=date(2025, 1, 1), periods=4, frequency="quarter")
     assert len(stream.entries) == 4
-    assert stream.entries[1].date == date(2025, 4, 1)
+    assert stream.entries[1].date == date(2025, 6, 30)
+
+
+def test_timing_begin_uses_period_start_dates():
+    stream = fixed_opex(
+        amount=10_000,
+        start=date(2025, 1, 1),
+        periods=2,
+        frequency="year",
+        timing="begin",
+    )
+
+    assert [flow.date for flow in stream.entries] == [date(2025, 1, 1), date(2026, 1, 1)]
 
 
 def test_default_label():

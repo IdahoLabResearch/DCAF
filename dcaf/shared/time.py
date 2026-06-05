@@ -40,6 +40,20 @@ class PeriodWindow:
     fraction: float = 1.0
 
 
+def period_window_event_date(window: PeriodWindow, timing: TimingConvention = "end") -> date:
+    """Return the booking date for a generated half-open period window."""
+    last_date = window.end - timedelta(days=1)
+    match timing:
+        case "end":
+            return last_date
+        case "begin":
+            return window.start
+        case "middle":
+            return window.start + timedelta(days=(last_date - window.start).days // 2)
+        case _:
+            assert_never(timing)
+
+
 def _normalize_period(period: Period) -> _PeriodEnum:
     try:
         return parse_period(period)

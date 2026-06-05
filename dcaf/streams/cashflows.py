@@ -24,13 +24,14 @@ from dcaf.finance.escalation import (
     _resolve_escalation_policy_override,
 )
 from dcaf.shared.formatting import format_label
-from dcaf.shared.time import period_windows
+from dcaf.shared.time import period_window_event_date, period_windows
 from dcaf.shared.types import (
     DayCountConvention,
     Period,
     ProFormaCategory,
     SupportsLessThan,
     TaxTreatment,
+    TimingConvention,
     normalize_cashflow_classification,
     normalize_pro_forma_category,
     parse_pro_forma_category,
@@ -311,6 +312,7 @@ class CashFlowStream(BaseStream[CashFlow]):
         pro_forma_category: ProFormaCategory | str | None = ProFormaCategory.OTHER,
         tax_treatment: TaxTreatment | str = TaxTreatment.NONE,
         *,
+        timing: TimingConvention = "end",
         escalation_period: Period = "year",
         amount_reference_date: date | None = None,
         day_count_convention: DayCountConvention = "actual/actual",
@@ -343,6 +345,9 @@ class CashFlowStream(BaseStream[CashFlow]):
             - "quarter": Four cashflows per year (every 3 months)
             - "month": Twelve cashflows per year
             - "day": One cashflow per day
+        timing : {"end", "begin", "middle"}, optional
+            Booking-date convention for each generated period. Default is
+            ``"end"``, which books on the final included date of the period.
         escalation : float, optional
             Compound escalation rate as a decimal, interpreted over
             ``escalation_period``. With the default
@@ -405,7 +410,7 @@ class CashFlowStream(BaseStream[CashFlow]):
             context="CashFlowStream.from_recurring periods",
         )
         for i, window in enumerate(windows, start=1):
-            flow_date = window.start
+            flow_date = period_window_event_date(window, timing)
             escalated_amount = amount * escalation_policy.factor(flow_date) * window.fraction
             flow_label = format_label(label, i)
             entries.append(

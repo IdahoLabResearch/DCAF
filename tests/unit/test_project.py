@@ -6,6 +6,7 @@ import pytest
 from dcaf import EnergyProject
 from dcaf.finance import ConstantRateEscalation
 from dcaf.finance.amortization import AmortizationSchedule
+from dcaf.finance.opex import fixed_opex
 from dcaf.project.timeline import ProjectTimeline
 from dcaf.shared.time import PeriodTruncationWarning, ScheduleTruncationWarning
 from dcaf.shared.types import DayCountConvention, ProFormaCategory, TaxTreatment
@@ -959,6 +960,33 @@ def test_energy_project_explicit_zero_escalation_overrides_project_default():
 
     assert analysis.cashflow_components["fixed_opex:flat"].sum() == pytest.approx(-200.0)
     assert analysis.cashflow_components["fixed_opex"].sum() == pytest.approx(-230.94, abs=0.1)
+
+
+def test_energy_project_fixed_opex_matches_standalone_booking_convention():
+    project = (
+        EnergyProject()
+        .generation(
+            capacity_mw=1.0,
+            capacity_factor=1.0,
+            operations_start=date(2026, 1, 1),
+            operations_end=date(2029, 1, 1),
+        )
+        .fixed_opex(amount=500_000.0, frequency="year", escalation=0.025)
+    )
+    standalone = fixed_opex(
+        amount=500_000.0,
+        start=date(2026, 1, 1),
+        periods=3,
+        frequency="year",
+        escalation=0.025,
+    )
+
+    project_opex = project.analyze().cashflow_components["fixed_opex"]
+
+    assert [flow.date for flow in project_opex] == [flow.date for flow in standalone]
+    assert [flow.amount for flow in project_opex] == pytest.approx(
+        [flow.amount for flow in standalone]
+    )
 
 
 # --- Debt principal derivation: capitalize vs pay ---
