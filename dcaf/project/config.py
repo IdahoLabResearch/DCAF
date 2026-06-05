@@ -69,6 +69,8 @@ def wacc(
         _validate_finite(value, name)
     if debt_fraction < 0.0 or resolved_equity < 0.0:
         raise ValueError("WACC fractions must be non-negative")
+    if tax_rate < 0.0:
+        raise ValueError("tax_rate must be non-negative")
     if not isclose(debt_fraction + resolved_equity, 1.0, rel_tol=0.0, abs_tol=1e-9):
         raise ValueError("WACC fractions must sum to 1.0")
     return equity_cost * resolved_equity + debt_cost * debt_fraction * (1.0 - tax_rate)
@@ -88,6 +90,8 @@ class ProjectValuation:
 
     def __post_init__(self) -> None:
         _validate_finite(self.discount_rate, "discount_rate")
+        if self.discount_rate <= -1.0:
+            raise ValueError("discount_rate must be greater than -1.0")
 
     @classmethod
     def from_discount_rate(cls, rate: float) -> ProjectValuation:

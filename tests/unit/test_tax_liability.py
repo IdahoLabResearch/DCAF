@@ -2,6 +2,8 @@
 
 from datetime import date
 
+import pytest
+
 from dcaf.streams.cashflows import CashFlow, CashFlowStream
 from dcaf.tax.liability import compute_taxable_income, tax_liability
 from dcaf.shared.types import ProFormaCategory, TaxTreatment
@@ -368,6 +370,37 @@ class TestTaxLiability:
 
         assert len(result.entries) == 1
         assert result.entries[0].amount == 0.0
+
+    @pytest.mark.parametrize("tax_rate", [float("nan"), float("inf")])
+    def test_rejects_non_finite_tax_rate(self, tax_rate: float):
+        taxable_income = CashFlowStream(
+            [
+                CashFlow(
+                    amount=100_000,
+                    date=date(2025, 1, 1),
+                    label="Taxable Income",
+                    is_cash=False,
+                )
+            ]
+        )
+
+        with pytest.raises(ValueError, match="tax_rate must be finite"):
+            tax_liability(taxable_income, tax_rate=tax_rate)
+
+    def test_rejects_negative_tax_rate(self):
+        taxable_income = CashFlowStream(
+            [
+                CashFlow(
+                    amount=100_000,
+                    date=date(2025, 1, 1),
+                    label="Taxable Income",
+                    is_cash=False,
+                )
+            ]
+        )
+
+        with pytest.raises(ValueError, match="tax_rate must be non-negative"):
+            tax_liability(taxable_income, tax_rate=-0.21)
 
     def test_empty_stream(self):
         """Test that empty streams return empty result."""

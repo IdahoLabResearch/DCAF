@@ -6,6 +6,7 @@ For variable OPEX, use ``GenerationStream.to_cost()`` directly.
 """
 
 from datetime import date
+from math import isfinite
 
 from dcaf.finance.escalation import EscalationPolicy
 from dcaf.shared.types import DayCountConvention, Period, ProFormaCategory, TaxTreatment
@@ -83,6 +84,9 @@ def fixed_opex(
     >>> [(f.date.year, f.amount) for f in stream.entries]  # doctest: +NUMBER
     [(2025, -500000.0), (2026, -512500.0), (2027, -525312.5)]
     """
+    if not isfinite(amount):
+        raise ValueError("fixed_opex amount must be finite")
+
     return CashFlowStream.from_recurring(
         amount=-abs(amount),
         start=start,

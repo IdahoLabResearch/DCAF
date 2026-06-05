@@ -9,6 +9,8 @@ Functions:
     tax_liability: Apply tax rate to taxable income to generate tax payment cashflows
 """
 
+from math import isfinite
+
 from dcaf.streams.cashflows import CashFlow, CashFlowStream
 from dcaf.shared.types import ProFormaCategory, TaxTreatment, normalize_cashflow_classification
 from dcaf.shared.formatting import format_label
@@ -139,6 +141,11 @@ def tax_liability(
         >>> [(cf.date, cf.amount) for cf in taxes]
         [(datetime.date(2025, 12, 31), -16800.0), (datetime.date(2026, 12, 31), -18900.0)]
     """
+    if not isfinite(tax_rate):
+        raise ValueError("tax_rate must be finite")
+    if tax_rate < 0.0:
+        raise ValueError("tax_rate must be non-negative")
+
     if allow_refund:
         income = taxable_income_stream
     else:

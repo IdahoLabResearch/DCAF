@@ -6,7 +6,12 @@ from dataclasses import dataclass
 from datetime import date
 
 from dcaf.shared.time import timedelta_fractional_years
-from dcaf.shared.types import DayCountConvention, Period, TimingConvention, parse_day_count_convention
+from dcaf.shared.types import (
+    DayCountConvention,
+    Period,
+    TimingConvention,
+    parse_day_count_convention,
+)
 
 
 @dataclass(frozen=True)

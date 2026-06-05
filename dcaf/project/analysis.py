@@ -512,6 +512,8 @@ class ProjectAnalysis:
     def _discount_rate(self, rate: float | None) -> float:
         if rate is not None:
             _validate_finite(rate, "discount_rate")
+            if rate <= -1.0:
+                raise ValueError("discount_rate must be greater than -1.0")
             return rate
         if self.valuation is not None:
             return self.valuation.discount_rate

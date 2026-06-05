@@ -10,6 +10,7 @@ Functions:
 """
 
 from datetime import date
+from math import isfinite
 
 from dcaf.streams.cashflows import CashFlow, CashFlowStream
 from dcaf.finance.escalation import EscalationPolicy
@@ -135,6 +136,13 @@ def ptc(
     >>> credits.sum()
     20000.0
     """
+    if years <= 0:
+        raise ValueError("PTC years must be positive")
+    if not isfinite(rate_per_mwh):
+        raise ValueError("PTC rate_per_mwh must be finite")
+    if rate_per_mwh < 0.0:
+        raise ValueError("PTC rate_per_mwh must be non-negative")
+
     if not generation_stream.entries:
         return CashFlowStream()
 
@@ -226,6 +234,11 @@ def itc(
         >>> [(cf.date, cf.amount) for cf in credit]
         [(datetime.date(2030, 1, 1), 3600000.0)]
     """
+    if not isfinite(rate):
+        raise ValueError("ITC rate must be finite")
+    if rate < 0.0:
+        raise ValueError("ITC rate must be non-negative")
+
     if not capex_stream.entries or rate == 0.0:
         return CashFlowStream()
 
@@ -290,6 +303,11 @@ def itc_adjusted_basis(capex_stream: CashFlowStream, rate: float) -> float:
         >>> itc_adjusted_basis(capex, rate=0.30)
         102000000.0
     """
+    if not isfinite(rate):
+        raise ValueError("ITC rate must be finite")
+    if rate < 0.0:
+        raise ValueError("ITC rate must be non-negative")
+
     if not capex_stream.entries:
         return 0.0
 

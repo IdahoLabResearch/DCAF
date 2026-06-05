@@ -307,6 +307,15 @@ class GenerationStream(BaseStream[Generation]):
         >>> stream.count()
         2
         """
+        if not isfinite(capacity_mw):
+            raise ValueError("capacity_mw must be finite")
+        if capacity_mw < 0.0:
+            raise ValueError("capacity_mw must be non-negative")
+        if not isfinite(capacity_factor):
+            raise ValueError("capacity_factor must be finite")
+        if not 0.0 <= capacity_factor <= 1.0:
+            raise ValueError("capacity_factor must be between 0 and 1")
+
         entries: list[Generation] = []
         windows = period_windows(
             start,
@@ -524,9 +533,7 @@ class GenerationStream(BaseStream[Generation]):
         return self._filter_where(fn)
 
     @overload
-    def group_by(
-        self, fn: Callable[[Generation], KeyType]
-    ) -> "GenerationGroup[KeyType]": ...
+    def group_by(self, fn: Callable[[Generation], KeyType]) -> "GenerationGroup[KeyType]": ...
     @overload
     def group_by(self, fn: None = None, *, period: Period) -> "GenerationGroup[date]": ...
 
@@ -571,9 +578,7 @@ class GenerationStream(BaseStream[Generation]):
 
         if fn is not None:
             groups = self._grouped_entries_by_key(fn)
-            return GenerationGroup(
-                cast(dict[Any, GenerationStream], self._grouped_streams(groups))
-            )
+            return GenerationGroup(cast(dict[Any, GenerationStream], self._grouped_streams(groups)))
 
         assert period is not None
         per_groups = self._grouped_entries_by_period(period)
@@ -830,6 +835,11 @@ class GenerationStream(BaseStream[Generation]):
         >>> gen = GenerationStream.from_capacity(1000, 0.92, date(2025, 1, 1), 5)
         >>> costs = gen.to_cost(5.0, escalation=0.02)
         """
+        if not isfinite(rate_per_mwh):
+            raise ValueError("rate_per_mwh must be finite")
+        if rate_per_mwh < 0.0:
+            raise ValueError("rate_per_mwh must be non-negative")
+
         if not self.entries:
             return CashFlowStream()
         escalation_policy = _generation_escalation(

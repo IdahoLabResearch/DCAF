@@ -139,6 +139,49 @@ def test_from_capacity_fractional_period_uses_complete_days_and_warns():
     assert stream.entries[0].amount_mwh == pytest.approx(15 * 24)
 
 
+@pytest.mark.parametrize("capacity_mw", [float("nan"), float("inf")])
+def test_from_capacity_rejects_non_finite_capacity(capacity_mw: float):
+    with pytest.raises(ValueError, match="capacity_mw must be finite"):
+        GenerationStream.from_capacity(
+            capacity_mw=capacity_mw,
+            capacity_factor=0.5,
+            start=date(2030, 1, 1),
+            periods=1,
+        )
+
+
+def test_from_capacity_rejects_negative_capacity():
+    with pytest.raises(ValueError, match="capacity_mw must be non-negative"):
+        GenerationStream.from_capacity(
+            capacity_mw=-1.0,
+            capacity_factor=0.5,
+            start=date(2030, 1, 1),
+            periods=1,
+        )
+
+
+@pytest.mark.parametrize("capacity_factor", [float("nan"), float("inf")])
+def test_from_capacity_rejects_non_finite_capacity_factor(capacity_factor: float):
+    with pytest.raises(ValueError, match="capacity_factor must be finite"):
+        GenerationStream.from_capacity(
+            capacity_mw=1.0,
+            capacity_factor=capacity_factor,
+            start=date(2030, 1, 1),
+            periods=1,
+        )
+
+
+@pytest.mark.parametrize("capacity_factor", [-0.1, 1.1])
+def test_from_capacity_rejects_capacity_factor_outside_unit_interval(capacity_factor: float):
+    with pytest.raises(ValueError, match="capacity_factor must be between 0 and 1"):
+        GenerationStream.from_capacity(
+            capacity_mw=1.0,
+            capacity_factor=capacity_factor,
+            start=date(2030, 1, 1),
+            periods=1,
+        )
+
+
 def test_from_capacity_default_label():
     """Default label should not contain index."""
     gs = GenerationStream.from_capacity(
@@ -689,6 +732,30 @@ def test_to_cost_basic():
     assert cfs.count() == 1
     assert abs(cfs.entries[0].amount - (-5_000.0)) < 1e-8
     assert cfs.entries[0].pro_forma_category is ProFormaCategory.OPERATING_COST
+
+
+@pytest.mark.parametrize("rate_per_mwh", [float("nan"), float("inf")])
+def test_to_cost_rejects_non_finite_rate(rate_per_mwh: float):
+    gs = GenerationStream([Generation(1000.0, date(2030, 1, 1))])
+
+    with pytest.raises(ValueError, match="rate_per_mwh must be finite"):
+        gs.to_cost(rate_per_mwh=rate_per_mwh)
+
+
+def test_to_cost_rejects_negative_rate():
+    gs = GenerationStream([Generation(1000.0, date(2030, 1, 1))])
+
+    with pytest.raises(ValueError, match="rate_per_mwh must be non-negative"):
+        gs.to_cost(rate_per_mwh=-5.0)
+
+
+def test_to_cost_allows_zero_rate():
+    gs = GenerationStream([Generation(1000.0, date(2030, 1, 1))])
+
+    cfs = gs.to_cost(rate_per_mwh=0.0)
+
+    assert cfs.count() == 1
+    assert cfs.entries[0].amount == pytest.approx(0.0)
 
 
 def test_to_cost_default_label():

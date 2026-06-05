@@ -390,9 +390,7 @@ def _warn_period_truncation(
 ) -> None:
     """Emit a transparent warning for partial-day truncation."""
     last_included_date = (
-        (truncated_end - timedelta(days=1)).isoformat()
-        if truncated_end > start
-        else "none"
+        (truncated_end - timedelta(days=1)).isoformat() if truncated_end > start else "none"
     )
 
     warnings.warn(
