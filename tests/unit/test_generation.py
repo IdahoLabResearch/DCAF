@@ -61,9 +61,9 @@ def test_from_capacity_annual():
     assert gs.count() == 3
     expected_mwh = 100 * 0.92 * 8760
     assert abs(gs.entries[0].amount_mwh - expected_mwh) < 1e-6
-    assert gs.entries[0].date == date(2030, 1, 1)
-    assert gs.entries[1].date == date(2031, 1, 1)
-    assert gs.entries[2].date == date(2032, 1, 1)
+    assert gs.entries[0].date == date(2030, 12, 31)
+    assert gs.entries[1].date == date(2031, 12, 31)
+    assert gs.entries[2].date == date(2032, 12, 31)
 
 
 def test_from_capacity_monthly():
@@ -78,7 +78,7 @@ def test_from_capacity_monthly():
     assert gs.count() == 3
     expected_mwh = 100 * 1.0 * 31 * 24
     assert abs(gs.entries[0].amount_mwh - expected_mwh) < 1e-6
-    assert gs.entries[1].date == date(2030, 2, 1)
+    assert gs.entries[1].date == date(2030, 2, 28)
 
 
 def test_from_capacity_quarterly():
@@ -135,7 +135,7 @@ def test_from_capacity_fractional_period_uses_complete_days_and_warns():
         )
 
     assert stream.count() == 1
-    assert stream.entries[0].date == date(2030, 1, 1)
+    assert stream.entries[0].date == date(2030, 1, 15)
     assert stream.entries[0].amount_mwh == pytest.approx(15 * 24)
 
 
@@ -180,6 +180,16 @@ def test_from_capacity_rejects_capacity_factor_outside_unit_interval(capacity_fa
             start=date(2030, 1, 1),
             periods=1,
         )
+
+        
+def test_from_capacity_supports_timing_conventions():
+    begin = GenerationStream.from_capacity(1.0, 1.0, date(2030, 1, 1), 1, timing="begin")
+    middle = GenerationStream.from_capacity(1.0, 1.0, date(2030, 1, 1), 1, timing="middle")
+    end = GenerationStream.from_capacity(1.0, 1.0, date(2030, 1, 1), 1)
+
+    assert begin.entries[0].date == date(2030, 1, 1)
+    assert middle.entries[0].date == date(2030, 7, 2)
+    assert end.entries[0].date == date(2030, 12, 31)
 
 
 def test_from_capacity_default_label():
@@ -421,7 +431,7 @@ def test_date_range_generation_stream():
     gs = GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 4)
     result = gs.date_range(start=date(2031, 1, 1), end=date(2033, 1, 1))
     assert result.count() == 2
-    assert [entry.date for entry in result] == [date(2031, 1, 1), date(2032, 1, 1)]
+    assert [entry.date for entry in result] == [date(2031, 12, 31), date(2032, 12, 31)]
 
 
 # === grouping ===

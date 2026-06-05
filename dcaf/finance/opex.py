@@ -9,7 +9,7 @@ from datetime import date
 from math import isfinite
 
 from dcaf.finance.escalation import EscalationPolicy
-from dcaf.shared.types import DayCountConvention, Period, ProFormaCategory, TaxTreatment
+from dcaf.shared.types import DayCountConvention, Period, ProFormaCategory, TaxTreatment, TimingConvention
 from dcaf.streams.cashflows import CashFlowStream
 
 
@@ -23,6 +23,7 @@ def fixed_opex(
     pro_forma_category: ProFormaCategory | str | None = ProFormaCategory.OPERATING_COST,
     tax_treatment: TaxTreatment | str = TaxTreatment.DEDUCTIBLE,
     *,
+    timing: TimingConvention = "end",
     escalation_period: Period = "year",
     amount_reference_date: date | None = None,
     day_count_convention: DayCountConvention = "actual/actual",
@@ -45,6 +46,10 @@ def fixed_opex(
     frequency : Period
         Payment frequency. One of ``"day"``, ``"month"``, ``"quarter"``, ``"year"``.
         Default is ``"year"``.
+    timing : {"end", "begin", "middle"}, optional
+        Booking-date convention for each generated period. Default is
+        ``"end"``, which books each cost on the final included date of the
+        period.
     escalation : float
         Compound escalation rate, interpreted over ``escalation_period``.
         With the default ``escalation_period="year"``, ``0.025`` means 2.5%
@@ -81,8 +86,10 @@ def fixed_opex(
     >>> from datetime import date
     >>> from dcaf.finance.opex import fixed_opex
     >>> stream = fixed_opex(amount=500_000, start=date(2025, 1, 1), periods=3, escalation=0.025)
-    >>> [(f.date.year, f.amount) for f in stream.entries]  # doctest: +NUMBER
-    [(2025, -500000.0), (2026, -512500.0), (2027, -525312.5)]
+    >>> [f.date.isoformat() for f in stream.entries]
+    ['2025-12-31', '2026-12-31', '2027-12-31']
+    >>> [round(f.amount, 2) for f in stream.entries]
+    [-512465.33, -525276.96, -538408.89]
     """
     if not isfinite(amount):
         raise ValueError("fixed_opex amount must be finite")
@@ -92,6 +99,7 @@ def fixed_opex(
         start=start,
         periods=periods,
         frequency=frequency,
+        timing=timing,
         escalation=escalation,
         escalation_period=escalation_period,
         amount_reference_date=amount_reference_date,

@@ -2,7 +2,7 @@ from datetime import date
 import pytest
 
 from dcaf.shared.types import ProFormaCategory, TaxTreatment
-from dcaf.shared.time import PeriodTruncationWarning
+from dcaf.shared.time import PeriodTruncationWarning, elapsed_periods
 from dcaf.streams import CashFlow, CashFlowGroup, CashFlowStream, GenerationStream
 from dcaf.finance.escalation import ConstantRateEscalation, EscalationBuilder, IndexSeriesEscalation
 
@@ -51,7 +51,12 @@ def test_from_recurring_defaults():
     """Tests the CashFlowStream.from_recurring method with defaults for all optional arguments."""
     cf_stream = CashFlowStream.from_recurring(start=date(2026, 1, 1), periods=4, amount=1000.0)
     assert len(cf_stream.entries) == 4
-    expected_dates = [date(2026, 1, 1), date(2027, 1, 1), date(2028, 1, 1), date(2029, 1, 1)]
+    expected_dates = [
+        date(2026, 12, 31),
+        date(2027, 12, 31),
+        date(2028, 12, 31),
+        date(2029, 12, 31),
+    ]
     for i, flow in enumerate(cf_stream.entries):
         assert flow.date == expected_dates[i]  # Check that annual frequency is default
         assert flow.amount == 1000.0  # Check that escalation is zero by default
@@ -59,6 +64,30 @@ def test_from_recurring_defaults():
         assert flow.is_cash is True  # Check that is_cash defaults to True
         assert flow.pro_forma_category is ProFormaCategory.OTHER
         assert flow.tax_treatment is TaxTreatment.NONE
+
+
+def test_from_recurring_supports_timing_conventions():
+    begin = CashFlowStream.from_recurring(
+        start=date(2026, 1, 1),
+        periods=1,
+        amount=1000.0,
+        timing="begin",
+    )
+    middle = CashFlowStream.from_recurring(
+        start=date(2026, 1, 1),
+        periods=1,
+        amount=1000.0,
+        timing="middle",
+    )
+    end = CashFlowStream.from_recurring(
+        start=date(2026, 1, 1),
+        periods=1,
+        amount=1000.0,
+    )
+
+    assert begin.entries[0].date == date(2026, 1, 1)
+    assert middle.entries[0].date == date(2026, 7, 2)
+    assert end.entries[0].date == date(2026, 12, 31)
 
 
 def test_from_recurring_bad_frequency():
@@ -85,7 +114,7 @@ def test_from_recurring_fractional_period_prorates_complete_days_and_warns():
         )
 
     assert cf_stream.count() == 1
-    assert cf_stream.entries[0].date == date(2026, 1, 1)
+    assert cf_stream.entries[0].date == date(2026, 1, 15)
     assert cf_stream.entries[0].amount == pytest.approx(1500.0)
 
 
@@ -101,9 +130,10 @@ def test_from_recurring_annual_escalation_is_date_based():
         is_cash=False,
         tax_treatment=TaxTreatment.TAXABLE,
     )
-    expected_dates = [date(2026, 3, 5), date(2026, 4, 5), date(2026, 5, 5)]
+    expected_dates = [date(2026, 4, 4), date(2026, 5, 4), date(2026, 6, 4)]
     expected_amounts = [
-        -200.0 * _annual_factor(expected_dates[0], flow_date, 0.1) for flow_date in expected_dates
+        -200.0 * _annual_factor(date(2026, 3, 5), flow_date, 0.1)
+        for flow_date in expected_dates
     ]
     for i, flow in enumerate(cf_stream.entries):
         assert flow.date == expected_dates[i]
@@ -125,8 +155,11 @@ def test_from_recurring_supports_explicit_nonannual_escalation_period():
         label="quarter #{n}",
         escalation_period="quarter",
     )
-    expected_dates = [date(2030, 9, 4), date(2030, 12, 4), date(2031, 3, 4)]
-    expected_amounts = [10_000.0, 12_000.0, 14_400.0]
+    expected_dates = [date(2030, 12, 3), date(2031, 3, 3), date(2031, 6, 3)]
+    expected_amounts = [
+        10_000.0 * (1.2 ** elapsed_periods(date(2030, 9, 4), flow_date, "quarter"))
+        for flow_date in expected_dates
+    ]
     for i, flow in enumerate(cf_stream.entries):
         assert flow.date == expected_dates[i]
         assert flow.amount == pytest.approx(expected_amounts[i])
@@ -163,7 +196,7 @@ def test_from_recurring_supports_earlier_amount_reference_date():
         escalation=0.12,
         amount_reference_date=reference_date,
     )
-    expected_dates = [date(2026, 7, 1), date(2026, 8, 1)]
+    expected_dates = [date(2026, 7, 31), date(2026, 8, 31)]
     expected_amounts = [
         100.0 * _annual_factor(reference_date, flow_date, 0.12) for flow_date in expected_dates
     ]
@@ -213,7 +246,7 @@ def test_from_recurring_supports_index_series_escalation_policy():
         escalation_policy=policy,
     )
 
-    assert [flow.amount for flow in cf_stream.entries] == pytest.approx([100.0, 103.0, 106.09])
+    assert [flow.amount for flow in cf_stream.entries] == pytest.approx([103.0, 106.09, 106.09])
 
 
 def test_from_recurring_rejects_mixed_simple_and_policy_inputs():

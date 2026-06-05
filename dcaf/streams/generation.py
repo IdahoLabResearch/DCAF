@@ -31,6 +31,7 @@ from dcaf.finance.escalation import (
 from dcaf.shared.formatting import format_label
 from dcaf.shared.time import (
     elapsed_hours,
+    period_window_event_date,
     period_windows,
 )
 from dcaf.shared.types import (
@@ -267,6 +268,8 @@ class GenerationStream(BaseStream[Generation]):
         frequency: Period = "year",
         label: str = "Generation",
         day_count_convention: DayCountConvention = "actual/actual",
+        *,
+        timing: TimingConvention = "end",
     ) -> "GenerationStream":
         """
         Generate a stream of periodic generation from capacity parameters.
@@ -290,6 +293,9 @@ class GenerationStream(BaseStream[Generation]):
             Label template. ``{n}`` is replaced with the 1-based period index.
         day_count_convention : DayCountConvention, optional
             Day-count convention used to compute elapsed capacity hours.
+        timing : {"end", "begin", "middle"}, optional
+            Booking-date convention for each generated period. Default is
+            ``"end"``, which books on the final included date of the period.
 
         Returns
         -------
@@ -331,7 +337,7 @@ class GenerationStream(BaseStream[Generation]):
             entries.append(
                 Generation(
                     amount_mwh=mwh,
-                    date=window.start,
+                    date=period_window_event_date(window, timing),
                     label=gen_label,
                 )
             )
@@ -461,6 +467,8 @@ class GenerationStream(BaseStream[Generation]):
         frequency: Period = "year",
         label: str = "Generation",
         day_count_convention: DayCountConvention = "actual/actual",
+        *,
+        timing: TimingConvention = "end",
     ) -> "GenerationStream":
         """
         Generate additional capacity-based entries and append them to this stream.
@@ -483,6 +491,9 @@ class GenerationStream(BaseStream[Generation]):
             replaced with the 1-based period index.
         day_count_convention : DayCountConvention, optional
             Day-count convention used to compute elapsed capacity hours.
+        timing : {"end", "begin", "middle"}, optional
+            Booking-date convention for each generated period. Default is
+            ``"end"``.
 
         Returns
         -------
@@ -504,6 +515,7 @@ class GenerationStream(BaseStream[Generation]):
             frequency=frequency,
             label=label,
             day_count_convention=day_count_convention,
+            timing=timing,
         )
         return self.extend(new)
 
@@ -628,7 +640,7 @@ class GenerationStream(BaseStream[Generation]):
         --------
         >>> stream = GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 3)
         >>> stream.sort(attr="date")[0].date
-        datetime.date(2030, 1, 1)
+        datetime.date(2030, 12, 31)
         >>> stream.sort(lambda g: g.amount_mwh, descending=True).count()
         3
         """
