@@ -19,6 +19,9 @@ extensions = [
 source_suffix = [".md"]
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 
+# Enable `$...$` and `$$...$$` math parsing in MyST so MathJax can render it.
+myst_enable_extensions = ["dollarmath"]
+
 # Generate linkable anchors for headings (h1-h3) so in-page deep links resolve.
 myst_heading_anchors = 3
 
