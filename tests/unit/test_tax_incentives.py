@@ -118,6 +118,8 @@ class TestPTC:
 
         assert result.count() == 2
         assert result.entries[0].amount == pytest.approx(27_500.0)
+        assert result.entries[0].pro_forma_category is ProFormaCategory.TAX_CREDIT
+        assert result.entries[0].tax_treatment is TaxTreatment.NONE
 
     def test_ptc_escalation(self):
         """PTC rate escalates."""

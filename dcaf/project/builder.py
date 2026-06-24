@@ -1054,7 +1054,7 @@ class EnergyProject:
 
         Builds generation, revenue, fixed and variable OPEX, construction,
         ITC, PTC, depreciation, and debt service streams. Then computes taxable
-        income and tax liability.
+        income and tax liability from streams marked taxable or deductible.
 
         Returns
         -------
