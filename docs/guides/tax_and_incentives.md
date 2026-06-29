@@ -35,6 +35,9 @@ A per-MWh credit on eligible generation for a fixed number of years:
 project = project.production_tax_credit(rate_per_unit=27.50, years=10, escalation=0.025)
 ```
 
+The PTC is included as a tax-credit cash flow, not as taxable revenue in the
+project tax calculation.
+
 ## Investment Tax Credit
 
 A one-time credit as a fraction of capital cost:

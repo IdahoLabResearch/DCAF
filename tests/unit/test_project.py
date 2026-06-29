@@ -578,6 +578,30 @@ def test_energy_project_ptc_allows_zero_rate():
     assert project._config.ptc.rate_per_unit == pytest.approx(0.0)
 
 
+def test_energy_project_ptc_is_tax_credit_not_taxable_income():
+    project = (
+        EnergyProject()
+        .generation(
+            capacity_mw=1.0,
+            capacity_factor=1.0,
+            operations_start=date(2026, 1, 1),
+            operations_end=date(2027, 1, 1),
+        )
+        .revenue_from_generation(sell_price_per_unit=10.0)
+        .production_tax_credit(rate_per_unit=2.0, years=1)
+        .tax(rate=0.21)
+    )
+
+    analysis = project.analyze()
+    revenue = analysis.cashflow_components["revenue"].sum()
+    ptc_stream = analysis.cashflow_components["ptc"]
+
+    assert ptc_stream.sum() == pytest.approx(1.0 * 8760.0 * 2.0)
+    assert {flow.tax_treatment for flow in ptc_stream} == {TaxTreatment.NONE}
+    assert analysis.taxable_income.sum() == pytest.approx(revenue)
+    assert analysis.taxes.sum() == pytest.approx(-revenue * 0.21)
+
+
 def test_energy_project_construction_outage_preserves_generation():
     project = (
         EnergyProject()

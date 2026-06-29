@@ -205,7 +205,7 @@ generation_credit = CashFlowStream(
             date=gen.date,
             label=f"Hybrid PTC Credit {gen.date.year}",
             pro_forma_category=ProFormaCategory.TAX_CREDIT,
-            tax_treatment=TaxTreatment.TAXABLE,
+            tax_treatment=TaxTreatment.NONE,
         )
         for i, gen in enumerate(generation)
         if i < HYBRID_PTC_YEARS
@@ -250,9 +250,10 @@ outage_cashflow_streams = [
 outage_impact = CashFlowStream.from_streams(*outage_cashflow_streams)
 
 # TAXES
-# Taxable revenue = electricity revenue + PTC portion of hybrid credits
+# Taxable revenue = electricity revenue only; both hybrid credit pieces are
+# modeled as tax-credit cashflows outside taxable-income assembly.
 # Deductions      = MACRS depreciation + interest payments + outage costs
-taxable_revenue = CashFlowStream.from_streams(revenue, generation_credit)
+taxable_revenue = revenue
 deductions = CashFlowStream.from_streams(depreciation, debt_service.interest, outage_impact)
 taxable_income = compute_taxable_income(taxable_revenue, deductions)
 taxes = tax_liability(taxable_income, tax_rate=TAX_RATE)

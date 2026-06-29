@@ -32,7 +32,7 @@ def ptc(
     escalation: float = 0.0,
     label: str = "PTC",
     pro_forma_category: ProFormaCategory | str | None = ProFormaCategory.TAX_CREDIT,
-    tax_treatment: TaxTreatment | str = TaxTreatment.TAXABLE,
+    tax_treatment: TaxTreatment | str = TaxTreatment.NONE,
     *,
     escalation_period: Period = "year",
     amount_reference_date: date | None = None,
@@ -74,7 +74,8 @@ def ptc(
     pro_forma_category : ProFormaCategory or str or None, optional
         Pro-forma category applied to each credit flow. Default is ``"tax_credit"``.
     tax_treatment : TaxTreatment or str, optional
-        Tax treatment applied to each credit flow. Default is ``"taxable"``.
+        Tax treatment applied to each credit flow. Default is ``"none"``, so
+        PTC credits are not included in taxable income.
     escalation_period : Period, optional
         Compounding period associated with ``escalation``. Default is
         ``"year"``.

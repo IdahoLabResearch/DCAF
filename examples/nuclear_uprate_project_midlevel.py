@@ -161,9 +161,10 @@ ptc_credits = ptc(
 )
 
 # TAXES
-# Taxable revenue = electricity revenue + PTC (both taxable)
+# Taxable revenue = electricity revenue only; PTC is modeled as a tax credit
+# cashflow, matching the ITC-style project-delta treatment.
 # Deductions      = depreciation + interest payments + outage costs (deductible)
-taxable_revenue = CashFlowStream.from_streams(revenue, ptc_credits)
+taxable_revenue = revenue
 deductions = CashFlowStream.from_streams(depreciation, debt_service.interest, outage_impact)
 taxable_income = compute_taxable_income(taxable_revenue, deductions)
 taxes = tax_liability(taxable_income, tax_rate=TAX_RATE)

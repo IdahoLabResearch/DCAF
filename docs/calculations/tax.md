@@ -40,6 +40,8 @@ $$
 $$
 
 Eligibility is limited to the first `years` calendar years of generation.
+PTC flows are categorized as tax credits with neutral tax treatment, so they
+appear in project cash flows but do not increase taxable income.
 
 ```python
 from datetime import date

@@ -16,7 +16,8 @@ Modeling notes
 - Construction draws are equal annual payments (no spend profile).
 - Revenue escalation is applied as a simple compound factor per year.
 - PTC is a flat per-MWh credit for the first 10 operating years (no escalation).
-- Taxes are approximated as a flat rate on combined revenue and PTC income;
+- Taxes are approximated as a flat rate on revenue only; PTC is modeled as a
+  separate tax-credit cashflow using the same project-delta treatment as ITC.
   depreciation and interest deductions are omitted for brevity.
 - Debt service is a level-payment annuity (no interest/principal split).
 - Construction outage impact is built as raw ``CashFlow`` objects with manually
@@ -118,7 +119,7 @@ ptc_credits = CashFlowStream(
             date=gen.date,
             label=f"PTC Credit {gen.date.year}",
             pro_forma_category=ProFormaCategory.TAX_CREDIT,
-            tax_treatment=TaxTreatment.TAXABLE,
+            tax_treatment=TaxTreatment.NONE,
         )
         for i, gen in enumerate(generation)
         if i < PTC_YEARS
@@ -177,7 +178,7 @@ debt_service = CashFlowStream(
     ]
 )
 
-# TAXES — flat rate on combined revenue and PTC (deductions not modeled here)
+# TAXES — flat rate on revenue only (deductions not modeled here)
 taxes = CashFlowStream(
     [
         CashFlow(
@@ -187,7 +188,7 @@ taxes = CashFlowStream(
             pro_forma_category=ProFormaCategory.TAX,
             tax_treatment=TaxTreatment.NONE,
         )
-        for cf in CashFlowStream.from_streams(revenue, ptc_credits)
+        for cf in revenue
         if cf.amount > 0
     ]
 )
