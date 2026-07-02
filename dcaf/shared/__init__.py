@@ -32,6 +32,7 @@ from dcaf.shared.types import (
     VDBConvention,
     parse_day_count_convention,
 )
+from dcaf.shared.validation import validate_finite, validate_non_negative
 
 __all__ = [
     "DayCountConvention",
@@ -62,4 +63,6 @@ __all__ = [
     "time_delta_per_period",
     "timedelta_fractional_years",
     "parse_day_count_convention",
+    "validate_finite",
+    "validate_non_negative",
 ]

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
-from math import isfinite
 from typing import TypeAlias
 
 from dcaf.finance.amortization import AmortizationSchedule
@@ -28,21 +27,9 @@ from dcaf.shared.types import (
     VDBConvention,
     parse_day_count_convention,
 )
+from dcaf.shared.validation import validate_finite, validate_non_negative
 from dcaf.streams.cashflows import CashFlowStream
 from dcaf.streams.generation import GenerationStream
-
-
-def validate_finite(value: float, name: str) -> None:
-    """Raise ``ValueError`` if *value* is not finite (inf or NaN)."""
-    if not isfinite(value):
-        raise ValueError(f"{name} must be finite")
-
-
-def validate_non_negative(value: float, name: str) -> None:
-    """Raise ``ValueError`` if *value* is negative or not finite."""
-    validate_finite(value, name)
-    if value < 0.0:
-        raise ValueError(f"{name} must be non-negative")
 
 
 def validate_outage_dates(start: date, end: date) -> None:
@@ -100,8 +87,7 @@ class EscalationSettings:
 
 
 def effective_escalation(
-    local: EscalationSettings,
-    default: EscalationSettings,
+    local: EscalationSettings, default: EscalationSettings
 ) -> EscalationSettings:
     """Return *local* if it has been configured, otherwise fall back to *default*."""
     return local if local.is_configured else default
@@ -327,13 +313,8 @@ class ConstructionFinancingConfig:
         if not 0.0 <= self.debt_fraction <= 1.0:
             raise ValueError("debt_fraction must be between 0 and 1")
         if self.construction_interest_rate is not None:
-            validate_non_negative(
-                self.construction_interest_rate,
-                "construction_interest_rate",
-            )
-        validate_finite(self.amortization_rate, "amortization_rate")
-        if self.amortization_rate < 0.0:
-            raise ValueError("amortization_rate must be non-negative")
+            validate_non_negative(self.construction_interest_rate, "construction_interest_rate")
+        validate_non_negative(self.amortization_rate, "amortization_rate")
         if self.amortization_term <= 0:
             raise ValueError("amortization_term must be positive")
 

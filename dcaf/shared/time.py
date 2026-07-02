@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from functools import cache
-from math import floor, isclose, isfinite
+from math import floor, isclose
 from typing import assert_never
 import warnings
 
@@ -18,6 +18,7 @@ from dcaf.shared.types import (
     parse_day_count_convention,
     parse_period,
 )
+from dcaf.shared.validation import validate_non_negative
 
 
 _FLOAT_TOLERANCE = 1e-12
@@ -207,9 +208,7 @@ def timedelta_fractional_years(
 
 
 def elapsed_hours(
-    start: date,
-    end: date,
-    convention: DayCountConvention = "actual/actual",
+    start: date, end: date, convention: DayCountConvention = "actual/actual"
 ) -> float:
     """Return elapsed physical hours under the supplied day-count convention.
 
@@ -366,10 +365,7 @@ def _validate_period_count(periods: int | float) -> float:
         raise TypeError("periods must be a finite non-negative number")
 
     normalized = float(periods)
-    if not isfinite(normalized):
-        raise ValueError("periods must be finite")
-    if normalized < 0.0:
-        raise ValueError("periods must be non-negative")
+    validate_non_negative(normalized, "periods")
 
     nearest_integer = round(normalized)
     if isclose(normalized, nearest_integer, rel_tol=0.0, abs_tol=_FLOAT_TOLERANCE):

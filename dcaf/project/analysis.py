@@ -5,10 +5,13 @@ from __future__ import annotations
 import csv
 from dataclasses import dataclass
 from datetime import date
-from math import isclose, isfinite
+from math import isclose
 from os import PathLike
 from typing import TYPE_CHECKING
 
+from dcaf.metrics import lcoe as _lcoe
+from dcaf.project.config import ProjectValuation
+from dcaf.project.timeline import ProjectTimeline
 from dcaf.shared.types import (
     DayCountConvention,
     Period,
@@ -16,9 +19,7 @@ from dcaf.shared.types import (
     TaxTreatment,
     parse_day_count_convention,
 )
-from dcaf.project.config import ProjectValuation
-from dcaf.project.timeline import ProjectTimeline
-from dcaf.metrics import lcoe as _lcoe
+from dcaf.shared.validation import validate_finite
 from dcaf.streams.cashflows import CashFlow, CashFlowStream
 from dcaf.tax.liability import compute_taxable_income, tax_liability
 
@@ -26,12 +27,6 @@ if TYPE_CHECKING:
     from dcaf.finance.escalation import EscalationPolicy
     from dcaf.streams.cashflows import CashFlowGroup
     from dcaf.streams.generation import GenerationStream
-
-
-def _validate_finite(value: float, name: str) -> None:
-    """Raise ``ValueError`` if *value* is not finite (inf or NaN)."""
-    if not isfinite(value):
-        raise ValueError(f"{name} must be finite")
 
 
 @dataclass(frozen=True)
@@ -375,26 +370,16 @@ class ProjectAnalysis:
         interest_tax_shield = self._interest_tax_shield()
         shield_adjustment = interest_tax_shield.apply(
             lambda flow: flow.replace(
-                amount=-flow.amount,
-                label=f"Unlevered {flow.label}",
-                pro_forma_category=None,
+                amount=-flow.amount, label=f"Unlevered {flow.label}", pro_forma_category=None
             )
         )
         ebitda = CashFlowStream.from_streams(revenues, operating_costs)
         ebit = CashFlowStream.from_streams(ebitda, depreciation)
         free_cash_flow_to_firm = CashFlowStream.from_streams(
-            revenues,
-            operating_costs,
-            taxes,
-            tax_credits,
-            capital_costs,
-            shield_adjustment,
+            revenues, operating_costs, taxes, tax_credits, capital_costs, shield_adjustment
         )
         free_cash_flow_to_equity = CashFlowStream.from_streams(
-            free_cash_flow_to_firm,
-            financing_interest,
-            financing_principal,
-            interest_tax_shield,
+            free_cash_flow_to_firm, financing_interest, financing_principal, interest_tax_shield
         )
 
         summary_streams = (
@@ -426,32 +411,19 @@ class ProjectAnalysis:
         periods = tuple(sorted(period_keys))
 
         rows = [
-            ProjectProFormaRow(
-                name=name,
-                amounts=tuple(totals.get(dt, 0.0) for dt in periods),
-            )
+            ProjectProFormaRow(name=name, amounts=tuple(totals.get(dt, 0.0) for dt in periods))
             for name, totals in summary_totals
         ]
         rows.extend(
-            ProjectProFormaRow(
-                name=name,
-                amounts=tuple(totals.get(dt, 0.0) for dt in periods),
-            )
+            ProjectProFormaRow(name=name, amounts=tuple(totals.get(dt, 0.0) for dt in periods))
             for name, totals in detail_totals
         )
         return ProjectProForma(period=period, periods=periods, rows=tuple(rows))
 
-    def _cashflows_for_category(
-        self,
-        category: ProFormaCategory,
-    ) -> CashFlowStream:
+    def _cashflows_for_category(self, category: ProFormaCategory) -> CashFlowStream:
         return self.cashflows.filter(pro_forma_category=category).sort()
 
-    def _totals_by_period(
-        self,
-        stream: CashFlowStream,
-        period: Period,
-    ) -> dict[date, float]:
+    def _totals_by_period(self, stream: CashFlowStream, period: Period) -> dict[date, float]:
         if not stream.entries:
             return {}
         return stream.group_by(period=period).aggregate(lambda grouped: grouped.sum())
@@ -475,14 +447,10 @@ class ProjectAnalysis:
             )
         )
         taxable_income_without_interest = compute_taxable_income(
-            taxable_revenue,
-            deductions_without_interest,
-            label="Taxable Income Before Interest",
+            taxable_revenue, deductions_without_interest, label="Taxable Income Before Interest"
         )
         taxes_without_interest = tax_liability(
-            taxable_income_without_interest,
-            tax_rate=self.tax_rate,
-            label="Taxes Before Interest",
+            taxable_income_without_interest, tax_rate=self.tax_rate, label="Taxes Before Interest"
         )
         actual_by_date = self.taxes.group_by(lambda flow: flow.date).aggregate(lambda s: s.sum())
         hypothetical_by_date = taxes_without_interest.group_by(lambda flow: flow.date).aggregate(
@@ -492,8 +460,7 @@ class ProjectAnalysis:
         entries = []
         for shield_date in shield_dates:
             shield_amount = actual_by_date.get(shield_date, 0.0) - hypothetical_by_date.get(
-                shield_date,
-                0.0,
+                shield_date, 0.0
             )
             if isclose(shield_amount, 0.0):
                 continue
@@ -511,7 +478,7 @@ class ProjectAnalysis:
 
     def _discount_rate(self, rate: float | None) -> float:
         if rate is not None:
-            _validate_finite(rate, "discount_rate")
+            validate_finite(rate, "discount_rate")
             if rate <= -1.0:
                 raise ValueError("discount_rate must be greater than -1.0")
             return rate
@@ -532,10 +499,7 @@ class ProjectAnalysis:
             return min(flow.date for flow in self.cashflows.entries)
         raise ValueError("valuation_date is required when the project has no dated cashflows")
 
-    def _day_count_convention(
-        self,
-        convention: DayCountConvention | None,
-    ) -> DayCountConvention:
+    def _day_count_convention(self, convention: DayCountConvention | None) -> DayCountConvention:
         raw_convention = self.timeline.day_count_convention if convention is None else convention
         return parse_day_count_convention(str(raw_convention)).value
 
@@ -543,7 +507,7 @@ class ProjectAnalysis:
         resolved_rate = self.levelized_cost_escalation_rate if rate is None else rate
         if resolved_rate is None:
             return 0.0
-        _validate_finite(resolved_rate, "levelized_cost_escalation_rate")
+        validate_finite(resolved_rate, "levelized_cost_escalation_rate")
         if resolved_rate <= -1.0:
             raise ValueError("levelized_cost_escalation_rate must be greater than -1.0")
         return resolved_rate
@@ -567,17 +531,14 @@ class ProjectAnalysis:
         # use the provided escalation policy to create the basis stream
         if levelized_cost_escalation_policy is not None:
             return self.generation.to_revenue(
-                price_per_mwh=1.0,
-                escalation_policy=levelized_cost_escalation_policy,
+                price_per_mwh=1.0, escalation_policy=levelized_cost_escalation_policy
             )
 
         # use the provided constant escalation rate to create the basis stream
         if levelized_cost_escalation_rate is not None:
             resolved_rate = self._levelized_cost_escalation_rate(levelized_cost_escalation_rate)
             return self.generation.to_revenue(
-                price_per_mwh=1.0,
-                escalation=resolved_rate,
-                day_count_convention=convention,
+                price_per_mwh=1.0, escalation=resolved_rate, day_count_convention=convention
             )
 
         #
@@ -592,15 +553,8 @@ class ProjectAnalysis:
 
         resolved_rate = self._levelized_cost_escalation_rate(None)
         return self.generation.to_revenue(
-            price_per_mwh=1.0,
-            escalation=resolved_rate,
-            day_count_convention=convention,
+            price_per_mwh=1.0, escalation=resolved_rate, day_count_convention=convention
         )
 
 
-__all__ = [
-    "ProjectAnalysis",
-    "ProjectMetrics",
-    "ProjectProForma",
-    "ProjectProFormaRow",
-]
+__all__ = ["ProjectAnalysis", "ProjectMetrics", "ProjectProForma", "ProjectProFormaRow"]

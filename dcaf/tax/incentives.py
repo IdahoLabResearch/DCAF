@@ -10,11 +10,9 @@ Functions:
 """
 
 from datetime import date
-from math import isfinite
 
-from dcaf.streams.cashflows import CashFlow, CashFlowStream
 from dcaf.finance.escalation import EscalationPolicy
-from dcaf.streams.generation import GenerationStream, _generation_escalation
+from dcaf.shared.formatting import format_label
 from dcaf.shared.types import (
     DayCountConvention,
     Period,
@@ -22,7 +20,9 @@ from dcaf.shared.types import (
     TaxTreatment,
     normalize_cashflow_classification,
 )
-from dcaf.shared.formatting import format_label
+from dcaf.shared.validation import validate_non_negative
+from dcaf.streams.cashflows import CashFlow, CashFlowStream
+from dcaf.streams.generation import GenerationStream, _generation_escalation
 
 
 def ptc(
@@ -139,10 +139,7 @@ def ptc(
     """
     if years <= 0:
         raise ValueError("PTC years must be positive")
-    if not isfinite(rate_per_mwh):
-        raise ValueError("PTC rate_per_mwh must be finite")
-    if rate_per_mwh < 0.0:
-        raise ValueError("PTC rate_per_mwh must be non-negative")
+    validate_non_negative(rate_per_mwh, "PTC rate_per_mwh")
 
     if not generation_stream.entries:
         return CashFlowStream()
@@ -158,8 +155,7 @@ def ptc(
         escalation_policy=escalation_policy,
     )
     resolved_category, resolved_tax_treatment = normalize_cashflow_classification(
-        pro_forma_category,
-        tax_treatment,
+        pro_forma_category, tax_treatment
     )
 
     entries: list[CashFlow] = []
@@ -235,17 +231,13 @@ def itc(
         >>> [(cf.date, cf.amount) for cf in credit]
         [(datetime.date(2030, 1, 1), 3600000.0)]
     """
-    if not isfinite(rate):
-        raise ValueError("ITC rate must be finite")
-    if rate < 0.0:
-        raise ValueError("ITC rate must be non-negative")
+    validate_non_negative(rate, "ITC rate")
 
     if not capex_stream.entries or rate == 0.0:
         return CashFlowStream()
 
     resolved_category, resolved_tax_treatment = normalize_cashflow_classification(
-        pro_forma_category,
-        tax_treatment,
+        pro_forma_category, tax_treatment
     )
     total_basis = abs(capex_stream.sum())
     credit_amount = total_basis * rate
@@ -304,10 +296,7 @@ def itc_adjusted_basis(capex_stream: CashFlowStream, rate: float) -> float:
         >>> itc_adjusted_basis(capex, rate=0.30)
         102000000.0
     """
-    if not isfinite(rate):
-        raise ValueError("ITC rate must be finite")
-    if rate < 0.0:
-        raise ValueError("ITC rate must be non-negative")
+    validate_non_negative(rate, "ITC rate")
 
     if not capex_stream.entries:
         return 0.0
