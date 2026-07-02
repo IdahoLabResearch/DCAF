@@ -8,21 +8,9 @@ and GenerationGroup (grouped container) for modeling MWh production.
 import datetime as dt
 from dataclasses import dataclass
 from datetime import date, timedelta
-from math import isfinite
-from typing import (
-    Any,
-    Callable,
-    Iterable,
-    TypeVar,
-    assert_never,
-    cast,
-    overload,
-)
+from typing import Any, Callable, Iterable, TypeVar, assert_never, cast, overload
 
-from dcaf.streams.cashflows import (
-    CashFlow,
-    CashFlowStream,
-)
+from dcaf.streams.cashflows import CashFlow, CashFlowStream
 from dcaf.finance.escalation import (
     ConstantRateEscalation,
     EscalationPolicy,
@@ -43,6 +31,7 @@ from dcaf.shared.types import (
     TimingConvention,
     normalize_cashflow_classification,
 )
+from dcaf.shared.validation import validate_finite, validate_non_negative
 from dcaf.streams.base import BaseGroup, BaseStream
 from dcaf.metrics.npv import npv
 
@@ -69,10 +58,7 @@ class Generation:
     label: str = ""
 
     def replace(
-        self,
-        amount_mwh: float | None = None,
-        date: dt.date | None = None,
-        label: str | None = None,
+        self, amount_mwh: float | None = None, date: dt.date | None = None, label: str | None = None
     ) -> "Generation":
         """
         Return a new version of this Generation with the specified changes to parameters.
@@ -147,27 +133,15 @@ def _generation_escalation(
 
 
 def _validate_outage_inputs(
-    *,
-    capacity_mw: float,
-    capacity_factor: float,
-    start: date,
-    end: date,
-    capacity_reduction: float,
+    *, capacity_mw: float, capacity_factor: float, start: date, end: date, capacity_reduction: float
 ) -> None:
     """Validate common outage interval and capacity inputs."""
     if end <= start:
         raise ValueError("outage end must be after outage start")
-    for name, value in (
-        ("capacity_mw", capacity_mw),
-        ("capacity_factor", capacity_factor),
-        ("capacity_reduction", capacity_reduction),
-    ):
-        if not isfinite(value):
-            raise ValueError(f"{name} must be finite")
-    if capacity_mw < 0.0:
-        raise ValueError("capacity_mw must be non-negative")
-    if capacity_factor < 0.0:
-        raise ValueError("capacity_factor must be non-negative")
+
+    validate_finite(capacity_reduction, "capacity_reduction")
+    validate_non_negative(capacity_mw, "capacity_mw")
+    validate_non_negative(capacity_factor, "capacity_factor")
     if not 0.0 <= capacity_reduction <= 1.0:
         raise ValueError("capacity_reduction must be between 0 and 1")
 
@@ -313,6 +287,11 @@ class GenerationStream(BaseStream[Generation]):
         >>> stream.count()
         2
         """
+        validate_non_negative(capacity_mw, "capacity_mw")
+        validate_finite(capacity_factor, "capacity_factor")
+        if not 0.0 <= capacity_factor <= 1.0:
+            raise ValueError("capacity_factor must be between 0 and 1")
+
         entries: list[Generation] = []
         windows = period_windows(
             start,
@@ -510,10 +489,7 @@ class GenerationStream(BaseStream[Generation]):
         )
         return self.extend(new)
 
-    def filter(
-        self,
-        fn: Callable[[Generation], bool],
-    ) -> "GenerationStream":
+    def filter(self, fn: Callable[[Generation], bool]) -> "GenerationStream":
         """
         Return a new stream filtered by a predicate.
 
@@ -536,17 +512,12 @@ class GenerationStream(BaseStream[Generation]):
         return self._filter_where(fn)
 
     @overload
-    def group_by(
-        self, fn: Callable[[Generation], KeyType]
-    ) -> "GenerationGroup[KeyType]": ...
+    def group_by(self, fn: Callable[[Generation], KeyType]) -> "GenerationGroup[KeyType]": ...
     @overload
     def group_by(self, fn: None = None, *, period: Period) -> "GenerationGroup[date]": ...
 
     def group_by(  # type: ignore[misc]
-        self,
-        fn: Callable[[Generation], Any] | None = None,
-        *,
-        period: Period | None = None,
+        self, fn: Callable[[Generation], Any] | None = None, *, period: Period | None = None
     ) -> "GenerationGroup[Any]":
         """
         Group entries by a key function or by time period.
@@ -583,9 +554,7 @@ class GenerationStream(BaseStream[Generation]):
 
         if fn is not None:
             groups = self._grouped_entries_by_key(fn)
-            return GenerationGroup(
-                cast(dict[Any, GenerationStream], self._grouped_streams(groups))
-            )
+            return GenerationGroup(cast(dict[Any, GenerationStream], self._grouped_streams(groups)))
 
         assert period is not None
         per_groups = self._grouped_entries_by_period(period)
@@ -598,12 +567,7 @@ class GenerationStream(BaseStream[Generation]):
         self, fn: Callable[[Generation], SupportsLessThan], *, descending: bool = ...
     ) -> "GenerationStream": ...
     @overload
-    def sort(
-        self,
-        *,
-        attr: str,
-        descending: bool = ...,
-    ) -> "GenerationStream": ...
+    def sort(self, *, attr: str, descending: bool = ...) -> "GenerationStream": ...
     @overload
     def sort(self) -> "GenerationStream": ...
 
@@ -671,10 +635,7 @@ class GenerationStream(BaseStream[Generation]):
         return GenerationStream([e.replace(e.amount_mwh * factor) for e in self.entries])
 
     def discounted_sum(
-        self,
-        rate: float,
-        valuation_date: date,
-        convention: DayCountConvention = "actual/actual",
+        self, rate: float, valuation_date: date, convention: DayCountConvention = "actual/actual"
     ) -> float:
         """
         Compute the present-value-weighted sum of MWh (for LCOE denominator).
@@ -759,6 +720,8 @@ class GenerationStream(BaseStream[Generation]):
         >>> gen = GenerationStream.from_capacity(1000, 0.92, date(2025, 1, 1), 5)
         >>> revenue = gen.to_revenue(50.0, escalation=0.02)
         """
+        validate_non_negative(price_per_mwh, "price_per_mwh")
+
         if not self.entries:
             return CashFlowStream()
         escalation_policy = _generation_escalation(
@@ -770,8 +733,7 @@ class GenerationStream(BaseStream[Generation]):
             escalation_policy=escalation_policy,
         )
         resolved_category, resolved_tax_treatment = normalize_cashflow_classification(
-            pro_forma_category,
-            tax_treatment,
+            pro_forma_category, tax_treatment
         )
         entries: list[CashFlow] = []
         for i, entry in enumerate(self.entries):
@@ -842,6 +804,8 @@ class GenerationStream(BaseStream[Generation]):
         >>> gen = GenerationStream.from_capacity(1000, 0.92, date(2025, 1, 1), 5)
         >>> costs = gen.to_cost(5.0, escalation=0.02)
         """
+        validate_non_negative(rate_per_mwh, "rate_per_mwh")
+
         if not self.entries:
             return CashFlowStream()
         escalation_policy = _generation_escalation(
@@ -853,8 +817,7 @@ class GenerationStream(BaseStream[Generation]):
             escalation_policy=escalation_policy,
         )
         resolved_category, resolved_tax_treatment = normalize_cashflow_classification(
-            pro_forma_category,
-            tax_treatment,
+            pro_forma_category, tax_treatment
         )
         entries: list[CashFlow] = []
         for i, entry in enumerate(self.entries):

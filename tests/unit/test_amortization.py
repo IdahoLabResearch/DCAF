@@ -414,6 +414,17 @@ def test_invalid_frequency_is_rejected():
         )
 
 
+@pytest.mark.parametrize("term", [0, -1])
+def test_invalid_term_is_rejected(term: int):
+    with pytest.raises(ValueError, match="term must be positive"):
+        AmortizationSchedule.build(
+            principal=10_000.0,
+            annual_rate=0.05,
+            term=term,
+            start_date=date(2026, 1, 1),
+        )
+
+
 # === label index interpolation ===
 
 

@@ -9,6 +9,7 @@ from datetime import date
 
 from dcaf.finance.escalation import EscalationPolicy
 from dcaf.shared.types import DayCountConvention, Period, ProFormaCategory, TaxTreatment, TimingConvention
+from dcaf.shared.validation import validate_finite
 from dcaf.streams.cashflows import CashFlowStream
 
 
@@ -90,6 +91,8 @@ def fixed_opex(
     >>> [round(f.amount, 2) for f in stream.entries]
     [-512465.33, -525276.96, -538408.89]
     """
+    validate_finite(amount, "fixed_opex amount")
+
     return CashFlowStream.from_recurring(
         amount=-abs(amount),
         start=start,

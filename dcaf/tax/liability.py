@@ -9,16 +9,15 @@ Functions:
     tax_liability: Apply tax rate to taxable income to generate tax payment cashflows
 """
 
-from dcaf.streams.cashflows import CashFlow, CashFlowStream
-from dcaf.shared.types import ProFormaCategory, TaxTreatment, normalize_cashflow_classification
 from dcaf.shared.formatting import format_label
 from dcaf.shared.time import period_end
+from dcaf.shared.types import ProFormaCategory, TaxTreatment, normalize_cashflow_classification
+from dcaf.shared.validation import validate_non_negative
+from dcaf.streams.cashflows import CashFlow, CashFlowStream
 
 
 def compute_taxable_income(
-    revenue_stream: CashFlowStream,
-    deductible_stream: CashFlowStream,
-    label: str = "Taxable Income",
+    revenue_stream: CashFlowStream, deductible_stream: CashFlowStream, label: str = "Taxable Income"
 ) -> CashFlowStream:
     """Compute net taxable income from revenue and deductible streams.
 
@@ -139,6 +138,8 @@ def tax_liability(
         >>> [(cf.date, cf.amount) for cf in taxes]
         [(datetime.date(2025, 12, 31), -16800.0), (datetime.date(2026, 12, 31), -18900.0)]
     """
+    validate_non_negative(tax_rate, "tax_rate")
+
     if allow_refund:
         income = taxable_income_stream
     else:
@@ -148,8 +149,7 @@ def tax_liability(
         return CashFlowStream()
 
     resolved_category, resolved_tax_treatment = normalize_cashflow_classification(
-        pro_forma_category,
-        tax_treatment,
+        pro_forma_category, tax_treatment
     )
     # Apply tax rate and convert to negative (outflow)
     tax_flows = CashFlowStream(

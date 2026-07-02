@@ -556,9 +556,7 @@ class CashFlowStream(BaseStream[CashFlow]):
         # period path
         assert period is not None
         period_groups = self._grouped_entries_by_period(period)
-        return CashFlowGroup(
-            cast(dict[date, CashFlowStream], self._grouped_streams(period_groups))
-        )
+        return CashFlowGroup(cast(dict[date, CashFlowStream], self._grouped_streams(period_groups)))
 
     def group_by_pro_forma_category(self) -> CashFlowGroup[ProFormaCategory | None]:
         """

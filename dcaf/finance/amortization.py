@@ -337,6 +337,8 @@ class AmortizationBuilder:
         ),
         principal_tax_treatment: TaxTreatment | str = TaxTreatment.NONE,
     ) -> None:
+        if term <= 0:
+            raise ValueError("term must be positive")
         self._principal = principal
         self._annual_rate = annual_rate
         self._term = term

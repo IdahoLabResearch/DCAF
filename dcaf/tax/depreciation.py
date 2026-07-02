@@ -8,11 +8,10 @@ calculator, and factory functions for generating depreciation
 
 from collections.abc import Iterator, Sequence
 from datetime import date
-from math import isfinite
 from typing import assert_never
 
-from dcaf.tax._macrs_tables import _MACRS_MID_QUARTER_RATES, _MACRS_RATES
-from dcaf.streams.cashflows import CashFlow, CashFlowStream
+from dcaf.shared.formatting import format_label
+from dcaf.shared.time import time_delta_per_period
 from dcaf.shared.types import (
     MACRSConvention,
     MACRSPropertyClass,
@@ -22,8 +21,9 @@ from dcaf.shared.types import (
     VDBConvention,
     normalize_cashflow_classification,
 )
-from dcaf.shared.formatting import format_label
-from dcaf.shared.time import time_delta_per_period
+from dcaf.shared.validation import validate_finite, validate_non_negative
+from dcaf.streams.cashflows import CashFlow, CashFlowStream
+from dcaf.tax._macrs_tables import _MACRS_MID_QUARTER_RATES, _MACRS_RATES
 
 
 def _validate_vdb_inputs(
@@ -37,27 +37,21 @@ def _validate_vdb_inputs(
 ) -> None:
     """Validate public VDB inputs using Excel-compatible bounds."""
     numeric_inputs = {
-        "cost": cost,
-        "salvage": salvage,
         "life": life,
         "start_period": start_period,
         "end_period": end_period,
         "factor": factor,
     }
     for name, value in numeric_inputs.items():
-        if not isfinite(value):
-            raise ValueError(f"{name} must be finite")
+        validate_finite(value, name)
 
-    if cost < 0:
-        raise ValueError("cost must be non-negative")
-    if salvage < 0:
-        raise ValueError("salvage must be non-negative")
+    validate_non_negative(cost, "cost")
+    validate_non_negative(salvage, "salvage")
     if salvage > cost:
         raise ValueError("salvage must not exceed cost")
     if life <= 0:
         raise ValueError("life must be positive")
-    if start_period < 0:
-        raise ValueError("start_period must be non-negative")
+    validate_non_negative(start_period, "start_period")
     if end_period < start_period:
         raise ValueError("end_period must be greater than or equal to start_period")
     if factor <= 0:
@@ -65,12 +59,7 @@ def _validate_vdb_inputs(
 
 
 def _vdb_segments(
-    *,
-    cost: float,
-    salvage: float,
-    life: float,
-    factor: float,
-    no_switch: bool,
+    *, cost: float, salvage: float, life: float, factor: float, no_switch: bool
 ) -> Iterator[tuple[float, float, float]]:
     """Yield ``(segment_start, segment_end, depreciation_rate)`` tuples."""
     remaining_basis = cost
@@ -151,8 +140,7 @@ def _build_vdb_candidate_schedule(
 ) -> CashFlowStream:
     """Build a single convention-aware VDB candidate schedule."""
     resolved_category, resolved_tax_treatment = normalize_cashflow_classification(
-        pro_forma_category,
-        tax_treatment,
+        pro_forma_category, tax_treatment
     )
     shift = _vdb_convention_shift(convention, placed_in_service)
     target_total = cost_basis - salvage_value
@@ -219,8 +207,7 @@ def _build_vdb_candidate_schedule(
 def _candidate_npv(stream: CashFlowStream, *, valuation_rate: float, valuation_date: date) -> float:
     """Value a non-cash depreciation stream using the standard cashflow NPV helper."""
     return stream.apply(lambda cf: cf.replace(is_cash=True)).npv(
-        rate=valuation_rate,
-        valuation_date=valuation_date,
+        rate=valuation_rate, valuation_date=valuation_date
     )
 
 
@@ -292,11 +279,7 @@ def vdb(
 
     depreciation = 0.0
     for segment_start, segment_end, depreciation_rate in _vdb_segments(
-        cost=cost,
-        salvage=salvage,
-        life=life,
-        factor=factor,
-        no_switch=no_switch,
+        cost=cost, salvage=salvage, life=life, factor=factor, no_switch=no_switch
     ):
         overlap = max(0.0, min(end_period, segment_end) - max(start_period, segment_start))
         depreciation += depreciation_rate * overlap
@@ -357,8 +340,7 @@ def macrs_schedule(
         case _:
             assert_never(convention)
     resolved_category, resolved_tax_treatment = normalize_cashflow_classification(
-        pro_forma_category,
-        tax_treatment,
+        pro_forma_category, tax_treatment
     )
     entries: list[CashFlow] = []
     for i, rate in enumerate(rates):
@@ -535,8 +517,7 @@ def vdb_schedule(
             candidate_dates = normalized_schedule_dates
 
         resolved_category, resolved_tax_treatment = normalize_cashflow_classification(
-            pro_forma_category,
-            tax_treatment,
+            pro_forma_category, tax_treatment
         )
 
         if convention == "best-of-half-year-mid-quarter":
@@ -571,13 +552,9 @@ def vdb_schedule(
             assert valuation_rate is not None
             assert valuation_date is not None
             if _candidate_npv(
-                half_year,
-                valuation_rate=valuation_rate,
-                valuation_date=valuation_date,
+                half_year, valuation_rate=valuation_rate, valuation_date=valuation_date
             ) <= _candidate_npv(
-                mid_quarter,
-                valuation_rate=valuation_rate,
-                valuation_date=valuation_date,
+                mid_quarter, valuation_rate=valuation_rate, valuation_date=valuation_date
             ):
                 return half_year
             return mid_quarter
@@ -600,8 +577,7 @@ def vdb_schedule(
     delta = time_delta_per_period(frequency)
     current_date = placed_in_service
     resolved_category, resolved_tax_treatment = normalize_cashflow_classification(
-        pro_forma_category,
-        tax_treatment,
+        pro_forma_category, tax_treatment
     )
     entries: list[CashFlow] = []
 

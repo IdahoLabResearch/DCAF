@@ -9,7 +9,19 @@ user-facing API, domain language, and full end-user documentation.
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any, Callable, Collection, Generic, Iterable, Iterator, Protocol, Self, TypeVar, cast, overload
+from typing import (
+    Any,
+    Callable,
+    Collection,
+    Generic,
+    Iterable,
+    Iterator,
+    Protocol,
+    Self,
+    TypeVar,
+    cast,
+    overload,
+)
 
 from dcaf.shared.types import Period, SupportsLessThan
 from dcaf.shared.time import period_start
@@ -323,9 +335,7 @@ class BaseStream(Generic[EntryT]):
             result = [entry for entry in result if getattr(entry, "date") < end]
         return self._new(result)
 
-    def _grouped_entries_by_key(
-        self, fn: Callable[[EntryT], _KeyT]
-    ) -> "dict[_KeyT, list[EntryT]]":
+    def _grouped_entries_by_key(self, fn: Callable[[EntryT], _KeyT]) -> "dict[_KeyT, list[EntryT]]":
         """Group entries by an arbitrary key function."""
         groups: defaultdict[_KeyT, list[EntryT]] = defaultdict(list)
         for entry in self.entries:

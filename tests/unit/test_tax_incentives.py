@@ -61,6 +61,19 @@ class TestITC:
         result = itc(capex, rate=0.0, placed_in_service=date(2030, 1, 1))
         assert len(result.entries) == 0
 
+    @pytest.mark.parametrize("rate", [float("nan"), float("inf")])
+    def test_itc_rejects_non_finite_rate(self, rate: float):
+        capex = CashFlowStream([_capex(-10_000_000, date(2028, 6, 1))])
+
+        with pytest.raises(ValueError, match="ITC rate must be finite"):
+            itc(capex, rate=rate, placed_in_service=date(2030, 1, 1))
+
+    def test_itc_rejects_negative_rate(self):
+        capex = CashFlowStream([_capex(-10_000_000, date(2028, 6, 1))])
+
+        with pytest.raises(ValueError, match="ITC rate must be non-negative"):
+            itc(capex, rate=-0.30, placed_in_service=date(2030, 1, 1))
+
     def test_itc_placed_in_service_date(self):
         """Credit cashflow date matches placed_in_service."""
         capex = CashFlowStream([_capex(-10_000_000, date(2028, 6, 1))])
@@ -177,6 +190,34 @@ class TestPTC:
         """Empty generation produces empty PTC stream."""
         assert ptc(GenerationStream(), rate_per_mwh=27.5, years=10).count() == 0
 
+    @pytest.mark.parametrize("years", [0, -1])
+    def test_ptc_rejects_non_positive_years(self, years: int):
+        generation = GenerationStream([Generation(1000.0, date(2030, 1, 1))])
+
+        with pytest.raises(ValueError, match="PTC years must be positive"):
+            ptc(generation, rate_per_mwh=27.5, years=years)
+
+    @pytest.mark.parametrize("rate_per_mwh", [float("nan"), float("inf")])
+    def test_ptc_rejects_non_finite_rate(self, rate_per_mwh: float):
+        generation = GenerationStream([Generation(1000.0, date(2030, 1, 1))])
+
+        with pytest.raises(ValueError, match="PTC rate_per_mwh must be finite"):
+            ptc(generation, rate_per_mwh=rate_per_mwh, years=10)
+
+    def test_ptc_rejects_negative_rate(self):
+        generation = GenerationStream([Generation(1000.0, date(2030, 1, 1))])
+
+        with pytest.raises(ValueError, match="PTC rate_per_mwh must be non-negative"):
+            ptc(generation, rate_per_mwh=-1.0, years=10)
+
+    def test_ptc_allows_zero_rate(self):
+        generation = GenerationStream([Generation(1000.0, date(2030, 1, 1))])
+
+        result = ptc(generation, rate_per_mwh=0.0, years=10)
+
+        assert result.count() == 1
+        assert result.entries[0].amount == pytest.approx(0.0)
+
 
 class TestITCAdjustedBasis:
     """Tests for itc_adjusted_basis()."""
@@ -195,6 +236,19 @@ class TestITCAdjustedBasis:
         """0% rate → basis unchanged."""
         capex = CashFlowStream([_capex(-100_000_000, date(2028, 6, 1))])
         assert itc_adjusted_basis(capex, rate=0.0) == pytest.approx(100_000_000)
+
+    @pytest.mark.parametrize("rate", [float("nan"), float("inf")])
+    def test_adjusted_basis_rejects_non_finite_rate(self, rate: float):
+        capex = CashFlowStream([_capex(-100_000_000, date(2028, 6, 1))])
+
+        with pytest.raises(ValueError, match="ITC rate must be finite"):
+            itc_adjusted_basis(capex, rate=rate)
+
+    def test_adjusted_basis_rejects_negative_rate(self):
+        capex = CashFlowStream([_capex(-100_000_000, date(2028, 6, 1))])
+
+        with pytest.raises(ValueError, match="ITC rate must be non-negative"):
+            itc_adjusted_basis(capex, rate=-0.30)
 
     def test_adjusted_basis_empty_stream(self):
         """Empty capex → 0.0."""

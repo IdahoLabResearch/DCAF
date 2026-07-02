@@ -48,6 +48,12 @@ def test_negative_amount_produces_negative_flows():
     assert stream.entries[0].amount == -50_000
 
 
+@pytest.mark.parametrize("amount", [float("nan"), float("inf")])
+def test_rejects_non_finite_amount(amount: float):
+    with pytest.raises(ValueError, match="fixed_opex amount must be finite"):
+        fixed_opex(amount=amount, start=date(2025, 1, 1), periods=1)
+
+
 def test_escalation_compounds_correctly():
     """Annual escalation compounds multiplicatively across successive periods."""
     start = date(2025, 1, 1)

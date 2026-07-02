@@ -303,11 +303,7 @@ class ProjectCompiler:
                 )
                 entries.append(
                     Generation(
-                        amount_mwh=(
-                            generation.capacity_mw
-                            * generation.capacity_factor
-                            * hours
-                        ),
+                        amount_mwh=(generation.capacity_mw * generation.capacity_factor * hours),
                         date=modeled_period.event_date,
                         label=label,
                     )
@@ -853,8 +849,6 @@ class ProjectCompiler:
         debt = self.config.construction_debt
         if debt is None:
             return CashFlowStream()
-        if debt.amortization_term <= 0:
-            raise ValueError("amortization_term must be positive")
 
         # Derive principal from construction draws
         if not construction_stream.entries:

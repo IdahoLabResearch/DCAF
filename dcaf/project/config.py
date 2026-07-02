@@ -3,13 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import isclose, isfinite
+from math import isclose
 
-
-def _validate_finite(value: float, name: str) -> None:
-    """Raise ``ValueError`` if *value* is not finite (inf or NaN)."""
-    if not isfinite(value):
-        raise ValueError(f"{name} must be finite")
+from dcaf.shared.validation import validate_finite, validate_non_negative
 
 
 def wacc(
@@ -50,8 +46,8 @@ def wacc(
     Raises
     ------
     ValueError
-        If any input is non-finite, either fraction is negative, or the
-        fractions do not sum to ``1.0``.
+        If any input is non-finite, ``tax_rate`` or either fraction is
+        negative, or the fractions do not sum to ``1.0``.
 
     Examples
     --------
@@ -60,15 +56,17 @@ def wacc(
     """
     resolved_equity = 1.0 - debt_fraction if equity_fraction is None else equity_fraction
     for name, value in (
-        ("debt_fraction", debt_fraction),
         ("debt_cost", debt_cost),
-        ("equity_fraction", resolved_equity),
         ("equity_cost", equity_cost),
         ("tax_rate", tax_rate),
     ):
-        _validate_finite(value, name)
-    if debt_fraction < 0.0 or resolved_equity < 0.0:
-        raise ValueError("WACC fractions must be non-negative")
+        validate_finite(value, name)
+    for name, value in (
+        ("debt_fraction", debt_fraction),
+        ("equity_fraction", resolved_equity),
+        ("tax_rate", tax_rate),
+    ):
+        validate_non_negative(value, name)
     if not isclose(debt_fraction + resolved_equity, 1.0, rel_tol=0.0, abs_tol=1e-9):
         raise ValueError("WACC fractions must sum to 1.0")
     return equity_cost * resolved_equity + debt_cost * debt_fraction * (1.0 - tax_rate)
@@ -87,7 +85,9 @@ class ProjectValuation:
     discount_rate: float
 
     def __post_init__(self) -> None:
-        _validate_finite(self.discount_rate, "discount_rate")
+        validate_finite(self.discount_rate, "discount_rate")
+        if self.discount_rate <= -1.0:
+            raise ValueError("discount_rate must be greater than -1.0")
 
     @classmethod
     def from_discount_rate(cls, rate: float) -> ProjectValuation:

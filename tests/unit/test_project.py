@@ -74,6 +74,23 @@ def test_energy_project_single_asset_workflow_builds_analysis_and_metrics():
     assert len(pro_forma.periods) >= 2
 
 
+@pytest.mark.parametrize("rate", [float("inf"), float("nan")])
+def test_energy_project_itc_rejects_non_finite_rate(rate):
+    with pytest.raises(ValueError, match="itc rate must be finite"):
+        EnergyProject().investment_tax_credit(rate=rate)
+
+
+def test_energy_project_itc_rejects_negative_rate():
+    with pytest.raises(ValueError, match="itc rate must be non-negative"):
+        EnergyProject().investment_tax_credit(rate=-0.30)
+
+
+def test_energy_project_itc_allows_zero_rate():
+    project = EnergyProject().investment_tax_credit(rate=0.0)
+
+    assert project._config.itc_rate == pytest.approx(0.0)
+
+
 def test_energy_project_levelized_cost_matches_real_carrying_charge_methodology():
     """LCOE should solve for the starting price that drives project NPV to zero."""
 
@@ -320,9 +337,7 @@ def test_energy_project_day_count_convention_defaults_metrics_and_allows_overrid
         ]
     )
     default = (
-        EnergyProject()
-        .discount_rate(rate=0.10)
-        .add_cashflow_stream(name="case", stream=stream)
+        EnergyProject().discount_rate(rate=0.10).add_cashflow_stream(name="case", stream=stream)
     )
     no_leap = (
         EnergyProject(day_count_convention="actual/365-no-leap")
@@ -350,9 +365,7 @@ def test_energy_project_day_count_convention_defaults_metrics_and_allows_overrid
     assert default_metrics.xirr == pytest.approx(0.10)
     assert no_leap_metrics.npv == pytest.approx(0.0)
     assert no_leap_metrics.xirr == pytest.approx(0.10)
-    assert fixed_metrics.npv == pytest.approx(
-        -1000.0 + 1100.0 / (1.10 ** (366.0 / 365.0))
-    )
+    assert fixed_metrics.npv == pytest.approx(-1000.0 + 1100.0 / (1.10 ** (366.0 / 365.0)))
     assert fixed_metrics.xirr != pytest.approx(no_leap_metrics.xirr)
     assert overridden.npv == pytest.approx(fixed_metrics.npv)
 
@@ -406,9 +419,7 @@ def test_project_day_count_convention_affects_constant_rate_escalation():
         -100.0 * 1.10 ** (364.0 / 365.0)
     )
     assert fixed_opex_amount("actual/365-fixed") == pytest.approx(-110.0)
-    assert fixed_opex_amount("actual/actual") == pytest.approx(
-        -100.0 * 1.10 ** (365.0 / 366.0)
-    )
+    assert fixed_opex_amount("actual/actual") == pytest.approx(-100.0 * 1.10 ** (365.0 / 366.0))
 
 
 def test_project_timeline_operating_years_uses_configured_day_count():
@@ -489,12 +500,8 @@ def test_project_day_count_convention_affects_construction_interest():
 
     draw, no_leap_interest = first_interest("actual/365-no-leap")
     assert no_leap_interest == pytest.approx(-(draw * 0.12 * 28.0 / 365.0))
-    assert first_interest("actual/365-fixed")[1] == pytest.approx(
-        -(draw * 0.12 * 29.0 / 365.0)
-    )
-    assert first_interest("actual/actual")[1] == pytest.approx(
-        -(draw * 0.12 * 29.0 / 366.0)
-    )
+    assert first_interest("actual/365-fixed")[1] == pytest.approx(-(draw * 0.12 * 29.0 / 365.0))
+    assert first_interest("actual/actual")[1] == pytest.approx(-(draw * 0.12 * 29.0 / 366.0))
 
 
 def test_energy_project_generation_outage_reduces_modeled_generation_economics():
@@ -527,6 +534,48 @@ def test_energy_project_generation_outage_reduces_modeled_generation_economics()
     assert analysis.cashflow_components["variable_cost"].sum() == pytest.approx(-net_mwh * 5.0)
     assert analysis.cashflow_components["ptc"].sum() == pytest.approx(net_mwh)
     assert analysis.metrics(discount_rate=0.08, valuation_date=date(2026, 1, 1)).levelized_cost
+
+
+@pytest.mark.parametrize("capacity_factor", [-0.1, 1.1, float("inf"), float("nan")])
+def test_energy_project_generation_outage_rejects_invalid_capacity_factor(
+    capacity_factor,
+):
+    with pytest.raises(ValueError, match="capacity_factor must be between 0 and 1"):
+        EnergyProject().generation_outage(
+            start=date(2026, 5, 1),
+            end=date(2026, 5, 11),
+            capacity_mw=10.0,
+            capacity_factor=capacity_factor,
+        )
+
+
+def test_energy_project_generation_outage_allows_zero_capacity_factor():
+    project = EnergyProject().generation_outage(
+        start=date(2026, 5, 1),
+        end=date(2026, 5, 11),
+        capacity_mw=10.0,
+        capacity_factor=0.0,
+    )
+
+    assert project._config.generation_outages[0].capacity_factor == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize("rate_per_unit", [float("inf"), float("nan")])
+def test_energy_project_ptc_rejects_non_finite_rate(rate_per_unit):
+    with pytest.raises(ValueError, match="ptc rate_per_unit must be finite"):
+        EnergyProject().production_tax_credit(rate_per_unit=rate_per_unit, years=1)
+
+
+def test_energy_project_ptc_rejects_negative_rate():
+    with pytest.raises(ValueError, match="ptc rate_per_unit must be non-negative"):
+        EnergyProject().production_tax_credit(rate_per_unit=-1.0, years=1)
+
+
+def test_energy_project_ptc_allows_zero_rate():
+    project = EnergyProject().production_tax_credit(rate_per_unit=0.0, years=1)
+
+    assert project._config.ptc is not None
+    assert project._config.ptc.rate_per_unit == pytest.approx(0.0)
 
 
 def test_energy_project_ptc_is_tax_credit_not_taxable_income():
@@ -583,6 +632,30 @@ def test_energy_project_construction_outage_preserves_generation():
     assert impact.sum() == pytest.approx(expected_impact)
     assert {flow.pro_forma_category for flow in impact} == {ProFormaCategory.OPERATING_COST}
     assert {flow.tax_treatment for flow in impact} == {TaxTreatment.DEDUCTIBLE}
+
+
+@pytest.mark.parametrize("capacity_factor", [-0.1, 1.1, float("inf"), float("nan")])
+def test_energy_project_construction_outage_rejects_invalid_capacity_factor(
+    capacity_factor,
+):
+    with pytest.raises(ValueError, match="capacity_factor must be between 0 and 1"):
+        EnergyProject().construction_outage(
+            start=date(2025, 5, 1),
+            end=date(2025, 5, 11),
+            capacity_mw=1000.0,
+            capacity_factor=capacity_factor,
+        )
+
+
+def test_energy_project_construction_outage_allows_zero_capacity_factor():
+    project = EnergyProject().construction_outage(
+        start=date(2025, 5, 1),
+        end=date(2025, 5, 11),
+        capacity_mw=1000.0,
+        capacity_factor=0.0,
+    )
+
+    assert project._config.construction_outages["default"].capacity_factor == pytest.approx(0.0)
 
 
 def test_energy_project_construction_outage_explicit_price_and_lcoe():
@@ -925,6 +998,26 @@ def test_energy_project_default_named_fixed_opex_uses_backward_compatible_key():
     assert analysis.cashflow_components["fixed_opex"].sum() == pytest.approx(-100.0)
 
 
+@pytest.mark.parametrize("periods", [-1.0, 0.0])
+def test_energy_project_fixed_opex_rejects_non_positive_periods(periods):
+    with pytest.raises(ValueError, match="fixed_opex periods must be positive"):
+        EnergyProject().fixed_opex(
+            amount=100.0,
+            start=date(2026, 1, 1),
+            periods=periods,
+        )
+
+
+def test_energy_project_fixed_opex_allows_positive_fractional_periods():
+    project = EnergyProject().fixed_opex(
+        amount=100.0,
+        start=date(2026, 1, 1),
+        periods=1.5,
+    )
+
+    assert project._config.fixed_opex_items["default"].periods == pytest.approx(1.5)
+
+
 def test_energy_project_supports_multiple_named_variable_cost_items():
     project = (
         EnergyProject()
@@ -946,6 +1039,23 @@ def test_energy_project_supports_multiple_named_variable_cost_items():
     assert analysis.cashflow_components["variable_cost:water"].sum() == pytest.approx(
         -2.0 * gen_mwh
     )
+
+
+def test_energy_project_variable_cost_ignores_rate_sign():
+    project = (
+        EnergyProject()
+        .generation(
+            capacity_mw=10.0,
+            capacity_factor=1.0,
+            operations_start=date(2026, 1, 1),
+            operations_end=date(2027, 1, 1),
+        )
+        .variable_cost(rate_per_unit=-5.0)
+    )
+
+    analysis = project.analyze()
+    gen_mwh = analysis.generation.sum()
+    assert analysis.cashflow_components["variable_cost"].sum() == pytest.approx(-5.0 * gen_mwh)
 
 
 def test_energy_project_named_fixed_opex_replaces_by_name():
@@ -1134,6 +1244,30 @@ def test_energy_project_wacc_is_independent_from_project_tax_rate():
     assert analysis.tax_rate == pytest.approx(0.21)
 
 
+def test_energy_project_wacc_rejects_negative_tax_rate():
+    with pytest.raises(ValueError, match="tax_rate must be non-negative"):
+        EnergyProject().wacc(
+            debt_fraction=0.4,
+            debt_cost=0.08,
+            equity_fraction=0.6,
+            equity_cost=0.12,
+            tax_rate=-0.21,
+        )
+
+
+def test_energy_project_wacc_allows_zero_tax_rate():
+    project = EnergyProject().wacc(
+        debt_fraction=0.4,
+        debt_cost=0.08,
+        equity_fraction=0.6,
+        equity_cost=0.12,
+        tax_rate=0.0,
+    )
+
+    assert project._config.valuation is not None
+    assert project._config.valuation.discount_rate == pytest.approx(0.12 * 0.6 + 0.08 * 0.4)
+
+
 def test_energy_project_discount_rate_sets_default_metrics_rate():
     project = (
         EnergyProject()
@@ -1151,6 +1285,19 @@ def test_energy_project_discount_rate_sets_default_metrics_rate():
     assert analysis.valuation is not None
     assert analysis.valuation.discount_rate == pytest.approx(0.10)
     assert analysis.metrics().discount_rate == pytest.approx(0.10)
+
+
+@pytest.mark.parametrize("rate", [-1.0, -1.1])
+def test_energy_project_discount_rate_rejects_invalid_negative_rate(rate):
+    with pytest.raises(ValueError, match="discount_rate must be greater than -1.0"):
+        EnergyProject().discount_rate(rate=rate)
+
+
+def test_energy_project_discount_rate_allows_negative_rate_above_minus_one():
+    project = EnergyProject().discount_rate(rate=-0.01)
+
+    assert project._config.valuation is not None
+    assert project._config.valuation.discount_rate == pytest.approx(-0.01)
 
 
 def test_energy_project_metrics_override_builder_valuation_rate():
@@ -1177,6 +1324,199 @@ def test_energy_project_metrics_override_builder_valuation_rate():
     assert analysis.metrics(discount_rate=0.12).discount_rate == pytest.approx(0.12)
 
 
+@pytest.mark.parametrize("discount_rate", [-1.1, -1.0])
+def test_energy_project_metrics_override_rejects_invalid_negative_discount_rate(
+    discount_rate,
+):
+    analysis = (
+        EnergyProject()
+        .discount_rate(rate=0.10)
+        .generation(
+            capacity_mw=1.0,
+            capacity_factor=1.0,
+            operations_start=date(2026, 1, 1),
+            operations_end=date(2027, 1, 1),
+        )
+        .revenue_from_generation(sell_price_per_unit=50.0)
+        .analyze()
+    )
+
+    with pytest.raises(ValueError, match="discount_rate must be greater than -1.0"):
+        analysis.metrics(discount_rate=discount_rate)
+
+
+def test_energy_project_metrics_override_allows_negative_discount_rate_above_minus_one():
+    analysis = (
+        EnergyProject()
+        .discount_rate(rate=0.10)
+        .generation(
+            capacity_mw=1.0,
+            capacity_factor=1.0,
+            operations_start=date(2026, 1, 1),
+            operations_end=date(2027, 1, 1),
+        )
+        .revenue_from_generation(sell_price_per_unit=50.0)
+        .analyze()
+    )
+
+    assert analysis.metrics(discount_rate=-0.01).discount_rate == pytest.approx(-0.01)
+
+
+@pytest.mark.parametrize("tax_rate", [float("inf"), float("nan")])
+def test_energy_project_tax_rejects_non_finite_rate(tax_rate):
+    with pytest.raises(ValueError, match="tax rate must be finite"):
+        EnergyProject().tax(rate=tax_rate)
+
+
+def test_energy_project_tax_rejects_negative_rate():
+    with pytest.raises(ValueError, match="tax rate must be non-negative"):
+        EnergyProject().tax(rate=-0.21)
+
+
+def test_energy_project_tax_allows_zero_rate():
+    project = (
+        EnergyProject()
+        .tax(rate=0.0)
+        .generation(
+            capacity_mw=1.0,
+            capacity_factor=1.0,
+            operations_start=date(2026, 1, 1),
+            operations_end=date(2027, 1, 1),
+        )
+        .revenue_from_generation(sell_price_per_unit=50.0)
+    )
+
+    analysis = project.analyze()
+    assert analysis.tax_rate == pytest.approx(0.0)
+    assert analysis.cashflow_components["project:tax_liability"].sum() == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize("life", [-1, 0])
+def test_energy_project_vdb_depreciation_rejects_non_positive_life(life):
+    with pytest.raises(ValueError, match="VDB life must be positive"):
+        EnergyProject().depreciation_vdb(life=life)
+
+
+def test_energy_project_vdb_depreciation_allows_positive_life():
+    project = EnergyProject().depreciation_vdb(life=5)
+
+    assert project._config.depreciation is not None
+    assert project._config.depreciation.life == 5
+
+
+@pytest.mark.parametrize("salvage_value", [float("inf"), float("nan")])
+def test_energy_project_vdb_depreciation_rejects_non_finite_salvage_value(
+    salvage_value,
+):
+    with pytest.raises(ValueError, match="VDB salvage_value must be finite"):
+        EnergyProject().depreciation_vdb(life=5, salvage_value=salvage_value)
+
+
+def test_energy_project_vdb_depreciation_rejects_negative_salvage_value():
+    with pytest.raises(ValueError, match="VDB salvage_value must be non-negative"):
+        EnergyProject().depreciation_vdb(life=5, salvage_value=-1.0)
+
+
+def test_energy_project_vdb_depreciation_allows_zero_salvage_value():
+    project = EnergyProject().depreciation_vdb(life=5, salvage_value=0.0)
+
+    assert project._config.depreciation is not None
+    assert project._config.depreciation.salvage_value == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize("factor", [float("inf"), float("nan")])
+def test_energy_project_vdb_depreciation_rejects_non_finite_factor(factor):
+    with pytest.raises(ValueError, match="VDB factor must be finite"):
+        EnergyProject().depreciation_vdb(life=5, factor=factor)
+
+
+@pytest.mark.parametrize("factor", [-1.0, 0.0])
+def test_energy_project_vdb_depreciation_rejects_non_positive_factor(factor):
+    with pytest.raises(ValueError, match="VDB factor must be positive"):
+        EnergyProject().depreciation_vdb(life=5, factor=factor)
+
+
+def test_energy_project_vdb_depreciation_allows_positive_factor():
+    project = EnergyProject().depreciation_vdb(life=5, factor=1.5)
+
+    assert project._config.depreciation is not None
+    assert project._config.depreciation.factor == pytest.approx(1.5)
+
+
+@pytest.mark.parametrize(
+    ("valuation_rate", "valuation_date"),
+    [
+        (None, None),
+        (0.10, None),
+        (None, date(2026, 1, 1)),
+    ],
+)
+def test_energy_project_vdb_best_of_convention_requires_valuation_inputs(
+    valuation_rate,
+    valuation_date,
+):
+    with pytest.raises(
+        ValueError,
+        match="valuation_rate and valuation_date are required",
+    ):
+        EnergyProject().depreciation_vdb(
+            life=5,
+            convention="best-of-half-year-mid-quarter",
+            valuation_rate=valuation_rate,
+            valuation_date=valuation_date,
+        )
+
+
+@pytest.mark.parametrize(
+    ("valuation_rate", "valuation_date"),
+    [
+        (0.10, None),
+        (None, date(2026, 1, 1)),
+        (0.10, date(2026, 1, 1)),
+    ],
+)
+def test_energy_project_vdb_none_convention_rejects_valuation_inputs(
+    valuation_rate,
+    valuation_date,
+):
+    with pytest.raises(
+        ValueError,
+        match="valuation_rate and valuation_date are only supported",
+    ):
+        EnergyProject().depreciation_vdb(
+            life=5,
+            convention="none",
+            valuation_rate=valuation_rate,
+            valuation_date=valuation_date,
+        )
+
+
+@pytest.mark.parametrize("valuation_rate", [float("inf"), float("nan")])
+def test_energy_project_vdb_depreciation_rejects_non_finite_valuation_rate(
+    valuation_rate,
+):
+    with pytest.raises(ValueError, match="VDB valuation_rate must be finite"):
+        EnergyProject().depreciation_vdb(
+            life=5,
+            convention="best-of-half-year-mid-quarter",
+            valuation_rate=valuation_rate,
+            valuation_date=date(2026, 1, 1),
+        )
+
+
+def test_energy_project_vdb_best_of_convention_allows_valuation_inputs():
+    project = EnergyProject().depreciation_vdb(
+        life=5,
+        convention="best-of-half-year-mid-quarter",
+        valuation_rate=0.10,
+        valuation_date=date(2026, 1, 1),
+    )
+
+    assert project._config.depreciation is not None
+    assert project._config.depreciation.valuation_rate == pytest.approx(0.10)
+    assert project._config.depreciation.valuation_date == date(2026, 1, 1)
+
+
 # --- operations_end exclusivity ---
 
 
@@ -1194,6 +1534,71 @@ def test_energy_project_operations_end_is_exclusive():
     assert analysis.generation.sum() == pytest.approx(10.0 * 8760.0)
 
 
+@pytest.mark.parametrize("capacity_mw", [-1.0, float("inf"), float("nan")])
+def test_energy_project_generation_rejects_invalid_capacity_mw(capacity_mw):
+    with pytest.raises(ValueError, match="capacity_mw"):
+        EnergyProject().generation(
+            capacity_mw=capacity_mw,
+            capacity_factor=1.0,
+            operations_start=date(2026, 1, 1),
+            operations_end=date(2027, 1, 1),
+        )
+
+
+@pytest.mark.parametrize("capacity_factor", [-0.1, 1.1, float("inf"), float("nan")])
+def test_energy_project_generation_rejects_invalid_capacity_factor(capacity_factor):
+    with pytest.raises(ValueError, match="capacity_factor must be between 0 and 1"):
+        EnergyProject().generation(
+            capacity_mw=10.0,
+            capacity_factor=capacity_factor,
+            operations_start=date(2026, 1, 1),
+            operations_end=date(2027, 1, 1),
+        )
+
+
+@pytest.mark.parametrize("periods", [-1.0, 0.0])
+def test_energy_project_generation_rejects_non_positive_periods(periods):
+    with pytest.raises(ValueError, match="generation periods must be positive"):
+        EnergyProject().generation(
+            capacity_mw=10.0,
+            capacity_factor=1.0,
+            start=date(2026, 1, 1),
+            periods=periods,
+        )
+
+
+def test_energy_project_generation_allows_positive_fractional_periods():
+    project = EnergyProject().generation(
+        capacity_mw=10.0,
+        capacity_factor=1.0,
+        start=date(2026, 1, 1),
+        periods=1.5,
+    )
+
+    assert project._config.generation is not None
+    assert project._config.generation.periods == pytest.approx(1.5)
+
+
+@pytest.mark.parametrize(
+    ("operations_start", "operations_end"),
+    [
+        (date(2026, 1, 1), date(2026, 1, 1)),
+        (date(2026, 2, 1), date(2026, 1, 1)),
+    ],
+)
+def test_energy_project_generation_rejects_invalid_operations_date_order(
+    operations_start,
+    operations_end,
+):
+    with pytest.raises(ValueError, match="operations_end must be after operations_start"):
+        EnergyProject().generation(
+            capacity_mw=10.0,
+            capacity_factor=1.0,
+            operations_start=operations_start,
+            operations_end=operations_end,
+        )
+
+
 # --- construction_debt with stream override ---
 
 
@@ -1204,6 +1609,100 @@ def test_energy_project_construction_debt_rejects_when_stream_override_present()
             debt_fraction=0.5,
             amortization_rate=0.05,
             amortization_term=10,
+        )
+
+
+@pytest.mark.parametrize("debt_fraction", [float("inf"), float("nan")])
+def test_energy_project_construction_financing_rejects_non_finite_debt_fraction(
+    debt_fraction,
+):
+    with pytest.raises(ValueError, match="debt_fraction must be finite"):
+        EnergyProject().construction_financing(
+            debt_fraction=debt_fraction,
+            amortization_rate=0.05,
+            amortization_term=10,
+        )
+
+
+@pytest.mark.parametrize("debt_fraction", [-0.1, 1.1])
+def test_energy_project_construction_financing_rejects_out_of_range_debt_fraction(
+    debt_fraction,
+):
+    with pytest.raises(ValueError, match="debt_fraction must be between 0 and 1"):
+        EnergyProject().construction_financing(
+            debt_fraction=debt_fraction,
+            amortization_rate=0.05,
+            amortization_term=10,
+        )
+
+
+@pytest.mark.parametrize("construction_interest_rate", [float("inf"), float("nan")])
+def test_energy_project_construction_financing_rejects_non_finite_construction_interest_rate(
+    construction_interest_rate,
+):
+    with pytest.raises(ValueError, match="construction_interest_rate must be finite"):
+        EnergyProject().construction_financing(
+            debt_fraction=0.5,
+            construction_interest_rate=construction_interest_rate,
+            amortization_rate=0.05,
+            amortization_term=10,
+        )
+
+
+def test_energy_project_construction_financing_rejects_negative_construction_interest_rate():
+    with pytest.raises(
+        ValueError,
+        match="construction_interest_rate must be non-negative",
+    ):
+        EnergyProject().construction_financing(
+            debt_fraction=0.5,
+            construction_interest_rate=-0.01,
+            amortization_rate=0.05,
+            amortization_term=10,
+        )
+
+
+def test_energy_project_construction_financing_allows_zero_construction_interest_rate():
+    project = EnergyProject().construction_financing(
+        debt_fraction=0.5,
+        construction_interest_rate=0.0,
+        amortization_rate=0.05,
+        amortization_term=10,
+    )
+
+    assert project._config.construction_debt is not None
+    assert project._config.construction_debt.construction_interest_rate == pytest.approx(0.0)
+
+
+def test_energy_project_construction_financing_rejects_negative_amortization_rate():
+    with pytest.raises(ValueError, match="amortization_rate must be non-negative"):
+        EnergyProject().construction_financing(
+            debt_fraction=0.5,
+            amortization_rate=-0.01,
+            amortization_term=10,
+        )
+
+
+def test_energy_project_construction_financing_allows_zero_amortization_rate():
+    project = EnergyProject().construction_financing(
+        debt_fraction=0.5,
+        amortization_rate=0.0,
+        amortization_term=10,
+    )
+
+    assert project._config.construction_debt is not None
+    assert project._config.construction_debt.amortization_rate == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize("amortization_term", [-1, 0])
+def test_energy_project_construction_financing_rejects_non_positive_amortization_term(
+    amortization_term,
+):
+    with pytest.raises(ValueError, match="amortization_term must be positive"):
+        EnergyProject().construction_financing(
+            debt_fraction=0.5,
+            amortization_rate=0.05,
+            amortization_term=amortization_term,
         )
 
 
@@ -1247,6 +1746,80 @@ def test_energy_project_overnight_cost_with_explicit_cod_date():
     analysis = project.analyze()
     construction = analysis.cashflow_components["construction"]
     assert construction.entries[0].date == date(2025, 7, 1)
+
+
+def test_energy_project_construction_date_order_ignored_without_spend_profile():
+    """construction_end is unused when construction is booked as one overnight-cost flow."""
+    project = (
+        EnergyProject()
+        .generation(
+            capacity_mw=1.0,
+            capacity_factor=1.0,
+            operations_start=date(2026, 1, 1),
+            operations_end=date(2027, 1, 1),
+        )
+        .construction(
+            overnight_cost=1_000.0,
+            construction_start=date(2025, 1, 1),
+            construction_end=date(2025, 1, 1),
+        )
+    )
+
+    analysis = project.analyze()
+    construction = analysis.cashflow_components["construction"]
+    assert construction.count() == 1
+    assert construction.sum() == pytest.approx(-1_000.0)
+    assert construction.entries[0].date == date(2026, 1, 1)
+
+
+@pytest.mark.parametrize("overnight_cost", [float("inf"), float("nan")])
+def test_energy_project_construction_rejects_non_finite_overnight_cost(
+    overnight_cost,
+):
+    with pytest.raises(ValueError, match="overnight_cost must be finite"):
+        EnergyProject().construction(overnight_cost=overnight_cost)
+
+
+@pytest.mark.parametrize("overnight_cost", [-1.0, 0.0])
+def test_energy_project_construction_rejects_non_positive_overnight_cost(
+    overnight_cost,
+):
+    with pytest.raises(ValueError, match="overnight_cost must be positive"):
+        EnergyProject().construction(overnight_cost=overnight_cost)
+
+
+def test_energy_project_construction_rejects_spend_profile_without_construction_start():
+    with pytest.raises(
+        ValueError,
+        match="construction_start is required when spend_profile is provided",
+    ):
+        EnergyProject().construction(
+            overnight_cost=1_000.0,
+            spend_profile="flat",
+        )
+
+
+@pytest.mark.parametrize(
+    ("construction_start", "construction_end"),
+    [
+        (date(2025, 1, 1), date(2025, 1, 1)),
+        (date(2025, 2, 1), date(2025, 1, 1)),
+    ],
+)
+def test_energy_project_construction_rejects_invalid_construction_date_order(
+    construction_start,
+    construction_end,
+):
+    with pytest.raises(
+        ValueError,
+        match="construction_end must be after construction_start",
+    ):
+        EnergyProject().construction(
+            overnight_cost=1_000.0,
+            spend_profile="flat",
+            construction_start=construction_start,
+            construction_end=construction_end,
+        )  # Note that spend_profile is not None, so the end date is necessary
 
 
 # --- Generation stream infers operations dates ---

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
-from math import isfinite
 from typing import TypeAlias
 
 from dcaf.finance.amortization import AmortizationSchedule
@@ -28,21 +27,9 @@ from dcaf.shared.types import (
     VDBConvention,
     parse_day_count_convention,
 )
+from dcaf.shared.validation import validate_finite, validate_non_negative
 from dcaf.streams.cashflows import CashFlowStream
 from dcaf.streams.generation import GenerationStream
-
-
-def validate_finite(value: float, name: str) -> None:
-    """Raise ``ValueError`` if *value* is not finite (inf or NaN)."""
-    if not isfinite(value):
-        raise ValueError(f"{name} must be finite")
-
-
-def validate_non_negative(value: float, name: str) -> None:
-    """Raise ``ValueError`` if *value* is negative or not finite."""
-    validate_finite(value, name)
-    if value < 0.0:
-        raise ValueError(f"{name} must be non-negative")
 
 
 def validate_outage_dates(start: date, end: date) -> None:
@@ -100,8 +87,7 @@ class EscalationSettings:
 
 
 def effective_escalation(
-    local: EscalationSettings,
-    default: EscalationSettings,
+    local: EscalationSettings, default: EscalationSettings
 ) -> EscalationSettings:
     """Return *local* if it has been configured, otherwise fall back to *default*."""
     return local if local.is_configured else default
@@ -173,8 +159,17 @@ class CapacityGenerationConfig:
     timing: TimingConvention | None = None
 
     def __post_init__(self) -> None:
-        validate_finite(self.capacity_mw, "capacity_mw")
-        validate_finite(self.capacity_factor, "capacity_factor")
+        validate_non_negative(self.capacity_mw, "capacity_mw")
+        if not 0.0 <= self.capacity_factor <= 1.0:
+            raise ValueError("capacity_factor must be between 0 and 1")
+        if self.periods is not None and self.periods <= 0:
+            raise ValueError("generation periods must be positive")
+        if (
+            self.operations_start is not None
+            and self.operations_end is not None
+            and self.operations_end <= self.operations_start
+        ):
+            raise ValueError("operations_end must be after operations_start")
 
 
 GenerationConfig: TypeAlias = CapacityGenerationConfig | GenerationStream | None
@@ -198,7 +193,8 @@ class GenerationOutageConfig:
         if self.capacity_mw is not None:
             validate_non_negative(self.capacity_mw, "capacity_mw")
         if self.capacity_factor is not None:
-            validate_non_negative(self.capacity_factor, "capacity_factor")
+            if not 0.0 <= self.capacity_factor <= 1.0:
+                raise ValueError("capacity_factor must be between 0 and 1")
         validate_capacity_reduction(self.capacity_reduction)
 
 
@@ -224,7 +220,8 @@ class ConstructionOutageConfig:
     def __post_init__(self) -> None:
         validate_outage_dates(self.start, self.end)
         validate_non_negative(self.capacity_mw, "capacity_mw")
-        validate_non_negative(self.capacity_factor, "capacity_factor")
+        if not 0.0 <= self.capacity_factor <= 1.0:
+            raise ValueError("capacity_factor must be between 0 and 1")
         validate_capacity_reduction(self.capacity_reduction)
         if self.sell_price_per_unit is not None:
             validate_finite(self.sell_price_per_unit, "sell_price_per_unit")
@@ -246,6 +243,8 @@ class FixedOpexConfig:
 
     def __post_init__(self) -> None:
         validate_finite(self.amount, "fixed opex amount")
+        if self.periods is not None and self.periods <= 0:
+            raise ValueError("fixed_opex periods must be positive")
 
 
 @dataclass(frozen=True)
@@ -258,6 +257,7 @@ class VariableCostConfig:
 
     def __post_init__(self) -> None:
         validate_finite(self.rate_per_unit, "variable cost rate_per_unit")
+        object.__setattr__(self, "rate_per_unit", abs(self.rate_per_unit))
 
 
 @dataclass(frozen=True)
@@ -274,6 +274,17 @@ class ConstructionScheduleConfig:
 
     def __post_init__(self) -> None:
         validate_finite(self.overnight_cost, "overnight_cost")
+        if self.overnight_cost <= 0.0:
+            raise ValueError("overnight_cost must be positive")
+        if self.spend_profile is not None and self.construction_start is None:
+            raise ValueError("construction_start is required when spend_profile is provided")
+        if (
+            self.spend_profile is not None
+            and self.construction_start is not None
+            and self.construction_end is not None
+            and self.construction_end <= self.construction_start
+        ):
+            raise ValueError("construction_end must be after construction_start")
 
 
 ConstructionConfig: TypeAlias = ConstructionScheduleConfig | CashFlowStream | None
@@ -298,7 +309,14 @@ class ConstructionFinancingConfig:
     amortization_start: date | None = None
 
     def __post_init__(self) -> None:
-        validate_finite(self.amortization_rate, "amortization_rate")
+        validate_finite(self.debt_fraction, "debt_fraction")
+        if not 0.0 <= self.debt_fraction <= 1.0:
+            raise ValueError("debt_fraction must be between 0 and 1")
+        if self.construction_interest_rate is not None:
+            validate_non_negative(self.construction_interest_rate, "construction_interest_rate")
+        validate_non_negative(self.amortization_rate, "amortization_rate")
+        if self.amortization_term <= 0:
+            raise ValueError("amortization_term must be positive")
 
 
 @dataclass(frozen=True)
@@ -326,6 +344,29 @@ class VdbDepreciationConfig:
     terminal_catch_up: bool = False
     label: str = "VDB Depreciation"
 
+    def __post_init__(self) -> None:
+        if self.life <= 0:
+            raise ValueError("VDB life must be positive")
+        validate_non_negative(self.salvage_value, "VDB salvage_value")
+        validate_finite(self.factor, "VDB factor")
+        if self.factor <= 0.0:
+            raise ValueError("VDB factor must be positive")
+        if self.convention == "best-of-half-year-mid-quarter":
+            if self.valuation_rate is None or self.valuation_date is None:
+                raise ValueError(
+                    "valuation_rate and valuation_date are required for "
+                    "best-of-half-year-mid-quarter schedules"
+                )
+        elif self.convention == "none" and (
+            self.valuation_rate is not None or self.valuation_date is not None
+        ):
+            raise ValueError(
+                "valuation_rate and valuation_date are only supported for "
+                "best-of-half-year-mid-quarter schedules"
+            )
+        if self.valuation_rate is not None:
+            validate_finite(self.valuation_rate, "VDB valuation_rate")
+
 
 DepreciationConfig: TypeAlias = MacrsDepreciationConfig | VdbDepreciationConfig | None
 
@@ -342,7 +383,7 @@ class ProductionTaxCreditConfig:
     def __post_init__(self) -> None:
         if self.years <= 0:
             raise ValueError("PTC years must be positive")
-        validate_finite(self.rate_per_unit, "ptc rate_per_unit")
+        validate_non_negative(self.rate_per_unit, "ptc rate_per_unit")
 
 
 @dataclass(frozen=True)
@@ -391,6 +432,6 @@ class ProjectConfig:
             parse_day_count_convention(str(self.day_count_convention)).value,
         )
         if self.itc_rate is not None:
-            validate_finite(self.itc_rate, "itc rate")
+            validate_non_negative(self.itc_rate, "itc rate")
         if self.tax_rate is not None:
-            validate_finite(self.tax_rate, "tax rate")
+            validate_non_negative(self.tax_rate, "tax rate")
