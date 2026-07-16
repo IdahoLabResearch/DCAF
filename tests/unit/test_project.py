@@ -9,8 +9,52 @@ from dcaf.finance.amortization import AmortizationSchedule
 from dcaf.finance.opex import fixed_opex
 from dcaf.project.timeline import ProjectTimeline
 from dcaf.shared.time import PeriodTruncationWarning, ScheduleTruncationWarning
-from dcaf.shared.types import DayCountConvention, ProFormaCategory, TaxTreatment
+from dcaf.shared.types import (
+    DayCountConvention,
+    InterestTreatment,
+    ProFormaCategory,
+    TaxTreatment,
+)
 from dcaf.streams import CashFlow, CashFlowStream, Generation, GenerationStream
+
+
+@pytest.fixture
+def financing_case():
+    def _financing_case(
+        *,
+        debt_fraction: float,
+        construction_interest_rate: float | None = None,
+        interest_treatment: InterestTreatment = "capitalize",
+    ):
+        project = (
+            EnergyProject()
+            .generation(
+                capacity_mw=1.0,
+                capacity_factor=1.0,
+                operations_start=date(2026, 1, 1),
+                operations_end=date(2027, 1, 1),
+            )
+            .construction(
+                overnight_cost=1_000.0,
+                spend_profile="flat",
+                construction_start=date(2025, 1, 1),
+                period="year",
+            )
+            .fixed_opex(amount=100.0, frequency="year")
+            .tax(rate=0.0)
+        )
+        if debt_fraction > 0.0:
+            project = project.construction_financing(
+                debt_fraction=debt_fraction,
+                construction_interest_rate=construction_interest_rate,
+                interest_treatment=interest_treatment,
+                amortization_rate=0.0,
+                amortization_term=1,
+                amortization_frequency="year",
+            )
+        return project.analyze()
+
+    return _financing_case
 
 
 def test_energy_project_single_asset_workflow_builds_analysis_and_metrics():
@@ -331,6 +375,77 @@ def test_energy_project_derives_debt_principal_from_construction():
 
     row_map = analysis.pro_forma(period="year").row_map()
     assert sum(row_map["Financing Proceeds"]) == pytest.approx(500.0)
+
+
+@pytest.mark.parametrize("debt_fraction", [0.0, 0.5, 1.0])
+def test_levered_lcoe_matches_hand_case_and_is_invariant_to_costless_financing(
+    financing_case,
+    debt_fraction,
+):
+    analysis = financing_case(debt_fraction=debt_fraction)
+    metrics = analysis.metrics(
+        discount_rate=0.0,
+        valuation_date=date(2025, 1, 1),
+    )
+    assert metrics.levelized_cost is not None
+
+    # Independent hand case: ($1,000 capex + $100 opex) / 8,760 MWh.
+    hand_calculated_lcoe = 1_100.0 / 8_760.0
+
+    assert metrics.levelized_cost == pytest.approx(hand_calculated_lcoe)
+
+
+@pytest.mark.parametrize("debt_fraction", [0.0, 0.5, 1.0])
+def test_construction_debt_sources_uses_and_principal_reconcile(
+    financing_case,
+    debt_fraction,
+):
+    analysis = financing_case(debt_fraction=debt_fraction)
+    construction_uses = abs(
+        analysis.cashflow_components["construction"]
+        .filter(pro_forma_category=ProFormaCategory.CAPITAL_COST)
+        .cash_only()
+        .sum()
+    )
+    debt_proceeds = (
+        analysis.cashflow_components["debt_proceeds"]
+        if "debt_proceeds" in analysis.cashflow_components.keys()
+        else CashFlowStream()
+    )
+    debt_service = (
+        analysis.cashflow_components["debt_service"]
+        if "debt_service" in analysis.cashflow_components.keys()
+        else CashFlowStream()
+    )
+    cash_debt_sources = debt_proceeds.cash_only().sum()
+    implicit_equity_sources = construction_uses * (1.0 - debt_fraction)
+    principal_repayments = abs(
+        debt_service.filter(pro_forma_category=ProFormaCategory.FINANCING_PRINCIPAL).sum()
+    )
+
+    assert cash_debt_sources == pytest.approx(construction_uses * debt_fraction)
+    assert cash_debt_sources + implicit_equity_sources == pytest.approx(construction_uses)
+    assert principal_repayments == pytest.approx(debt_proceeds.sum())
+
+
+def test_explicit_debt_schedule_is_an_explicit_opening_balance_without_proceeds():
+    schedule = AmortizationSchedule.build(
+        principal=100.0,
+        annual_rate=0.0,
+        term=1,
+        start_date=date(2026, 1, 1),
+        frequency="year",
+    )
+
+    analysis = EnergyProject().debt_schedule(schedule=schedule).analyze()
+
+    principal_repayments = abs(
+        analysis.cashflow_components["debt_service"]
+        .filter(pro_forma_category=ProFormaCategory.FINANCING_PRINCIPAL)
+        .sum()
+    )
+    assert principal_repayments == pytest.approx(100.0)
+    assert "debt_proceeds" not in analysis.cashflow_components
 
 
 def test_energy_project_generation_stream_sets_generation_explicitly():
@@ -1242,8 +1357,21 @@ def test_energy_project_debt_principal_capitalize_vs_pay():
     )
     capitalized_interest = abs(capitalized_interest_stream.sum())
     capitalized_interest_financing = cap_proceeds.filter(is_cash=False)
+    paid_interest_stream = pay_analysis.cashflow_components["construction"].filter(
+        pro_forma_category=ProFormaCategory.FINANCING_INTEREST
+    )
+    pay_principal = abs(
+        pay_analysis.cashflow_components["debt_service"]
+        .filter(pro_forma_category=ProFormaCategory.FINANCING_PRINCIPAL)
+        .sum()
+    )
     assert cap_proceeds.sum() == pytest.approx(cap_principal)
     assert capitalized_interest_financing.sum() == pytest.approx(capitalized_interest)
+    assert capitalized_interest_stream.entries
+    assert all(not flow.is_cash for flow in capitalized_interest_stream)
+    assert paid_interest_stream.entries
+    assert all(flow.is_cash for flow in paid_interest_stream)
+    assert paid_interest_stream.sum() < 0.0
     assert [flow.date for flow in capitalized_interest_financing] == [
         flow.date for flow in capitalized_interest_stream
     ]
@@ -1257,6 +1385,8 @@ def test_energy_project_debt_principal_capitalize_vs_pay():
     capex = construction.filter(pro_forma_category=ProFormaCategory.CAPITAL_COST)
     cash_basis = abs(capex.cash_only().sum())
     expected_pay_principal = cash_basis * 0.5
+    assert pay_principal == pytest.approx(expected_pay_principal)
+    assert pay_proceeds.sum() == pytest.approx(expected_pay_principal)
     assert pay_debt == pytest.approx(expected_pay_principal * 1.05)
 
 

@@ -829,7 +829,10 @@ class EnergyProject:
         Parameters
         ----------
         schedule : AmortizationSchedule or CashFlowStream
-            Fully specified debt-service schedule.
+            Fully specified debt-service schedule. The schedule represents debt
+            issued outside the project cash-flow model, or an explicitly supplied
+            opening debt balance. DCAF does not infer financing proceeds for this
+            path because the schedule does not contain draw timing.
 
         Returns
         -------
