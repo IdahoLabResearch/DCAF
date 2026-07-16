@@ -296,6 +296,19 @@ class ConstructionFinancing:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class ConstructionCashFlows:
+    """Construction flows with aggregate, pro-rata, and full-debt streams.
+
+    Paid construction interest appears only in ``total`` because it is not a
+    basis for debt proceeds.
+    """
+
+    total: CashFlowStream
+    pro_rata_debt_basis: CashFlowStream
+    full_debt_basis: CashFlowStream
+
+
 @dataclass(frozen=True)
 class ConstructionSpendConfig:
     """Validated construction spend configuration.
@@ -553,13 +566,19 @@ def _debt_servicing_period(config: ConstructionSpendConfig) -> _PeriodEnum:
 def _build_cashflows(
     config: ConstructionSpendConfig,
     escalation_policy: EscalationPolicy | None = None,
-) -> list[CashFlow]:
-    """Build raw construction spend and interest cashflows from a config."""
+) -> ConstructionCashFlows:
+    """Build construction flows while preserving their debt-funding bases."""
     scheduled_spends = _scheduled_spends(config, escalation_policy=escalation_policy)
-    entries = [_construction_spend_cashflow(spend) for spend in scheduled_spends]
+    spend_entries = [_construction_spend_cashflow(spend) for spend in scheduled_spends]
+    entries = list(spend_entries)
+    capitalized_interest_entries: list[CashFlow] = []
 
     if config.financing.debt_fraction == 0.0 or config.financing.interest_rate is None:
-        return entries
+        return ConstructionCashFlows(
+            total=CashFlowStream(entries),
+            pro_rata_debt_basis=CashFlowStream(spend_entries),
+            full_debt_basis=CashFlowStream(),
+        )
 
     debt_balance = 0.0
     scheduled_draws = [
@@ -590,6 +609,8 @@ def _build_cashflows(
         )
         if interest_flow is not None:
             entries.append(interest_flow)
+            if config.financing.interest_treatment is _InterestTreatmentEnum.CAPITALIZE:
+                capitalized_interest_entries.append(interest_flow)
 
         while draw_index < len(scheduled_draws) and scheduled_draws[draw_index][0] <= service_end:
             debt_balance += scheduled_draws[draw_index][1]
@@ -598,8 +619,12 @@ def _build_cashflows(
         if config.financing.interest_treatment is _InterestTreatmentEnum.CAPITALIZE:
             debt_balance += interest
 
-    entries.sort(key=lambda flow: (flow.date, 0 if flow.label == "Construction Spend" else 1))
-    return entries
+    total = CashFlowStream(entries).sort()
+    return ConstructionCashFlows(
+        total=total,
+        pro_rata_debt_basis=CashFlowStream(spend_entries).sort(),
+        full_debt_basis=CashFlowStream(capitalized_interest_entries).sort(),
+    )
 
 
 class ConstructionSpendBuilder:
@@ -967,9 +992,18 @@ class ConstructionSpendBuilder:
         >>> stream[0].label
         'Construction Spend'
         """
-        return CashFlowStream(
-            _build_cashflows(self._config, escalation_policy=self._escalation_policy)
-        )
+        return self.build_components().total
+
+    def build_components(self) -> ConstructionCashFlows:
+        """Build aggregate construction flows and explicit debt-funding bases.
+
+        Returns
+        -------
+        ConstructionCashFlows
+            Aggregate construction flows plus the streams funded pro rata and
+            fully by debt.
+        """
+        return _build_cashflows(self._config, escalation_policy=self._escalation_policy)
 
 
 def construction_spend_schedule(

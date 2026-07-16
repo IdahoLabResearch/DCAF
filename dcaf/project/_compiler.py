@@ -11,7 +11,11 @@ from typing import Literal
 from dateutil.relativedelta import relativedelta
 
 from dcaf.finance.amortization import AmortizationSchedule
-from dcaf.finance.construction import ConstructionFinancing, construction_spend_schedule
+from dcaf.finance.construction import (
+    ConstructionCashFlows,
+    ConstructionFinancing,
+    ConstructionSpendBuilder,
+)
 from dcaf.finance.escalation import ConstantRateEscalation, EscalationPolicy
 from dcaf.finance.outage import construction_outage as construction_outage_helper
 from dcaf.project._builder_config import (
@@ -175,7 +179,8 @@ class ProjectCompiler:
 
         generation = self.build_generation()
 
-        construction_stream = self.build_construction()
+        construction = self.build_construction()
+        construction_stream = construction.total
         component_streams.add("construction", construction_stream)
 
         revenue_stream = self.build_revenue(generation)
@@ -213,10 +218,10 @@ class ProjectCompiler:
         depreciation_stream = self.build_depreciation(construction_stream)
         component_streams.add("depreciation", depreciation_stream)
 
-        debt_proceeds_stream = self.build_debt_proceeds(construction_stream)
+        debt_proceeds_stream = self.build_debt_proceeds(construction)
         component_streams.add("debt_proceeds", debt_proceeds_stream)
 
-        debt_stream = self.build_debt(construction_stream)
+        debt_stream = self.build_debt(debt_proceeds_stream)
         component_streams.add("debt_service", debt_stream)
 
         for name, stream in self.config.custom_cashflows.items():
@@ -527,23 +532,32 @@ class ProjectCompiler:
             day_count_convention=self.config.day_count_convention,
         )
 
-    def build_construction(self) -> CashFlowStream:
-        """Build the construction spend stream from project construction configuration.
+    def build_construction(self) -> ConstructionCashFlows:
+        """Build aggregate construction flows and their debt-funding bases.
 
-        Returns the pre-built stream directly when a stream override is provided.
-        When no spend profile is given, books the overnight cost as a single
-        cash flow on the COD date. Otherwise distributes the cost over the
-        construction period using the spend schedule.
+        A stream override populates only the aggregate because it cannot be
+        combined with construction debt. When no spend profile is given, the
+        overnight cost is a single pro-rata flow on the COD date. Otherwise the
+        construction builder separates scheduled spend from fully financed
+        capitalized interest while retaining paid interest only in the aggregate.
         """
         construction = self.config.construction
         if construction is None:
-            return CashFlowStream()
+            return ConstructionCashFlows(
+                total=CashFlowStream(),
+                pro_rata_debt_basis=CashFlowStream(),
+                full_debt_basis=CashFlowStream(),
+            )
         if isinstance(construction, CashFlowStream):
             if self.config.construction_debt is not None:
                 raise ValueError(
                     "construction stream overrides cannot be combined with construction debt"
                 )
-            return construction
+            return ConstructionCashFlows(
+                total=construction,
+                pro_rata_debt_basis=CashFlowStream(),
+                full_debt_basis=CashFlowStream(),
+            )
 
         # Resolve COD date: explicit > operations_start
         cod = (
@@ -554,7 +568,7 @@ class ProjectCompiler:
 
         # Overnight-only path: no spend profile, book as single cash flow at COD
         if construction.spend_profile is None:
-            return CashFlowStream(
+            construction_spend = CashFlowStream(
                 [
                     CashFlow(
                         amount=-abs(construction.overnight_cost),
@@ -565,6 +579,11 @@ class ProjectCompiler:
                     )
                 ]
             )
+            return ConstructionCashFlows(
+                total=construction_spend,
+                pro_rata_debt_basis=construction_spend,
+                full_debt_basis=CashFlowStream(),
+            )
 
         # Spend-profile path: distribute cost over construction period
         start = (
@@ -574,23 +593,12 @@ class ProjectCompiler:
         )
         end = construction.construction_end if construction.construction_end is not None else cod
 
-        # Convert ConstructionFinancingConfig to ConstructionFinancing for the
-        # lower-level construction_spend_schedule function.
+        # Convert the project configuration to the construction builder's
+        # financing configuration.
         financing = self.construction_financing(self.config.construction_debt)
 
         escalation = self.context.effective_escalation(construction.escalation)
-        if escalation.policy is not None:
-            return construction_spend_schedule(
-                total_cost=construction.overnight_cost,
-                start_date=start,
-                end_date=end,
-                period=construction.period,
-                profile=construction.spend_profile,
-                financing=financing,
-                escalation_policy=escalation.policy,
-                day_count_convention=self.config.day_count_convention,
-            )
-        return construction_spend_schedule(
+        builder = ConstructionSpendBuilder(
             total_cost=construction.overnight_cost,
             start_date=start,
             end_date=end,
@@ -602,6 +610,9 @@ class ProjectCompiler:
             amount_reference_date=escalation.amount_reference_date,
             day_count_convention=self.config.day_count_convention,
         )
+        if escalation.policy is not None:
+            builder = builder.escalation_policy(escalation.policy)
+        return builder.build_components()
 
     @staticmethod
     def construction_financing(
@@ -820,7 +831,7 @@ class ProjectCompiler:
             case _:
                 raise AssertionError("Unexpected depreciation config")
 
-    def build_debt_proceeds(self, construction_stream: CashFlowStream) -> CashFlowStream:
+    def build_debt_proceeds(self, construction: ConstructionCashFlows) -> CashFlowStream:
         """Build construction-debt funding entries at the underlying cost dates.
 
         Cash construction costs receive cash debt draws for the configured debt
@@ -836,9 +847,6 @@ class ProjectCompiler:
         if debt is None:
             return CashFlowStream()
 
-        capex = construction_stream.filter(pro_forma_category=ProFormaCategory.CAPITAL_COST)
-        cash_capex = capex.cash_only()
-        capitalized_interest = capex.filter(is_cash=False)
         cash_debt_proceeds = [
             flow.replace(
                 amount=-flow.amount * debt.debt_fraction,
@@ -846,7 +854,7 @@ class ProjectCompiler:
                 pro_forma_category=ProFormaCategory.FINANCING_PROCEEDS,
                 tax_treatment=TaxTreatment.NONE,
             )
-            for flow in cash_capex.entries
+            for flow in construction.pro_rata_debt_basis.entries
             if not isclose(flow.amount * debt.debt_fraction, 0.0)
         ]
         capitalized_interest_financing = [
@@ -856,19 +864,19 @@ class ProjectCompiler:
                 pro_forma_category=ProFormaCategory.FINANCING_PROCEEDS,
                 tax_treatment=TaxTreatment.NONE,
             )
-            for flow in capitalized_interest.entries
+            for flow in construction.full_debt_basis.entries
             if not isclose(flow.amount, 0.0)
         ]
         return CashFlowStream([*cash_debt_proceeds, *capitalized_interest_financing]).sort()
 
     def build_debt(
         self,
-        construction_stream: CashFlowStream,
+        debt_proceeds: CashFlowStream,
     ) -> CashFlowStream:
         """Build the debt service stream from construction debt or schedule config.
 
         Handles two paths: construction-debt-based amortization (principal
-        derived from construction draws) and explicit schedule overrides.
+        derived from recorded financing proceeds) and explicit schedule overrides.
         Returns an empty stream when no debt is configured.
         """
         # Explicit schedule override takes precedence
@@ -894,16 +902,13 @@ class ProjectCompiler:
         if debt is None:
             return CashFlowStream()
 
-        # Derive principal from construction draws
-        if not construction_stream.entries:
+        # Derive principal from the recorded construction financing.
+        if self.config.construction is None:
             raise ValueError(
                 "construction_debt requires a construction schedule to derive "
                 "the debt principal — call construction() first"
             )
-        capex = construction_stream.filter(pro_forma_category=ProFormaCategory.CAPITAL_COST)
-        debt_draws = abs(capex.cash_only().sum()) * debt.debt_fraction
-        capitalized_interest = abs(capex.filter(is_cash=False).sum())
-        principal = debt_draws + capitalized_interest
+        principal = debt_proceeds.sum()
 
         start = (
             debt.amortization_start

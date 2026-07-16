@@ -21,8 +21,7 @@ The project workflow uses a **levered LCOE / FCFE perspective** when constructio
 debt is configured. The objective includes the project's actual cash debt proceeds,
 interest payments, and principal repayments. Financing interest participates in the
 recomputed tax calculation according to its tax treatment. The discount rate must
-therefore be an equity-return rate, not WACC. UPRATE supplies its configured cost of
-equity for this purpose.
+therefore be an equity-return rate, not WACC.
 
 DCAF accepts the discount rate as a numeric input and cannot infer whether it is WACC
 or an equity-return rate. A caller relying on a WACC-derived project valuation default
@@ -38,8 +37,9 @@ The category selection is:
 - Excluded and replaced: existing revenue. The trial-price revenue stream replaces
   it.
 - Excluded and recomputed: the built-in ``project:tax_liability`` component.
-- Excluded from the final NPV directly: non-cash entries. They can still affect the
-  recomputed tax liability when they are taxable or deductible.
+- Excluded from the final NPV directly: non-cash entries (currently only capitalized
+  interest and depreciation). They can still affect the recomputed tax liability
+  when they are taxable or deductible.
 
 An unlevered LCOE would instead exclude financing proceeds, principal, interest, and
 their tax effects and use WACC. That is not the project-workflow definition selected

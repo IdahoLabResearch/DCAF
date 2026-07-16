@@ -6,7 +6,9 @@ import pytest
 from dcaf import EnergyProject
 from dcaf.finance import ConstantRateEscalation
 from dcaf.finance.amortization import AmortizationSchedule
+from dcaf.finance.construction import ConstructionCashFlows
 from dcaf.finance.opex import fixed_opex
+from dcaf.project._compiler import ProjectCompiler
 from dcaf.project.timeline import ProjectTimeline
 from dcaf.shared.time import PeriodTruncationWarning, ScheduleTruncationWarning
 from dcaf.shared.types import (
@@ -375,6 +377,41 @@ def test_energy_project_derives_debt_principal_from_construction():
 
     row_map = analysis.pro_forma(period="year").row_map()
     assert sum(row_map["Financing Proceeds"]) == pytest.approx(500.0)
+
+
+def test_debt_proceeds_use_explicit_bases_instead_of_cash_classification():
+    project = EnergyProject().construction_financing(
+        debt_fraction=0.5,
+        amortization_rate=0.0,
+        amortization_term=1,
+    )
+    compiler = ProjectCompiler.from_config(project._config)
+    pro_rata_flow = CashFlow(-100.0, date(2025, 1, 1), is_cash=False)
+    full_debt_flow = CashFlow(-20.0, date(2025, 2, 1), is_cash=True)
+    construction = ConstructionCashFlows(
+        total=CashFlowStream([pro_rata_flow, full_debt_flow]),
+        pro_rata_debt_basis=CashFlowStream([pro_rata_flow]),
+        full_debt_basis=CashFlowStream([full_debt_flow]),
+    )
+
+    proceeds = compiler.build_debt_proceeds(construction)
+
+    assert [flow.amount for flow in proceeds] == pytest.approx([50.0, 20.0])
+    assert [flow.is_cash for flow in proceeds] == [False, True]
+
+
+def test_construction_financing_requires_construction():
+    project = EnergyProject().construction_financing(
+        debt_fraction=0.5,
+        amortization_rate=0.0,
+        amortization_term=1,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="construction_debt requires a construction schedule",
+    ):
+        project.analyze()
 
 
 @pytest.mark.parametrize("debt_fraction", [0.0, 0.5, 1.0])
