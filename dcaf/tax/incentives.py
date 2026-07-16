@@ -1,3 +1,5 @@
+# © 2026 Battelle Energy Alliance, LLC
+# ALL RIGHTS RESERVED
 """Tax incentive functions for generation and capital investment.
 
 This module provides composable functions for computing production and investment

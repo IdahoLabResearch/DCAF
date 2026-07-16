@@ -1,3 +1,5 @@
+# © 2026 Battelle Energy Alliance, LLC
+# ALL RIGHTS RESERVED
 """Private configuration objects used by the project builder and compiler."""
 
 from __future__ import annotations

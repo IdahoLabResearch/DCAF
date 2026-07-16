@@ -1,3 +1,5 @@
+# © 2026 Battelle Energy Alliance, LLC
+# ALL RIGHTS RESERVED
 """Tests for day-count and year-length conventions."""
 
 from datetime import date

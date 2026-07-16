@@ -1,3 +1,5 @@
+# © 2026 Battelle Energy Alliance, LLC
+# ALL RIGHTS RESERVED
 """
 Core cashflow abstractions for discounted cash-flow analysis.
 

@@ -1,3 +1,5 @@
+# © 2026 Battelle Energy Alliance, LLC
+# ALL RIGHTS RESERVED
 """Internal generic stream and group helpers.
 
 These base classes collect the storage and collection mechanics shared by

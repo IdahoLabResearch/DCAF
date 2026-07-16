@@ -1,3 +1,5 @@
+# © 2026 Battelle Energy Alliance, LLC
+# ALL RIGHTS RESERVED
 """Example ``EnergyProject`` analysis for a nuclear plant uprate (simplified).
 
 This example uses much the same configuration as the example in nuclear_uprate_project.py.

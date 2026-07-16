@@ -1,3 +1,5 @@
+# © 2026 Battelle Energy Alliance, LLC
+# ALL RIGHTS RESERVED
 """Levelized cost of energy (LCOE) calculation."""
 
 from __future__ import annotations

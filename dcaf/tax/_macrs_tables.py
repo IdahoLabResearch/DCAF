@@ -1,3 +1,5 @@
+# © 2026 Battelle Energy Alliance, LLC
+# ALL RIGHTS RESERVED
 """IRS MACRS depreciation rate tables.
 
 The raw tables are kept private (``_MACRS_RATES``, ``_MACRS_MID_QUARTER_RATES``)

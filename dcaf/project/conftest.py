@@ -1,3 +1,5 @@
+# © 2026 Battelle Energy Alliance, LLC
+# ALL RIGHTS RESERVED
 """Defines helpful fixtures for running doctests in the project directory."""
 
 from datetime import date

@@ -1,3 +1,5 @@
+# © 2026 Battelle Energy Alliance, LLC
+# ALL RIGHTS RESERVED
 """Primitives-level DCAF analysis for a nuclear plant uprate.
 
 This example constructs the same uprate scenario using only the core stream

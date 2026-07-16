@@ -1,3 +1,5 @@
+# © 2026 Battelle Energy Alliance, LLC
+# ALL RIGHTS RESERVED
 """Unit tests for the function-based outage helpers in dcaf.finance.outage."""
 
 from datetime import date

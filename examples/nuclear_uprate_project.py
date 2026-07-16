@@ -1,3 +1,5 @@
+# © 2026 Battelle Energy Alliance, LLC
+# ALL RIGHTS RESERVED
 """Example ``EnergyProject`` analysis for a nuclear plant uprate.
 
 This example models an uprate project that adds 220 MW of generating capacity

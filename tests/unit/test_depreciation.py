@@ -1,3 +1,5 @@
+# © 2026 Battelle Energy Alliance, LLC
+# ALL RIGHTS RESERVED
 """Tests for variable declining balance depreciation."""
 
 from datetime import date

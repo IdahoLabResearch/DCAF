@@ -1,3 +1,5 @@
+# © 2026 Battelle Energy Alliance, LLC
+# ALL RIGHTS RESERVED
 """Shared time and compounding utilities."""
 
 from dataclasses import dataclass

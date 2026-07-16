@@ -1,3 +1,5 @@
+# © 2026 Battelle Energy Alliance, LLC
+# ALL RIGHTS RESERVED
 """Tests for debt amortization schedule generation."""
 
 from datetime import date

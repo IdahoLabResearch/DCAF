@@ -1,3 +1,5 @@
+# © 2026 Battelle Energy Alliance, LLC
+# ALL RIGHTS RESERVED
 """Pre-defined construction spend curves for capital project financial modeling.
 
 Each curve is a ``SpendSchedule``: a tuple of ``(duration_fraction, spend_fraction)``

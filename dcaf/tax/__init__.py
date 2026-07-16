@@ -1,3 +1,5 @@
+# © 2026 Battelle Energy Alliance, LLC
+# ALL RIGHTS RESERVED
 """Tax and depreciation modeling helpers."""
 
 from dcaf.tax._macrs_tables import get_macrs_mid_quarter_rates, get_macrs_rates

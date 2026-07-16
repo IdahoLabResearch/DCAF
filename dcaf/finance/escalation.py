@@ -1,3 +1,5 @@
+# © 2026 Battelle Energy Alliance, LLC
+# ALL RIGHTS RESERVED
 """Shared escalation policies for date-based cost and price adjustment.
 
 This module provides the reusable building blocks for escalation across DCAF.

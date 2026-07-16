@@ -1,3 +1,5 @@
+# © 2026 Battelle Energy Alliance, LLC
+# ALL RIGHTS RESERVED
 """DCAF high-level project modeling API.
 
 The package root is the library front door. It exposes the project-oriented

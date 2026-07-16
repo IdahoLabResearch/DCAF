@@ -1,3 +1,5 @@
+# © 2026 Battelle Energy Alliance, LLC
+# ALL RIGHTS RESERVED
 """Financial building blocks used by project and stream models.
 
 Escalation and spend-curve helpers are re-exported here for convenience.

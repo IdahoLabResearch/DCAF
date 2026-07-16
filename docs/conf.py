@@ -1,10 +1,12 @@
+# © 2026 Battelle Energy Alliance, LLC
+# ALL RIGHTS RESERVED
 import os
 import sys
 
 sys.path.insert(0, os.path.abspath(".."))
 
 project = "DCAF"
-project_copyright = "2025, Batelle Energy Alliance"
+project_copyright = "2026, Battelle Energy Alliance, LLC"
 author = "Statisical Simulation & Optimization Dept."
 release = "0.0.0"
 

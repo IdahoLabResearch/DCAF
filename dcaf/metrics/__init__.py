@@ -1,3 +1,5 @@
+# © 2026 Battelle Energy Alliance, LLC
+# ALL RIGHTS RESERVED
 """Financial metric calculations.
 
 Standalone functions for NPV, IRR, and LCOE that serve as the single

@@ -1,3 +1,5 @@
+# © 2026 Battelle Energy Alliance, LLC
+# ALL RIGHTS RESERVED
 """Project-level APIs for composing and analyzing DCAF models."""
 
 from dcaf.project.analysis import (

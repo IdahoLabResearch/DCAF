@@ -1,3 +1,5 @@
+# © 2026 Battelle Energy Alliance, LLC
+# ALL RIGHTS RESERVED
 """Tests for the timing convention feature.
 
 Verifies that CashFlow and Generation events are dated according to the

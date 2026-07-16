@@ -1,3 +1,5 @@
+# © 2026 Battelle Energy Alliance, LLC
+# ALL RIGHTS RESERVED
 """High-level project builder APIs for composing DCAF analyses.
 
 This module provides an explicit ``EnergyProject`` builder that wraps the

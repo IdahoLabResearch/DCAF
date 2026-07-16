@@ -1,3 +1,5 @@
+# © 2026 Battelle Energy Alliance, LLC
+# ALL RIGHTS RESERVED
 """Tests for MACRS depreciation and public reference-table accessors."""
 
 from datetime import date

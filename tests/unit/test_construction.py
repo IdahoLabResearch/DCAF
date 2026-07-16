@@ -1,3 +1,5 @@
+# © 2026 Battelle Energy Alliance, LLC
+# ALL RIGHTS RESERVED
 """Tests for construction spend schedule APIs, helpers, and reference accessors."""
 
 import inspect

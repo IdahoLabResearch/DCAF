@@ -1,3 +1,5 @@
+# © 2026 Battelle Energy Alliance, LLC
+# ALL RIGHTS RESERVED
 """Shared types and utility functions."""
 
 from dcaf.shared.formatting import format_label

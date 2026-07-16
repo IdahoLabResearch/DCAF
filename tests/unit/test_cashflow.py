@@ -1,3 +1,5 @@
+# © 2026 Battelle Energy Alliance, LLC
+# ALL RIGHTS RESERVED
 from dataclasses import FrozenInstanceError
 from datetime import date
 import pytest

@@ -1,3 +1,5 @@
+# © 2026 Battelle Energy Alliance, LLC
+# ALL RIGHTS RESERVED
 """Shared type aliases, enums, and parsing helpers used across DCAF.
 
 Defines the constrained vocabularies the rest of the library builds on:

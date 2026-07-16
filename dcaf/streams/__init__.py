@@ -1,3 +1,5 @@
+# © 2026 Battelle Energy Alliance, LLC
+# ALL RIGHTS RESERVED
 """Stream-oriented financial and generation primitives."""
 
 from dcaf.streams.cashflows import CashFlow, CashFlowGroup, CashFlowStream

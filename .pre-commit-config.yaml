@@ -10,6 +10,11 @@ repos:
 # Run tests, including doctests
 -   repo: local
     hooks:
+    -   id: copyright-header
+        name: copyright header
+        entry: python scripts/check_copyright.py
+        language: system
+        types: [python]
     -   id: pytest
         name: pytest
         entry: uv run pytest

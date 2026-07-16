@@ -1,3 +1,5 @@
+# © 2026 Battelle Energy Alliance, LLC
+# ALL RIGHTS RESERVED
 """Construction spend schedule modeling for capital project financial analysis."""
 
 from __future__ import annotations

@@ -1,3 +1,5 @@
+# © 2026 Battelle Energy Alliance, LLC
+# ALL RIGHTS RESERVED
 """Tests for Generation, GenerationStream, and GenerationGroup."""
 
 from datetime import date

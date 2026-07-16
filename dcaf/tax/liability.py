@@ -1,3 +1,5 @@
+# © 2026 Battelle Energy Alliance, LLC
+# ALL RIGHTS RESERVED
 """Tax liability calculation functions.
 
 This module provides functions for computing taxable income and generating tax liability

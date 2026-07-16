@@ -1,3 +1,5 @@
+# © 2026 Battelle Energy Alliance, LLC
+# ALL RIGHTS RESERVED
 """Mid-level DCAF analysis for a nuclear plant uprate.
 
 This example assembles the same uprate scenario as ``nuclear_uprate_project.py``

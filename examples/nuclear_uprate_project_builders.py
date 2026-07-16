@@ -1,3 +1,5 @@
+# © 2026 Battelle Energy Alliance, LLC
+# ALL RIGHTS RESERVED
 """Builder-level DCAF analysis for a nuclear plant uprate.
 
 This example demonstrates the customizable builder class APIs available in DCAF's
