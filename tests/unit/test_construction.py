@@ -801,6 +801,58 @@ def test_capitalized_interest_accumulates():
     assert amounts[-1] > amounts[0]
 
 
+def test_build_components_separates_pro_rata_and_full_debt_bases():
+    builder = ConstructionSpendBuilder(
+        1_000_000,
+        date(2025, 1, 1),
+        date(2026, 1, 1),
+        profile="linear",
+        financing=ConstructionFinancing.debt(
+            0.5,
+            interest_rate=0.06,
+            treatment="capitalize",
+        ),
+    )
+
+    components = builder.build_components()
+
+    assert components.total.entries == builder.build().entries
+    assert components.pro_rata_debt_basis.entries
+    assert components.full_debt_basis.entries
+    assert all(flow.label == "Construction Spend" for flow in components.pro_rata_debt_basis)
+    assert all(flow.label == "Capitalized Interest" for flow in components.full_debt_basis)
+    assert (
+        components.total.entries
+        == CashFlowStream.from_streams(
+            components.pro_rata_debt_basis,
+            components.full_debt_basis,
+        )
+        .sort()
+        .entries
+    )
+
+
+def test_build_components_keeps_paid_interest_outside_debt_bases():
+    components = ConstructionSpendBuilder(
+        1_000_000,
+        date(2025, 1, 1),
+        date(2026, 1, 1),
+        profile="linear",
+        financing=ConstructionFinancing.debt(
+            0.5,
+            interest_rate=0.06,
+            treatment="pay",
+        ),
+    ).build_components()
+
+    paid_interest = components.total.filter(pro_forma_category=ProFormaCategory.FINANCING_INTEREST)
+
+    assert paid_interest.entries
+    assert components.pro_rata_debt_basis.entries
+    assert not components.full_debt_basis.entries
+    assert all(flow.label == "Construction Spend" for flow in components.pro_rata_debt_basis)
+
+
 def test_paid_interest_does_not_accumulate_on_balance():
     paid_stream = construction_spend_schedule(
         1_000_000,

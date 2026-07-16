@@ -45,8 +45,10 @@ project = project.construction_financing(
 )
 ```
 
-This adds `debt_service` interest and principal components. Interest is tax
-deductible, so it automatically reduces taxable income (the interest tax shield).
+This adds `debt_proceeds` funding entries at the construction cost dates and
+`debt_service` interest and principal components during operations. The proceeds
+are tax-neutral. Interest is tax deductible, so it automatically reduces taxable
+income (the interest tax shield).
 
 ### Bring your own schedule
 

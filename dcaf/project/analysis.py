@@ -131,6 +131,7 @@ class ProjectProForma:
     Tax Credits (...)
     Capital Costs (...)
     Free Cash Flow to the Firm (...)
+    Financing Proceeds (...)
     Financing Interest (...)
     Interest Tax Shield (...)
     Financing Principal (...)
@@ -367,6 +368,7 @@ class ProjectAnalysis:
         taxes = self._cashflows_for_category(ProFormaCategory.TAX)
         tax_credits = self._cashflows_for_category(ProFormaCategory.TAX_CREDIT)
         capital_costs = self._cashflows_for_category(ProFormaCategory.CAPITAL_COST)
+        financing_proceeds = self._cashflows_for_category(ProFormaCategory.FINANCING_PROCEEDS)
         financing_interest = self._cashflows_for_category(ProFormaCategory.FINANCING_INTEREST)
         financing_principal = self._cashflows_for_category(ProFormaCategory.FINANCING_PRINCIPAL)
         interest_tax_shield = self._interest_tax_shield()
@@ -381,7 +383,11 @@ class ProjectAnalysis:
             revenues, operating_costs, taxes, tax_credits, capital_costs, shield_adjustment
         )
         free_cash_flow_to_equity = CashFlowStream.from_streams(
-            free_cash_flow_to_firm, financing_interest, financing_principal, interest_tax_shield
+            free_cash_flow_to_firm,
+            financing_proceeds,
+            financing_interest,
+            financing_principal,
+            interest_tax_shield,
         )
 
         summary_streams = (
@@ -394,6 +400,7 @@ class ProjectAnalysis:
             ("Tax Credits", tax_credits),
             ("Capital Costs", capital_costs),
             ("Free Cash Flow to the Firm", free_cash_flow_to_firm),
+            ("Financing Proceeds", financing_proceeds),
             ("Financing Interest", financing_interest),
             ("Interest Tax Shield", interest_tax_shield),
             ("Financing Principal", financing_principal),

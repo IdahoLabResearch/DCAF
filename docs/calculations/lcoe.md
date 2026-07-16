@@ -15,6 +15,36 @@ $$
 The solve is price-aware about taxes: at each trial price the revenue changes, so
 taxable income — and therefore the tax cash flow — is recomputed.
 
+## Cash-flow perspective
+
+The project workflow uses a **levered LCOE / FCFE perspective** when construction
+debt is configured. The objective includes the project's actual cash debt proceeds,
+interest payments, and principal repayments. Financing interest participates in the
+recomputed tax calculation according to its tax treatment. The discount rate must
+therefore be an equity-return rate, not WACC.
+
+DCAF accepts the discount rate as a numeric input and cannot infer whether it is WACC
+or an equity-return rate. A caller relying on a WACC-derived project valuation default
+must explicitly override ``metrics(discount_rate=...)`` with the equity-return rate
+when financing cash flows are present.
+
+The category selection is:
+
+- Included: capital costs, operating costs, financing proceeds, financing interest,
+  financing principal, tax credits, and other project cash flows.
+- Included through recomputed taxes: taxable and deductible entries, including
+  non-cash depreciation.
+- Excluded and replaced: existing revenue. The trial-price revenue stream replaces
+  it.
+- Excluded and recomputed: the built-in ``project:tax_liability`` component.
+- Excluded from the final NPV directly: non-cash entries (currently only capitalized
+  interest and depreciation). They can still affect the recomputed tax liability
+  when they are taxable or deductible.
+
+An unlevered LCOE would instead exclude financing proceeds, principal, interest, and
+their tax effects and use WACC. That is not the project-workflow definition selected
+here.
+
 ## Algorithm
 
 The objective function ({py:func}`dcaf.metrics.lcoe` → `_lcoe_objective`) evaluates
