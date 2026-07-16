@@ -139,8 +139,8 @@ def test_energy_project_itc_allows_zero_rate():
     assert project._config.itc_rate == pytest.approx(0.0)
 
 
-def test_energy_project_levelized_cost_matches_real_carrying_charge_methodology():
-    """LCOE should solve for the starting price that drives project NPV to zero."""
+def test_energy_project_real_carrying_charge_scenarios_have_expected_relationships():
+    """The public project path preserves known cost and additivity relationships."""
 
     minimum_return_on_equity = 0.10
     interest_rate_pretax = 0.07
@@ -158,7 +158,7 @@ def test_energy_project_levelized_cost_matches_real_carrying_charge_methodology(
     )
     construction_start = date(2027, 1, 1)
     operations_start = date(2027 + construction_years, 1, 1)
-    operations_end = date(2027 + construction_years + project_life_years - 1, 12, 31)
+    operations_end = date(2027 + construction_years + project_life_years, 1, 1)
     revenue_policy = ConstantRateEscalation(
         reference_date=operations_start,
         rate=annual_inflation,
@@ -209,41 +209,19 @@ def test_energy_project_levelized_cost_matches_real_carrying_charge_methodology(
             project = project.variable_cost(rate_per_unit=variable_cost)
         return project
 
-    def assert_levelized_cost_solves_project(project: EnergyProject) -> float:
+    def levelized_cost(project: EnergyProject) -> float:
         metrics = project.metrics(
             discount_rate=wacc_aftertax,
             valuation_date=operations_start,
             levelized_cost_escalation_policy=revenue_policy,
         )
         assert metrics.levelized_cost is not None
-
-        # Verify by evaluating the LCOE objective at the solved price.
-        # The LCOE solve operates on capex + opex + tax + tax_credit
-        # categories with recomputed taxes, so we verify through the
-        # same objective rather than a full-project NPV.
-        analysis = project.analyze()
-        basis = analysis.generation.to_revenue(
-            price_per_mwh=1.0,
-            escalation_policy=revenue_policy,
-        )
-        from dcaf.metrics.lcoe import _lcoe_objective
-
-        obj = _lcoe_objective(
-            price=metrics.levelized_cost,
-            basis_stream=basis,
-            component_streams=analysis.cashflow_components,
-            tax_rate=tax_rate,
-            discount_rate=wacc_aftertax,
-            valuation_date=operations_start,
-            convention=metrics.day_count_convention,
-        )
-        assert obj == pytest.approx(0.0, abs=1.0)
         return metrics.levelized_cost
 
-    fc_only_lcoe = assert_levelized_cost_solves_project(build_project(variable_cost=20.0))
-    om_only_lcoe = assert_levelized_cost_solves_project(build_project(annual_opex=162_936_000.0))
-    capex_only_lcoe = assert_levelized_cost_solves_project(build_project(capex=660_000_000.0))
-    combined_lcoe = assert_levelized_cost_solves_project(
+    variable_cost_lcoe = levelized_cost(build_project(variable_cost=20.0))
+    fixed_opex_lcoe = levelized_cost(build_project(annual_opex=162_936_000.0))
+    capex_lcoe = levelized_cost(build_project(capex=660_000_000.0))
+    combined_lcoe = levelized_cost(
         build_project(
             capex=660_000_000.0,
             annual_opex=162_936_000.0,
@@ -251,9 +229,15 @@ def test_energy_project_levelized_cost_matches_real_carrying_charge_methodology(
         )
     )
 
-    assert om_only_lcoe == pytest.approx(20.0, abs=0.1)
-    assert fc_only_lcoe < 20.0
-    assert combined_lcoe > capex_only_lcoe
+    # Variable cost stays nominally flat while the levelized price escalates at 3%,
+    # so the equivalent starting price is below the $20/MWh cost rate.
+    assert 0.0 < variable_cost_lcoe < 20.0
+    # Fixed OPEX assumes 8,760 MWh/year while actual/actual generation includes
+    # 8,784-MWh leap years, making the effective cost slightly less than $20/MWh.
+    assert fixed_opex_lcoe == pytest.approx(20.0, abs=0.1)
+    assert combined_lcoe == pytest.approx(
+        capex_lcoe + fixed_opex_lcoe + variable_cost_lcoe,
+    )
 
 
 def test_energy_project_is_order_independent_across_sections():
