@@ -40,6 +40,7 @@ class ProFormaCategory(StrEnum):
     TAX = "tax"
     TAX_CREDIT = "tax_credit"
     DEPRECIATION = "depreciation"
+    FINANCING_PROCEEDS = "financing_proceeds"
     FINANCING_INTEREST = "financing_interest"
     FINANCING_PRINCIPAL = "financing_principal"
     OTHER = "other"

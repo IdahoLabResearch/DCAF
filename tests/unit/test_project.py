@@ -311,7 +311,26 @@ def test_energy_project_derives_debt_principal_from_construction():
     )
 
     analysis = project.analyze()
+    debt_proceeds = analysis.cashflow_components["debt_proceeds"]
+    cash_capex = analysis.cashflow_components["construction"].filter(
+        pro_forma_category=ProFormaCategory.CAPITAL_COST,
+        is_cash=True,
+    )
+
+    assert debt_proceeds.sum() == pytest.approx(500.0)
+    assert debt_proceeds.cash_only().sum() == pytest.approx(500.0)
+    assert [flow.date for flow in debt_proceeds] == [flow.date for flow in cash_capex]
+    assert [flow.amount for flow in debt_proceeds] == pytest.approx(
+        [-flow.amount * 0.5 for flow in cash_capex]
+    )
+    assert {flow.pro_forma_category for flow in debt_proceeds} == {
+        ProFormaCategory.FINANCING_PROCEEDS
+    }
+    assert {flow.tax_treatment for flow in debt_proceeds} == {TaxTreatment.NONE}
     assert analysis.cashflow_components["debt_service"].sum() == pytest.approx(-550.0)
+
+    row_map = analysis.pro_forma(period="year").row_map()
+    assert sum(row_map["Financing Proceeds"]) == pytest.approx(500.0)
 
 
 def test_energy_project_generation_stream_sets_generation_explicitly():
@@ -922,6 +941,7 @@ def test_project_pro_forma_groups_categories_and_computes_subtotals():
         "Tax Credits",
         "Capital Costs",
         "Free Cash Flow to the Firm",
+        "Financing Proceeds",
         "Financing Interest",
         "Interest Tax Shield",
         "Financing Principal",
@@ -941,6 +961,7 @@ def test_project_pro_forma_groups_categories_and_computes_subtotals():
     assert row_map["Tax Credits"] == pytest.approx((10.0,))
     assert row_map["Capital Costs"] == pytest.approx((-100.0,))
     assert row_map["Free Cash Flow to the Firm"] == pytest.approx((34.0,))
+    assert row_map["Financing Proceeds"] == pytest.approx((0.0,))
     assert row_map["Financing Interest"] == pytest.approx((-10.0,))
     assert row_map["Interest Tax Shield"] == pytest.approx((2.0,))
     assert row_map["Financing Principal"] == pytest.approx((-100.0,))
@@ -952,6 +973,7 @@ def test_project_pro_forma_groups_categories_and_computes_subtotals():
     assert row_map["depreciation"] == pytest.approx((-20.0,))
     assert row_map["tax_credit"] == pytest.approx((10.0,))
     assert row_map["debt_service"] == pytest.approx((-110.0,))
+    assert "debt_proceeds" not in row_map
     assert "project:tax_liability" not in row_map
 
 
@@ -1200,6 +1222,8 @@ def test_energy_project_debt_principal_capitalize_vs_pay():
 
     cap_debt = abs(capitalize_analysis.cashflow_components["debt_service"].sum())
     pay_debt = abs(pay_analysis.cashflow_components["debt_service"].sum())
+    cap_proceeds = capitalize_analysis.cashflow_components["debt_proceeds"]
+    pay_proceeds = pay_analysis.cashflow_components["debt_proceeds"]
 
     # Both should have debt service
     assert cap_debt > 0.0
@@ -1207,6 +1231,26 @@ def test_energy_project_debt_principal_capitalize_vs_pay():
 
     # Capitalize mode rolls interest into the principal, producing larger debt service
     assert cap_debt > pay_debt
+
+    cap_principal = abs(
+        capitalize_analysis.cashflow_components["debt_service"]
+        .filter(pro_forma_category=ProFormaCategory.FINANCING_PRINCIPAL)
+        .sum()
+    )
+    capitalized_interest_stream = capitalize_analysis.cashflow_components["construction"].filter(
+        is_cash=False
+    )
+    capitalized_interest = abs(capitalized_interest_stream.sum())
+    capitalized_interest_financing = cap_proceeds.filter(is_cash=False)
+    assert cap_proceeds.sum() == pytest.approx(cap_principal)
+    assert capitalized_interest_financing.sum() == pytest.approx(capitalized_interest)
+    assert [flow.date for flow in capitalized_interest_financing] == [
+        flow.date for flow in capitalized_interest_stream
+    ]
+    assert [flow.amount for flow in capitalized_interest_financing] == pytest.approx(
+        [-flow.amount for flow in capitalized_interest_stream]
+    )
+    assert pay_proceeds.filter(is_cash=False).sum() == pytest.approx(0.0)
 
     # Verify the pay mode principal derives only from cash capex
     construction = pay_analysis.cashflow_components["construction"]

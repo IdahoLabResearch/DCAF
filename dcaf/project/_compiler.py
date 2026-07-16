@@ -213,6 +213,9 @@ class ProjectCompiler:
         depreciation_stream = self.build_depreciation(construction_stream)
         component_streams.add("depreciation", depreciation_stream)
 
+        debt_proceeds_stream = self.build_debt_proceeds(construction_stream)
+        component_streams.add("debt_proceeds", debt_proceeds_stream)
+
         debt_stream = self.build_debt(construction_stream)
         component_streams.add("debt_service", debt_stream)
 
@@ -816,6 +819,47 @@ class ProjectCompiler:
                 )
             case _:
                 raise AssertionError("Unexpected depreciation config")
+
+    def build_debt_proceeds(self, construction_stream: CashFlowStream) -> CashFlowStream:
+        """Build construction-debt funding entries at the underlying cost dates.
+
+        Cash construction costs receive cash debt draws for the configured debt
+        fraction. Capitalized construction interest receives an equal non-cash
+        financing entry because it is added in full to permanent debt principal.
+        Explicit debt schedules do not provide draw timing, so no proceeds are
+        inferred for that path.
+        """
+        if self.config.debt_schedule is not None:
+            return CashFlowStream()
+
+        debt = self.config.construction_debt
+        if debt is None:
+            return CashFlowStream()
+
+        capex = construction_stream.filter(pro_forma_category=ProFormaCategory.CAPITAL_COST)
+        cash_capex = capex.cash_only()
+        capitalized_interest = capex.filter(is_cash=False)
+        cash_debt_proceeds = [
+            flow.replace(
+                amount=-flow.amount * debt.debt_fraction,
+                label="Construction Debt Proceeds",
+                pro_forma_category=ProFormaCategory.FINANCING_PROCEEDS,
+                tax_treatment=TaxTreatment.NONE,
+            )
+            for flow in cash_capex.entries
+            if not isclose(flow.amount * debt.debt_fraction, 0.0)
+        ]
+        capitalized_interest_financing = [
+            flow.replace(
+                amount=-flow.amount,
+                label="Capitalized Interest Financing",
+                pro_forma_category=ProFormaCategory.FINANCING_PROCEEDS,
+                tax_treatment=TaxTreatment.NONE,
+            )
+            for flow in capitalized_interest.entries
+            if not isclose(flow.amount, 0.0)
+        ]
+        return CashFlowStream([*cash_debt_proceeds, *capitalized_interest_financing]).sort()
 
     def build_debt(
         self,
