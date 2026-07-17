@@ -210,8 +210,8 @@ class TestLcoe:
         )
         assert result == pytest.approx(0.0, abs=1e-6)
 
-    def test_lcoe_drives_npv_to_zero(self):
-        """The LCOE price applied to the basis stream should yield NPV ~ 0."""
+    def test_lcoe_solution_zeros_simple_no_tax_objective(self):
+        """The root solver returns a price that zeros a simple no-tax objective."""
         vdate = date(2025, 1, 1)
         rate = 0.08
 
@@ -247,3 +247,235 @@ class TestLcoe:
         revenue = basis.scale(price)
         total = CashFlowStream.from_streams(CashFlowStream([cost]), revenue)
         assert total.npv(rate, vdate) == pytest.approx(0.0, abs=1e-3)
+
+    def test_lcoe_matches_discounted_cost_over_unit_revenue_basis_without_taxes(self):
+        """No-tax LCOE is the hand-derived ratio of discounted costs to revenue basis."""
+        valuation_date = date(2025, 1, 1)
+        year_1 = date(2026, 1, 1)
+        year_2 = date(2027, 1, 1)
+        discount_rate = 0.08
+        basis = CashFlowStream(
+            [
+                CashFlow(1_000.0, year_1, tax_treatment=TaxTreatment.TAXABLE),
+                CashFlow(1_000.0, year_2, tax_treatment=TaxTreatment.TAXABLE),
+            ]
+        )
+        components = CashFlowGroup(
+            {
+                "capex": CashFlowStream(
+                    [
+                        CashFlow(
+                            -1_500.0,
+                            valuation_date,
+                            pro_forma_category=ProFormaCategory.CAPITAL_COST,
+                        )
+                    ]
+                ),
+                "opex": CashFlowStream(
+                    [
+                        CashFlow(
+                            -200.0,
+                            year_1,
+                            pro_forma_category=ProFormaCategory.OPERATING_COST,
+                        ),
+                        CashFlow(
+                            -200.0,
+                            year_2,
+                            pro_forma_category=ProFormaCategory.OPERATING_COST,
+                        ),
+                    ]
+                ),
+            }
+        )
+
+        discounted_costs = 1_500.0 + 200.0 / 1.08 + 200.0 / 1.08**2
+        discounted_unit_revenue = 1_000.0 / 1.08 + 1_000.0 / 1.08**2
+        expected_lcoe = discounted_costs / discounted_unit_revenue
+
+        assert lcoe(
+            basis_stream=basis,
+            component_streams=components,
+            tax_rate=None,
+            discount_rate=discount_rate,
+            valuation_date=valuation_date,
+        ) == pytest.approx(expected_lcoe)
+
+    def test_lcoe_matches_hand_case_with_taxes_credit_and_depreciation_shield(self):
+        """Tax-aware LCOE includes after-tax OPEX, credits, and non-cash depreciation."""
+        # All cash flows are logged on the same flow_date to remove discounting effects
+        flow_date = date(2025, 1, 1)
+        basis = CashFlowStream([CashFlow(1_000.0, flow_date, tax_treatment=TaxTreatment.TAXABLE)])
+        components = CashFlowGroup(
+            {
+                "capex": CashFlowStream(
+                    [
+                        CashFlow(
+                            -1_000.0,
+                            flow_date,
+                            pro_forma_category=ProFormaCategory.CAPITAL_COST,
+                        )
+                    ]
+                ),
+                "opex": CashFlowStream(
+                    [
+                        CashFlow(
+                            -100.0,
+                            flow_date,
+                            pro_forma_category=ProFormaCategory.OPERATING_COST,
+                            tax_treatment=TaxTreatment.DEDUCTIBLE,
+                        )
+                    ]
+                ),
+                "depreciation": CashFlowStream(
+                    [
+                        CashFlow(
+                            -500.0,
+                            flow_date,
+                            is_cash=False,
+                            pro_forma_category=ProFormaCategory.DEPRECIATION,
+                            tax_treatment=TaxTreatment.DEDUCTIBLE,
+                        )
+                    ]
+                ),
+                "credit": CashFlowStream(
+                    [
+                        CashFlow(
+                            100.0,
+                            flow_date,
+                            pro_forma_category=ProFormaCategory.TAX_CREDIT,
+                        )
+                    ]
+                ),
+            }
+        )
+
+        # At $1.10/MWh and a 20% tax rate, taxable income is $500 and tax is a $100 outflow:
+        # -1000 capex - 100 opex + 100 credit + 1100 revenue - 100 tax = 0.
+        expected_lcoe = 1.10
+
+        assert lcoe(
+            basis_stream=basis,
+            component_streams=components,
+            tax_rate=0.20,
+            discount_rate=0.0,
+            valuation_date=flow_date,
+        ) == pytest.approx(expected_lcoe)
+
+    def test_lcoe_assumes_symmetric_tax_refunds_for_negative_taxable_income(self):
+        """LCOE intentionally assumes ``allow_refund=True`` when taxable income is negative."""
+        # All cash flows are logged on the same flow_date to remove discounting effects
+        flow_date = date(2025, 1, 1)
+        basis = CashFlowStream([CashFlow(1_000.0, flow_date, tax_treatment=TaxTreatment.TAXABLE)])
+        components = CashFlowGroup(
+            {
+                "capex": CashFlowStream(
+                    [
+                        CashFlow(
+                            -1_000.0,
+                            flow_date,
+                            pro_forma_category=ProFormaCategory.CAPITAL_COST,
+                        )
+                    ]
+                ),
+                "depreciation": CashFlowStream(
+                    [
+                        CashFlow(
+                            -850.0,
+                            flow_date,
+                            is_cash=False,
+                            pro_forma_category=ProFormaCategory.DEPRECIATION,
+                            tax_treatment=TaxTreatment.DEDUCTIBLE,
+                        )
+                    ]
+                ),
+                "credit": CashFlowStream(
+                    [
+                        CashFlow(
+                            300.0,
+                            flow_date,
+                            pro_forma_category=ProFormaCategory.TAX_CREDIT,
+                        )
+                    ]
+                ),
+            }
+        )
+
+        # Assumption: the LCOE objective treats tax losses symmetrically as refunds.
+        # At $0.6625/MWh, taxable income is revenue-depreciation=-$187.50 and the
+        # -187.5*tax_rate=$37.50 refund balances cash:
+        # -1000 capex + 300 credit + 662.50 revenue + 37.50 refund = 0.
+        expected_lcoe = 0.6625
+
+        assert lcoe(
+            basis_stream=basis,
+            component_streams=components,
+            tax_rate=0.20,
+            discount_rate=0.0,
+            valuation_date=flow_date,
+        ) == pytest.approx(expected_lcoe)
+
+    def test_lcoe_replaces_existing_revenue_and_tax_liability(self):
+        """Existing revenue and tax results are replaced before solving LCOE.
+
+        The baseline contains only $1,000 of CAPEX. The comparison adds
+        intentionally huge existing market-revenue and project-tax cashflows.
+        LCOE must discard both, inject ``price * 1,000`` of taxable revenue from
+        the unit-price basis, and recompute tax at 20%. Both component groups
+        therefore solve ``-1,000 + (1 - 0.20) * 1,000 * price = 0``, producing
+        the same independently derived LCOE of $1.25/MWh.
+        """
+        flow_date = date(2025, 1, 1)
+        basis = CashFlowStream([CashFlow(1_000.0, flow_date, tax_treatment=TaxTreatment.TAXABLE)])
+        capex = CashFlowStream(
+            [
+                CashFlow(
+                    -1_000.0,
+                    flow_date,
+                    pro_forma_category=ProFormaCategory.CAPITAL_COST,
+                )
+            ]
+        )
+        baseline = CashFlowGroup({"capex": capex})
+        with_existing_results = CashFlowGroup(
+            {
+                "capex": capex,
+                "market_revenue": CashFlowStream(
+                    [
+                        CashFlow(
+                            1_000_000.0,
+                            flow_date,
+                            pro_forma_category=ProFormaCategory.REVENUE,
+                            tax_treatment=TaxTreatment.TAXABLE,
+                        )
+                    ]
+                ),
+                "project:tax_liability": CashFlowStream(
+                    [
+                        CashFlow(
+                            -200_000.0,
+                            flow_date,
+                            pro_forma_category=ProFormaCategory.TAX,
+                        )
+                    ]
+                ),
+            }
+        )
+        expected_lcoe = 1_000.0 / ((1.0 - 0.20) * 1_000.0)
+
+        baseline_lcoe = lcoe(
+            basis_stream=basis,
+            component_streams=baseline,
+            tax_rate=0.20,
+            discount_rate=0.0,
+            valuation_date=flow_date,
+        )
+        lcoe_with_existing_results = lcoe(
+            basis_stream=basis,
+            component_streams=with_existing_results,
+            tax_rate=0.20,
+            discount_rate=0.0,
+            valuation_date=flow_date,
+        )
+
+        assert baseline_lcoe == pytest.approx(expected_lcoe)
+        assert lcoe_with_existing_results == pytest.approx(expected_lcoe)
