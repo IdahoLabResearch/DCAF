@@ -9,7 +9,11 @@ financial primitives live in dedicated subpackages such as :mod:`dcaf.streams`,
 """
 
 from dcaf.project import (
+    GenerationPrice,
+    GenerationSettlementEvent,
     EnergyProject,
+    EnergyContract,
+    GenerationLinkedCashFlowPolicy,
     ProjectAnalysis,
     ProjectMetrics,
     ProjectProForma,
@@ -19,7 +23,11 @@ from dcaf.project import (
 )
 
 __all__ = [
+    "GenerationPrice",
+    "GenerationSettlementEvent",
     "EnergyProject",
+    "EnergyContract",
+    "GenerationLinkedCashFlowPolicy",
     "ProjectAnalysis",
     "ProjectMetrics",
     "ProjectProForma",

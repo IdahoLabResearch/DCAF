@@ -12,6 +12,7 @@ wheels/
 
 # AI
 .claude/
+.codex/
 
 # Documentation artifacts
 docs/_build/

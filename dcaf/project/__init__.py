@@ -10,9 +10,15 @@ from dcaf.project.analysis import (
 )
 from dcaf.project.builder import EnergyProject
 from dcaf.project.config import ProjectValuation, wacc
+from dcaf.project.contracts import EnergyContract, GenerationPrice, GenerationSettlementEvent
+from dcaf.project.policies import GenerationLinkedCashFlowPolicy
 
 __all__ = [
+    "GenerationPrice",
+    "GenerationSettlementEvent",
     "EnergyProject",
+    "EnergyContract",
+    "GenerationLinkedCashFlowPolicy",
     "ProjectAnalysis",
     "ProjectMetrics",
     "ProjectProForma",

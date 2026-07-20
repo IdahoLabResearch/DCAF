@@ -5,7 +5,7 @@ import csv
 
 import pytest
 
-from dcaf import EnergyProject
+from dcaf import GenerationPrice, EnergyProject
 from dcaf.finance import ConstantRateEscalation
 from dcaf.finance.amortization import AmortizationSchedule
 from dcaf.finance.construction import ConstructionCashFlows
@@ -85,7 +85,7 @@ def test_energy_project_single_asset_workflow_builds_analysis_and_metrics():
         )
         .fixed_opex(amount=100.0, frequency="year")
         .variable_cost(rate_per_unit=10.0)
-        .revenue_from_generation(sell_price_per_unit=50.0)
+        .generation_revenue(price=GenerationPrice.fixed(50.0))
         .depreciation_macrs(property_class=5)
         .investment_tax_credit(rate=0.10)
         .tax(rate=0.21)
@@ -137,6 +137,83 @@ def test_energy_project_itc_allows_zero_rate():
     project = EnergyProject().investment_tax_credit(rate=0.0)
 
     assert project._config.itc_rate == pytest.approx(0.0)
+
+
+class _EmptyGenerationLinkedPolicy:
+    def cashflows(self, generation: GenerationStream) -> CashFlowStream:
+        return CashFlowStream()
+
+
+def test_component_key_collision_rejects_policy_and_generation_revenue():
+    project = (
+        EnergyProject()
+        .generation_stream(stream=GenerationStream([Generation(100.0, date(2026, 1, 1))]))
+        .generation_revenue(price=GenerationPrice.fixed(50.0))
+        .generation_linked_policy(name="revenue", policy=_EmptyGenerationLinkedPolicy())
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="cashflow component key 'revenue'.*generation_revenue.*generation-linked policy 'revenue'",
+    ):
+        project.analyze()
+
+
+def test_component_key_collision_rejects_policy_and_named_fixed_opex():
+    project = (
+        EnergyProject()
+        .fixed_opex(name="operations", amount=100.0)
+        .generation_linked_policy(
+            name="fixed_opex:operations", policy=_EmptyGenerationLinkedPolicy()
+        )
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="cashflow component key 'fixed_opex:operations'.*fixed_opex 'operations'.*generation-linked policy",
+    ):
+        project.analyze()
+
+
+def test_component_key_collision_rejects_policy_and_custom_cashflow_stream():
+    project = (
+        EnergyProject()
+        .generation_linked_policy(name="custom:grant", policy=_EmptyGenerationLinkedPolicy())
+        .add_cashflow_stream(name="custom:grant", stream=CashFlowStream())
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="cashflow component key 'custom:grant'.*generation-linked policy.*custom cashflow stream",
+    ):
+        project.analyze()
+
+
+def test_component_key_collision_rejects_custom_cashflow_and_tax_liability():
+    project = (
+        EnergyProject()
+        .tax(rate=0.21)
+        .add_cashflow_stream(name="project:tax_liability", stream=CashFlowStream())
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="cashflow component key 'project:tax_liability'.*tax.*custom cashflow stream",
+    ):
+        project.analyze()
+
+
+def test_non_colliding_component_configuration_compiles_normally():
+    analysis = (
+        EnergyProject()
+        .generation_stream(stream=GenerationStream([Generation(100.0, date(2026, 1, 1))]))
+        .fixed_opex(name="operations", amount=100.0)
+        .generation_linked_policy(name="custom:bonus", policy=_EmptyGenerationLinkedPolicy())
+        .add_cashflow_stream(name="custom:grant", stream=CashFlowStream())
+        .analyze()
+    )
+
+    assert set(analysis.cashflow_components) == {"fixed_opex:operations", "custom:grant"}
 
 
 def test_energy_project_real_carrying_charge_scenarios_have_expected_relationships():
@@ -249,7 +326,7 @@ def test_energy_project_is_order_independent_across_sections():
             operations_start=date(2026, 1, 1),
             operations_end=date(2027, 1, 1),
         )
-        .revenue_from_generation(sell_price_per_unit=60.0)
+        .generation_revenue(price=GenerationPrice.fixed(60.0))
         .fixed_opex(amount=50.0, frequency="year")
         .construction(
             overnight_cost=200.0,
@@ -270,7 +347,7 @@ def test_energy_project_is_order_independent_across_sections():
             period="year",
         )
         .fixed_opex(amount=50.0, frequency="year")
-        .revenue_from_generation(sell_price_per_unit=60.0)
+        .generation_revenue(price=GenerationPrice.fixed(60.0))
         .generation(
             capacity_mw=25.0,
             capacity_factor=0.8,
@@ -307,7 +384,7 @@ def test_energy_project_metrics_treats_irr_overflow_as_non_convergence():
         )
         .fixed_opex(amount=100.0)
         .variable_cost(rate_per_unit=10.0)
-        .revenue_from_generation(sell_price_per_unit=50.0)
+        .generation_revenue(price=GenerationPrice.fixed(50.0))
     )
 
     analysis = project.analyze()
@@ -675,7 +752,7 @@ def test_energy_project_generation_outage_reduces_modeled_generation_economics()
             end=date(2026, 5, 11),
             label="Refueling extension",
         )
-        .revenue_from_generation(sell_price_per_unit=50.0)
+        .generation_revenue(price=GenerationPrice.fixed(50.0))
         .variable_cost(rate_per_unit=5.0)
         .production_tax_credit(rate_per_unit=1.0, years=1)
     )
@@ -744,7 +821,7 @@ def test_energy_project_ptc_is_tax_credit_not_taxable_income():
             operations_start=date(2026, 1, 1),
             operations_end=date(2027, 1, 1),
         )
-        .revenue_from_generation(sell_price_per_unit=10.0)
+        .generation_revenue(price=GenerationPrice.fixed(10.0))
         .production_tax_credit(rate_per_unit=2.0, years=1)
         .tax(rate=0.21)
     )
@@ -768,7 +845,7 @@ def test_energy_project_construction_outage_preserves_generation():
             operations_start=date(2026, 1, 1),
             operations_end=date(2027, 1, 1),
         )
-        .revenue_from_generation(sell_price_per_unit=50.0)
+        .generation_revenue(price=GenerationPrice.fixed(50.0))
         .construction_outage(
             start=date(2025, 5, 1),
             end=date(2025, 5, 11),
@@ -824,7 +901,7 @@ def test_energy_project_construction_outage_explicit_price_and_lcoe():
             operations_start=date(2026, 1, 1),
             operations_end=date(2027, 1, 1),
         )
-        .revenue_from_generation(sell_price_per_unit=50.0)
+        .generation_revenue(price=GenerationPrice.fixed(50.0))
     )
     outage_project = base_project.construction_outage(
         start=date(2025, 5, 1),
@@ -872,7 +949,7 @@ def test_energy_project_construction_outage_models_two_construction_outages():
             operations_start=date(2032, 1, 1),
             operations_end=date(2033, 1, 1),
         )
-        .revenue_from_generation(sell_price_per_unit=45.0)
+        .generation_revenue(price=GenerationPrice.fixed(45.0))
         .construction_outage(
             name="refueling_1",
             start=date(2028, 4, 1),
@@ -964,7 +1041,7 @@ def test_project_pro_forma_can_write_csv(tmp_path):
             operations_start=date(2026, 1, 1),
             operations_end=date(2027, 1, 1),
         )
-        .revenue_from_generation(sell_price_per_unit=50.0)
+        .generation_revenue(price=GenerationPrice.fixed(50.0))
     )
 
     pro_forma = project.analyze().pro_forma(period="year")
@@ -1475,7 +1552,7 @@ def test_energy_project_discount_rate_sets_default_metrics_rate():
             operations_start=date(2026, 1, 1),
             operations_end=date(2027, 1, 1),
         )
-        .revenue_from_generation(sell_price_per_unit=50.0)
+        .generation_revenue(price=GenerationPrice.fixed(50.0))
     )
 
     analysis = project.analyze()
@@ -1513,7 +1590,7 @@ def test_energy_project_metrics_override_builder_valuation_rate():
             construction_start=date(2025, 1, 1),
             period="year",
         )
-        .revenue_from_generation(sell_price_per_unit=50.0)
+        .generation_revenue(price=GenerationPrice.fixed(50.0))
     )
 
     analysis = project.analyze()
@@ -1534,7 +1611,7 @@ def test_energy_project_metrics_override_rejects_invalid_negative_discount_rate(
             operations_start=date(2026, 1, 1),
             operations_end=date(2027, 1, 1),
         )
-        .revenue_from_generation(sell_price_per_unit=50.0)
+        .generation_revenue(price=GenerationPrice.fixed(50.0))
         .analyze()
     )
 
@@ -1552,7 +1629,7 @@ def test_energy_project_metrics_override_allows_negative_discount_rate_above_min
             operations_start=date(2026, 1, 1),
             operations_end=date(2027, 1, 1),
         )
-        .revenue_from_generation(sell_price_per_unit=50.0)
+        .generation_revenue(price=GenerationPrice.fixed(50.0))
         .analyze()
     )
 
@@ -1580,7 +1657,7 @@ def test_energy_project_tax_allows_zero_rate():
             operations_start=date(2026, 1, 1),
             operations_end=date(2027, 1, 1),
         )
-        .revenue_from_generation(sell_price_per_unit=50.0)
+        .generation_revenue(price=GenerationPrice.fixed(50.0))
     )
 
     analysis = project.analyze()

@@ -11,6 +11,7 @@ from datetime import date, timedelta
 
 import pytest
 
+from dcaf import GenerationPrice
 from dcaf.shared.time import ScheduleTruncationWarning, event_date
 from dcaf.project.builder import EnergyProject
 from dcaf.finance.amortization import AmortizationSchedule
@@ -137,7 +138,7 @@ class TestConstructionTimingEndOfPeriod:
                 construction_start=date(2025, 2, 1),
                 period="year",
             )
-            .revenue_from_generation(sell_price_per_unit=50.0)
+            .generation_revenue(price=GenerationPrice.fixed(50.0))
         )
         analysis = project.analyze()
         capex_stream = analysis.cashflow_components["construction"]
@@ -173,7 +174,7 @@ class TestOperationsTimingEndOfPeriod:
                 construction_start=date(2029, 1, 1),
                 period="year",
             )
-            .revenue_from_generation(sell_price_per_unit=50.0)
+            .generation_revenue(price=GenerationPrice.fixed(50.0))
             .fixed_opex(amount=1_000_000, frequency="year")
         )
 
@@ -229,7 +230,7 @@ class TestBeginOfPeriodTiming:
                 construction_start=date(2024, 1, 1),
                 period="year",
             )
-            .revenue_from_generation(sell_price_per_unit=50.0)
+            .generation_revenue(price=GenerationPrice.fixed(50.0))
         )
         analysis = project.analyze()
         gen_dates = [g.date for g in analysis.generation.entries]
@@ -258,7 +259,7 @@ class TestBeginOfPeriodTiming:
                 construction_start=date(2024, 1, 1),
                 period="year",
             )
-            .revenue_from_generation(sell_price_per_unit=50.0)
+            .generation_revenue(price=GenerationPrice.fixed(50.0))
             .fixed_opex(amount=500_000, frequency="year")
         )
         analysis = project.analyze()
@@ -298,7 +299,7 @@ class TestMiddleOfPeriodTiming:
                 construction_start=date(2024, 1, 1),
                 period="year",
             )
-            .revenue_from_generation(sell_price_per_unit=50.0)
+            .generation_revenue(price=GenerationPrice.fixed(50.0))
         )
         analysis = project.analyze()
         gen_dates = [g.date for g in analysis.generation.entries]
@@ -322,7 +323,7 @@ class TestMiddleOfPeriodTiming:
                 construction_start=date(2024, 1, 1),
                 period="year",
             )
-            .revenue_from_generation(sell_price_per_unit=50.0)
+            .generation_revenue(price=GenerationPrice.fixed(50.0))
         )
         analysis = project.analyze()
         gen_dates = [g.date for g in analysis.generation.entries]
@@ -358,7 +359,7 @@ class TestPerComponentTimingOverride:
                 construction_start=date(2024, 1, 1),
                 period="year",
             )
-            .revenue_from_generation(sell_price_per_unit=50.0)
+            .generation_revenue(price=GenerationPrice.fixed(50.0))
             .fixed_opex(amount=100_000, frequency="year")
         )
         analysis = project.analyze()
@@ -404,7 +405,7 @@ class TestDepreciationRemapping:
                 construction_start=date(2024, 1, 1),
                 period="year",
             )
-            .revenue_from_generation(sell_price_per_unit=50.0)
+            .generation_revenue(price=GenerationPrice.fixed(50.0))
             .depreciation_macrs(property_class=5)
         )
         analysis = project.analyze()
@@ -433,7 +434,7 @@ class TestDepreciationRemapping:
                 construction_start=date(2025, 1, 1),
                 period="year",
             )
-            .revenue_from_generation(sell_price_per_unit=50.0)
+            .generation_revenue(price=GenerationPrice.fixed(50.0))
             .depreciation_macrs(property_class=5)
         )
 
@@ -474,7 +475,7 @@ class TestDebtRemapping:
                 construction_start=date(2024, 1, 1),
                 period="year",
             )
-            .revenue_from_generation(sell_price_per_unit=50.0)
+            .generation_revenue(price=GenerationPrice.fixed(50.0))
             .construction_financing(
                 debt_fraction=0.5,
                 amortization_rate=0.05,
@@ -506,7 +507,7 @@ class TestDebtRemapping:
                 construction_start=date(2025, 1, 1),
                 period="year",
             )
-            .revenue_from_generation(sell_price_per_unit=50.0)
+            .generation_revenue(price=GenerationPrice.fixed(50.0))
             .construction_financing(
                 debt_fraction=1.0,
                 amortization_rate=0.05,
@@ -628,7 +629,7 @@ class TestNoOperationsEnd:
                 construction_start=date(2024, 1, 1),
                 period="year",
             )
-            .revenue_from_generation(sell_price_per_unit=50.0)
+            .generation_revenue(price=GenerationPrice.fixed(50.0))
         )
         analysis = project.analyze()
         gen_dates = [g.date for g in analysis.generation.entries]

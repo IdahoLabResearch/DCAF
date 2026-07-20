@@ -15,8 +15,8 @@ base = EnergyProject().generation(
 )
 
 # Branch without mutating `base`
-high_price = base.revenue_from_generation(sell_price_per_unit=50.0).tax(rate=0.21)
-low_price = base.revenue_from_generation(sell_price_per_unit=40.0).tax(rate=0.21)
+high_price = base.generation_revenue(price=50.0).tax(rate=0.21)
+low_price = base.generation_revenue(price=40.0).tax(rate=0.21)
 ```
 
 ## Configuration methods
@@ -45,7 +45,9 @@ keyword-only.
 
 | Method | Purpose |
 |--------|---------|
-| `.revenue_from_generation(sell_price_per_unit=, escalation=)` | Revenue = generation × price. |
+| `.generation_revenue(price=...)` | Revenue = generation × price. |
+| `.generation_revenue_contract(name=, contract=)` | Contracted generation revenue such as PPAs. |
+| `.generation_revenue_remainder(name=, price=)` | Revenue from generation not allocated to contracts. |
 | `.fixed_opex(amount=, frequency=, ...)` | Recurring fixed operating cost. |
 | `.variable_cost(rate_per_unit=, ...)` | Per-MWh variable operating cost. |
 

@@ -1,11 +1,11 @@
 # Guides
 
-These guides are task-focused walkthroughs. They build on the five runnable scripts
-in the repository's [`examples/`](https://github.com/) directory, which all model the
-same scenario — a 220 MW nuclear uprate with a 5-year construction period, 35
+These guides are task-focused walkthroughs. They build on the runnable scripts in
+the repository's [`examples/`](https://github.com/) directory. Five scripts model the
+same scenario — a 220 MW nuclear uprate with a 5-year construction period and 35
 operating years, 50/50 debt/equity financing, a 21% tax rate, and a 10-year PTC — at
-**five levels of the API**, from the high-level builder down to raw stream
-primitives.
+five levels of the API. A separate PPA example focuses on generation allocation and
+pricing policies.
 
 ## Choosing an abstraction level
 
@@ -19,10 +19,11 @@ you need.
 | `nuclear_uprate_project_midlevel.py` | Mid-level functions | The builder's structure doesn't fit; you mix external data with library schedules. |
 | `nuclear_uprate_project_builders.py` | Mid-level builder classes | Advanced config: custom spend profiles, structured debt service, bespoke incentives. |
 | `nuclear_uprate_project_primitives.py` | Raw stream primitives | Any data shape; clearest view of what the higher layers produce under the hood. |
+| `ppa_revenue_policies.py` | High-level PPA policies | Multiple PPAs with scheduled, callable, and remainder generation pricing. |
 
-The first two use only `EnergyProject` — the primary interface. The last three drop
-into the [stream primitives](../concepts/streams.md) and standalone functions, and
-are **advanced** paths.
+The first two and the PPA example use `EnergyProject` — the primary interface. The
+other three drop into the [stream primitives](../concepts/streams.md) and standalone
+functions, and are **advanced** paths.
 
 ```{important}
 The five examples produce *different* NPVs by design — each makes different modeling

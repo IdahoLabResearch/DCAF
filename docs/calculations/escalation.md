@@ -38,11 +38,15 @@ anywhere escalation is accepted.
 ## Where escalation is applied
 
 - `EnergyProject.default_escalation(rate=...)` sets a project-wide default.
-- Per-component methods accept an `escalation=` argument, e.g.
-  `.revenue_from_generation(sell_price_per_unit=, escalation=...)`,
-  `.fixed_opex(amount=, escalation=...)`, and `GenerationStream.to_revenue(...,
-  escalation=...)`.
+- Per-component cost and credit methods accept an `escalation=` argument, e.g.
+  `.fixed_opex(amount=, escalation=...)` and `ptc(..., escalation=...)`.
+- Simple generation revenue can use a float price; scheduled or callable revenue
+  prices use `GenerationPrice`.
 - Tax credits escalate too: `ptc(..., escalation=...)`.
+
+`GenerationPrice.schedule(...)` is an exact-date lookup, not a sequence of price
+change dates. Every generation settlement being priced must have a schedule entry
+with the same date. Prices are not carried forward to later generation events.
 
 A constant escalation rate can be supplied as a bare float; a policy object is used
 when you need piecewise or index-based behavior.

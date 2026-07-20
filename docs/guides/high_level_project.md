@@ -35,7 +35,7 @@ project = (
         amortization_term=20,
     )
     .tax(rate=0.21)
-    .revenue_from_generation(sell_price_per_unit=45.0, label="Electricity Revenue")
+    .generation_revenue(price=45.0, label="Electricity Revenue")
     .production_tax_credit(rate_per_unit=27.50, years=10, label="PTC Credit")
 )
 ```

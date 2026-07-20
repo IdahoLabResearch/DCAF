@@ -1,11 +1,14 @@
 # DCAF Examples
 
-These examples all model approximately the same scenario: a 220 MW nuclear plant
-uprate with a 5-year construction period, 35 operating years, 50/50 debt/equity
-financing, a 21% tax rate, and a Production Tax Credit for the first 10 operating
-years. They are designed to show how the same analysis can be expressed at five
-different levels of the DCAF API, from the most concise high-level builder down to
-raw stream primitives.
+The five nuclear-uprate examples model approximately the same scenario: a 220 MW
+nuclear plant uprate with a 5-year construction period, 35 operating years, 50/50
+debt/equity financing, a 21% tax rate, and a Production Tax Credit for the first 10
+operating years. They are designed to show how the same analysis can be expressed at
+five different levels of the DCAF API, from the most concise high-level builder down
+to raw stream primitives.
+
+`ppa_revenue_policies.py` is a separate, focused example of generation allocation
+and pricing across multiple PPAs plus merchant remainder revenue.
 
 ---
 
@@ -125,6 +128,19 @@ cashflow assembly (lost MWh × price plus fixed and per-day costs) mirroring wha
 `construction_outage()` produces internally; `CashFlowStream.from_streams` for
 assembly; `.cash_only()`, `.inflows()`, `.outflows()`, `.npv()`, and `.discounted_sum()`
 for valuation.
+
+---
+
+## `ppa_revenue_policies.py` — Multiple PPAs and generation pricing
+
+Uses one fixed-MWh PPA with an exact-date `GenerationPrice.schedule`, one
+fraction-of-generation PPA with a callable price, and a fixed-price merchant
+remainder policy. The script verifies that the two contracts and remainder account
+for every MWh on every generation date.
+
+**What it demonstrates:** multiple simultaneous contracts; fixed and fractional
+generation allocation; scheduled, callable, and fixed generation prices; exact-date
+schedule semantics; and merchant remainder revenue.
 
 ---
 

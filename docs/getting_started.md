@@ -44,7 +44,7 @@ project = (
         operations_end=date(2067, 1, 1),  # exclusive end: through end of 2066
     )
     .construction(overnight_cost=600e6)
-    .revenue_from_generation(sell_price_per_unit=45.00)
+    .generation_revenue(price=45.00)
     .production_tax_credit(rate_per_unit=27.50)
     .tax(rate=0.21)
 )
@@ -72,7 +72,7 @@ LCOE:             $23.30/MWh
 ```
 
 That's a complete discounted-cash-flow analysis. Each builder method
-(`.generation`, `.construction`, `.revenue_from_generation`, …) adds a cash-flow
+(`.generation`, `.construction`, `.generation_revenue`, …) adds a cash-flow
 component; `.analyze()` compiles them into a {py:class}`~dcaf.ProjectAnalysis`, and
 `.metrics()` discounts everything to your valuation date.
 

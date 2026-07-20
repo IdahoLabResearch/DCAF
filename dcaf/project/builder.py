@@ -21,8 +21,11 @@ from dcaf.project._builder_config import (
     ConstructionFinancingConfig,
     ConstructionOutageConfig,
     ConstructionScheduleConfig,
+    CustomGenerationLinkedPolicyConfig,
     EscalationSettings,
     FixedOpexConfig,
+    GenerationRevenueContractConfig,
+    GenerationRevenueRemainderConfig,
     GenerationOutageConfig,
     MacrsDepreciationConfig,
     ProductionTaxCreditConfig,
@@ -35,6 +38,11 @@ from dcaf.project._builder_config import (
 from dcaf.project._compiler import ProjectCompiler
 from dcaf.project.analysis import ProjectAnalysis, ProjectMetrics, ProjectProForma
 from dcaf.project.config import ProjectValuation, wacc as compute_wacc
+from dcaf.project.contracts import GenerationPrice, EnergyContract
+from dcaf.project.policies import (
+    GenerationLinkedCashFlowPolicy,
+    coerce_generation_linked_policy,
+)
 from dcaf.streams.cashflows import CashFlowGroup, CashFlowStream
 from dcaf.streams.generation import GenerationStream
 from dcaf.shared.types import (
@@ -43,11 +51,22 @@ from dcaf.shared.types import (
     MACRSConvention,
     MACRSPropertyClass,
     Period,
+    ProFormaCategory,
     SpendScheduleName,
+    TaxTreatment,
     TimingConvention,
     VDBConvention,
     parse_day_count_convention,
 )
+
+
+def _coerce_generation_price(price: GenerationPrice | float, *, field_name: str) -> GenerationPrice:
+    """Normalize a scalar fixed price or explicit generation price policy."""
+    if isinstance(price, GenerationPrice):
+        return price
+    if isinstance(price, int | float) and not isinstance(price, bool):
+        return GenerationPrice.fixed(float(price))
+    raise TypeError(f"{field_name} must be a GenerationPrice or float")
 
 
 class EnergyProject:
@@ -73,7 +92,7 @@ class EnergyProject:
     ...         operations_start=date(2026, 1, 1),
     ...         operations_end=date(2046, 1, 1),
     ...     )
-    ...     .revenue_from_generation(sell_price_per_unit=50.0)
+    ...     .generation_revenue(price=50.0)
     ...     .construction(
     ...         overnight_cost=200_000_000,
     ...         spend_profile="flat",
@@ -119,6 +138,28 @@ class EnergyProject:
         project = self.__class__.__new__(self.__class__)
         project._config = dc_replace(self._config, **config_changes)
         return project
+
+    def _has_generation_revenue_policies(self) -> bool:
+        """Return whether contract or remainder revenue policies are configured."""
+        return any(
+            isinstance(
+                registration,
+                (GenerationRevenueContractConfig, GenerationRevenueRemainderConfig),
+            )
+            for registration in self._config.generation_linked_policies
+        )
+
+    def _require_no_generation_revenue(self, method_name: str) -> None:
+        """Reject contract/remainder revenue when whole-project revenue is configured."""
+        if self._config.market is not None:
+            raise ValueError(f"{method_name} cannot be combined with generation_revenue")
+
+    def _require_available_generation_linked_name(self, name: str) -> None:
+        """Reject duplicate generation-linked component names."""
+        if any(
+            registration.name == name for registration in self._config.generation_linked_policies
+        ):
+            raise ValueError(f"generation-linked policy name {name!r} is already configured")
 
     def day_count_convention(self, convention: DayCountConvention) -> Self:
         """Set the project-wide day-count convention."""
@@ -428,8 +469,9 @@ class EnergyProject:
         timing : TimingConvention, optional
             Booking-date convention for generated cashflows.
         sell_price_per_unit : float, optional
-            Explicit outage price per MWh. When omitted, the project's
-            configured market price is used.
+            Explicit outage price per MWh. When omitted, a fixed price
+            configured with :meth:`generation_revenue` is used. Scheduled and
+            callable generation-revenue prices require an explicit outage price.
         fixed_cost : float, optional
             Additional one-time outage cost. Sign is ignored.
         cost_per_day : float, optional
@@ -441,7 +483,6 @@ class EnergyProject:
         --------
         escalation_period, amount_reference_date, escalation_policy
             Escalation settings used when ``sell_price_per_unit`` is explicit.
-            Otherwise the configured market escalation is used.
 
         Returns
         -------
@@ -478,59 +519,179 @@ class EnergyProject:
         outages[name] = outage
         return self._with(construction_outages=outages)
 
-    def revenue_from_generation(
+    def generation_revenue(
         self,
         *,
-        sell_price_per_unit: float,
-        unit: str | None = None,
-        escalation: float | None = None,
-        escalation_period: Period | None = None,
-        amount_reference_date: date | None = None,
-        escalation_policy: EscalationPolicy | None = None,
+        price: GenerationPrice | float,
         label: str | None = None,
+        pro_forma_category: ProFormaCategory | str | None = ProFormaCategory.REVENUE,
+        tax_treatment: TaxTreatment | str = TaxTreatment.TAXABLE,
     ) -> Self:
         """Configure the revenue price for project generation.
 
         Parameters
         ----------
-        sell_price_per_unit : float
-            Price per MWh at the amount reference date.
-        unit : str, optional
-            Unit label for display purposes.
-        escalation : float, optional
-            Annual price escalation rate. When omitted, falls back to the
-            project-wide rate set by :meth:`default_escalation`.
-
-        Advanced
-        --------
-        escalation_period : Period, optional
-            Period over which the escalation rate applies. Default is ``"year"``.
-        amount_reference_date : date, optional
-            Date at which ``sell_price_per_unit`` is stated.
-        escalation_policy : EscalationPolicy, optional
-            Fully configured escalation policy. Overrides simple-rate inputs.
+        price : float or GenerationPrice
+            Per-MWh settlement price for each generation event. A float is
+            treated as a fixed price via :meth:`GenerationPrice.fixed`; pass
+            ``GenerationPrice`` directly for scheduled or callable prices. A
+            scheduled price must contain an entry whose date exactly matches
+            every generation event; schedule entries are not carried forward.
         label : str, optional
             Label template for individual revenue cashflows. Use ``{n}`` as a
             period index placeholder if desired.
+        pro_forma_category : ProFormaCategory or str or None, optional
+            Pro-forma category for the revenue flows. Default is revenue.
+        tax_treatment : TaxTreatment or str, optional
+            Tax treatment for the revenue flows. Default is taxable.
 
         Returns
         -------
         EnergyProject
             New project with updated revenue configuration.
         """
+        if self._config.market is not None:
+            raise ValueError("generation_revenue may only be called once")
+        if self._has_generation_revenue_policies():
+            raise ValueError(
+                "generation_revenue cannot be combined with "
+                "generation_revenue_contract or generation_revenue_remainder"
+            )
         updated = RevenueConfig(
-            sell_price_per_unit=sell_price_per_unit,
-            unit=unit,
+            price=_coerce_generation_price(price, field_name="generation_revenue price"),
             label="Revenue" if label is None else label,
-            escalation=updated_escalation(
-                EscalationSettings(),
-                escalation=escalation,
-                escalation_period=escalation_period,
-                amount_reference_date=amount_reference_date,
-                escalation_policy=escalation_policy,
-            ),
+            pro_forma_category=pro_forma_category,
+            tax_treatment=tax_treatment,
         )
         return self._with(market=updated)
+
+    def generation_revenue_contract(
+        self,
+        *,
+        name: str,
+        contract: EnergyContract,
+    ) -> Self:
+        """Register a named generation-linked contract revenue policy.
+
+        Parameters
+        ----------
+        name : str
+            Component name used in the compiled analysis.
+        contract : EnergyContract
+            Contract terms used to allocate generation and settle revenue.
+
+        Returns
+        -------
+        EnergyProject
+            New project with the contract revenue policy registered.
+        """
+        self._require_no_generation_revenue("generation_revenue_contract")
+        self._require_available_generation_linked_name(name)
+        registration = GenerationRevenueContractConfig(name=name, contract=contract)
+        return self._with(
+            generation_linked_policies=(
+                *self._config.generation_linked_policies,
+                registration,
+            )
+        )
+
+    def generation_revenue_remainder(
+        self,
+        *,
+        name: str,
+        price: GenerationPrice,
+        label: str | None = None,
+        pro_forma_category: ProFormaCategory | str | None = ProFormaCategory.REVENUE,
+        tax_treatment: TaxTreatment | str = TaxTreatment.TAXABLE,
+    ) -> Self:
+        """Register a named revenue policy for generation not allocated to contracts.
+
+        Parameters
+        ----------
+        name : str
+            Component name used in the compiled analysis.
+        price : GenerationPrice
+            Per-MWh settlement price for unallocated generation. A scheduled
+            price must contain an entry whose date exactly matches every
+            unallocated generation event; schedule entries are not carried
+            forward.
+        label : str, optional
+            Label template for generated revenue cashflows. Use ``{n}`` as a
+            period index placeholder if desired.
+        pro_forma_category : ProFormaCategory or str or None, optional
+            Pro-forma category for generated cashflows. Default is revenue.
+        tax_treatment : TaxTreatment or str, optional
+            Tax treatment for generated cashflows. Default is taxable.
+
+        Returns
+        -------
+        EnergyProject
+            New project with the remainder revenue policy registered.
+        """
+        self._require_no_generation_revenue("generation_revenue_remainder")
+        self._require_available_generation_linked_name(name)
+        if any(
+            isinstance(registration, GenerationRevenueRemainderConfig)
+            for registration in self._config.generation_linked_policies
+        ):
+            raise ValueError("only one generation_revenue_remainder may be configured")
+        registration = GenerationRevenueRemainderConfig(
+            name=name,
+            price=price,
+            label="Remainder Revenue" if label is None else label,
+            pro_forma_category=pro_forma_category,
+            tax_treatment=tax_treatment,
+        )
+        return self._with(
+            generation_linked_policies=(
+                *self._config.generation_linked_policies,
+                registration,
+            )
+        )
+
+    def generation_linked_policy(
+        self,
+        *,
+        name: str,
+        policy: GenerationLinkedCashFlowPolicy,
+    ) -> Self:
+        """Register a custom generation-linked cashflow policy.
+
+        This is an advanced escape hatch for policies that derive cashflows from the compiled
+        generation stream. DCAF validates only that the policy provides ``cashflows(generation)``.
+        It does not check that every generated MWh is counted exactly once across custom policies,
+        built-in contracts, and remainder revenue. A custom policy can omit generation or count
+        the same generation again. Use the built-in generation-revenue methods when that check is
+        required.
+
+        Parameters
+        ----------
+        name : str
+            Component name used in the compiled analysis.
+        policy : GenerationLinkedCashFlowPolicy
+            Object providing ``cashflows(generation)``.
+
+        Returns
+        -------
+        EnergyProject
+            New project with the custom generation-linked policy registered.
+
+        Raises
+        ------
+        TypeError
+            If ``policy`` does not provide ``cashflows(generation)``.
+        """
+        self._require_available_generation_linked_name(name)
+        registration = CustomGenerationLinkedPolicyConfig(
+            name=name,
+            policy=coerce_generation_linked_policy(policy),
+        )
+        return self._with(
+            generation_linked_policies=(
+                *self._config.generation_linked_policies,
+                registration,
+            )
+        )
 
     def fixed_opex(
         self,

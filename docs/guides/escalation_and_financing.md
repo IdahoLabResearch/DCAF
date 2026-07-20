@@ -6,26 +6,37 @@ first-class options on the builder.
 
 ## Escalation
 
-A project-wide default escalation is applied to revenue and cost items relative to a
+A project-wide default escalation is applied to cost items and tax credits relative to a
 reference date:
 
 ```python
 project = project.default_escalation(rate=0.025, amount_reference_date=date(2025, 1, 1))
 ```
 
-Any per-component method can override the default with its own `escalation=`
+Many per-component methods can override the default with their own `escalation=`
 argument — a bare float for a constant rate, or an
 {py:class}`~dcaf.finance.EscalationPolicy` for piecewise/index-based growth:
 
 ```python
+from datetime import date
+
+from dcaf import GenerationPrice
 from dcaf.finance import ConstantRateEscalation
+
+revenue_escalation = ConstantRateEscalation(date(2025, 1, 1), rate=0.025)
 
 project = (
     project
-    .revenue_from_generation(sell_price_per_unit=45.0, escalation=0.025)
+    .generation_revenue(
+        price=GenerationPrice.callable(lambda event: 45.0 * revenue_escalation.factor(event.date))
+    )
     .fixed_opex(amount=10_000_000.0, escalation=0.03)
 )
 ```
+
+For explicit date-indexed prices, `GenerationPrice.schedule(...)` requires an exact
+date match for every generation settlement being priced. Schedule entries are not
+forward-filled or treated as effective-until-changed values.
 
 The underlying math — $(1 + \text{rate})^{t}$ — is documented in
 [Calculations: escalation](../calculations/escalation.md).

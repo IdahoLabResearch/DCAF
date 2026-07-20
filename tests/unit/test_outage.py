@@ -6,7 +6,7 @@ from datetime import date
 
 import pytest
 
-from dcaf import EnergyProject
+from dcaf import EnergyContract, GenerationPrice, EnergyProject
 from dcaf.finance.escalation import ConstantRateEscalation
 from dcaf.finance.outage import construction_outage, generator_outage
 from dcaf.shared.time import timedelta_fractional_years
@@ -221,7 +221,7 @@ def test_construction_outage_equivalence_with_builder_method():
             operations_start=date(2026, 1, 1),
             operations_end=date(2027, 1, 1),
         )
-        .revenue_from_generation(sell_price_per_unit=sell_price)
+        .generation_revenue(price=GenerationPrice.fixed(sell_price))
         .construction_outage(
             capacity_mw=1000.0,
             capacity_factor=0.92,
@@ -262,7 +262,7 @@ def test_construction_outage_market_price_lookup_via_builder():
             operations_start=date(2026, 1, 1),
             operations_end=date(2027, 1, 1),
         )
-        .revenue_from_generation(sell_price_per_unit=42.0)
+        .generation_revenue(price=GenerationPrice.fixed(42.0))
         .construction_outage(
             start=date(2025, 5, 1),
             end=date(2025, 5, 11),
@@ -274,3 +274,74 @@ def test_construction_outage_market_price_lookup_via_builder():
     impact = analysis.cashflow_components["construction_outage"]
     expected = -(1000.0 * 0.92 * 24.0 * 10.0 * 42.0)
     assert impact.sum() == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    "market_price",
+    [
+        GenerationPrice.schedule({date(2026, 12, 31): 42.0}),
+        GenerationPrice.callable(lambda _event: 42.0),
+    ],
+)
+def test_construction_outage_requires_explicit_price_for_dynamic_generation_revenue(
+    market_price: GenerationPrice,
+):
+    project = (
+        EnergyProject()
+        .generation(
+            capacity_mw=10.0,
+            capacity_factor=1.0,
+            operations_start=date(2026, 1, 1),
+            operations_end=date(2027, 1, 1),
+        )
+        .generation_revenue(price=market_price)
+        .construction_outage(
+            start=date(2025, 5, 1),
+            end=date(2025, 5, 11),
+            capacity_mw=1000.0,
+            capacity_factor=0.92,
+        )
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "requires sell_price_per_unit unless generation_revenue is configured with a fixed "
+            "price"
+        ),
+    ):
+        project.analyze()
+
+
+def test_construction_outage_requires_explicit_price_with_contract_revenue():
+    """Verifies exception is raised if `sell_price_per_unit` is not specified when a non-constant generation
+    price is provided for generation revenue."""
+    project = (
+        EnergyProject()
+        .generation(
+            capacity_mw=10.0,
+            capacity_factor=1.0,
+            operations_start=date(2026, 1, 1),
+            operations_end=date(2027, 1, 1),
+        )
+        .generation_revenue_contract(
+            name="revenue:ppa",
+            contract=EnergyContract.fraction_of_generation(
+                generation_share=0.50,
+                price=GenerationPrice.fixed(50.0),
+            ),
+        )
+        .generation_revenue_remainder(
+            name="revenue:merchant",
+            price=GenerationPrice.fixed(30.0),
+        )
+        .construction_outage(
+            start=date(2025, 5, 1),
+            end=date(2025, 5, 11),
+            capacity_mw=1000.0,
+            capacity_factor=0.92,
+        )
+    )
+
+    with pytest.raises(ValueError, match="requires sell_price_per_unit"):
+        project.analyze()

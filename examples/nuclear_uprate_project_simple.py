@@ -33,7 +33,7 @@ project = (
     )
     .construction(overnight_cost=600e6)
     .tax(rate=0.21)
-    .revenue_from_generation(sell_price_per_unit=45.00)
+    .generation_revenue(price=45.00)
     .production_tax_credit(rate_per_unit=27.50)
     .construction_outage(
         start=date(2030, 4, 1),

@@ -18,7 +18,7 @@ analysis = (
     EnergyProject()
     .generation(capacity_mw=220, operations_start=date(2032, 1, 1), operations_end=date(2067, 1, 1))
     .construction(overnight_cost=600e6)
-    .revenue_from_generation(sell_price_per_unit=45.00)
+    .generation_revenue(price=45.00)
     .production_tax_credit(rate_per_unit=27.50)
     .tax(rate=0.21)
     .analyze()

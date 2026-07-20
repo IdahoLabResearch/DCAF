@@ -20,7 +20,7 @@ model is a short pipeline:
 
 `EnergyProject` is the **primary interface** and the right starting point for almost
 everything. You describe a project by chaining configuration methods —
-`.generation(...)`, `.construction(...)`, `.revenue_from_generation(...)`,
+`.generation(...)`, `.construction(...)`, `.generation_revenue(...)`,
 `.tax(...)`, and so on — and then call `.analyze()`.
 
 It is a *fluent, immutable builder*: every method returns a new project, so you can

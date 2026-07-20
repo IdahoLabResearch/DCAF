@@ -17,6 +17,8 @@ from dcaf.finance.escalation import (
     _resolve_escalation_policy_override as resolve_escalation_policy_override,
 )
 from dcaf.project.config import ProjectValuation
+from dcaf.project.contracts import GenerationPrice, EnergyContract
+from dcaf.project.policies import GenerationLinkedCashFlowPolicy
 from dcaf.project.timeline import ProjectTimeline
 from dcaf.shared.types import (
     DayCountConvention,
@@ -24,9 +26,12 @@ from dcaf.shared.types import (
     MACRSConvention,
     MACRSPropertyClass,
     Period,
+    ProFormaCategory,
     SpendScheduleName,
+    TaxTreatment,
     TimingConvention,
     VDBConvention,
+    normalize_cashflow_classification,
     parse_day_count_convention,
 )
 from dcaf.shared.validation import validate_finite, validate_non_negative
@@ -390,15 +395,66 @@ class ProductionTaxCreditConfig:
 
 @dataclass(frozen=True)
 class RevenueConfig:
-    """Generation revenue price and escalation configuration."""
+    """Whole-project generation revenue configuration."""
 
-    sell_price_per_unit: float
-    unit: str | None = None
-    label: str = "Market Revenue"
-    escalation: EscalationSettings = field(default_factory=EscalationSettings)
+    price: GenerationPrice
+    label: str = "Revenue"
+    pro_forma_category: ProFormaCategory | str | None = ProFormaCategory.REVENUE
+    tax_treatment: TaxTreatment | str = TaxTreatment.TAXABLE
 
     def __post_init__(self) -> None:
-        validate_finite(self.sell_price_per_unit, "sell_price_per_unit")
+        if not isinstance(self.price, GenerationPrice):
+            raise TypeError("generation_revenue price must be a GenerationPrice")
+        category, treatment = normalize_cashflow_classification(
+            self.pro_forma_category,
+            self.tax_treatment,
+        )
+        object.__setattr__(self, "pro_forma_category", category)
+        object.__setattr__(self, "tax_treatment", treatment)
+
+
+@dataclass(frozen=True)
+class GenerationRevenueContractConfig:
+    """Named generation-linked contract revenue registration."""
+
+    name: str
+    contract: EnergyContract
+
+
+@dataclass(frozen=True)
+class GenerationRevenueRemainderConfig:
+    """Named revenue registration for generation not allocated to contracts."""
+
+    name: str
+    price: GenerationPrice
+    label: str = "Remainder Revenue"
+    pro_forma_category: ProFormaCategory | str | None = ProFormaCategory.REVENUE
+    tax_treatment: TaxTreatment | str = TaxTreatment.TAXABLE
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.price, GenerationPrice):
+            raise TypeError("generation_revenue_remainder price must be a GenerationPrice")
+        category, treatment = normalize_cashflow_classification(
+            self.pro_forma_category,
+            self.tax_treatment,
+        )
+        object.__setattr__(self, "pro_forma_category", category)
+        object.__setattr__(self, "tax_treatment", treatment)
+
+
+@dataclass(frozen=True)
+class CustomGenerationLinkedPolicyConfig:
+    """Named custom generation-linked policy registration."""
+
+    name: str
+    policy: GenerationLinkedCashFlowPolicy
+
+
+GenerationLinkedPolicyConfig: TypeAlias = (
+    GenerationRevenueContractConfig
+    | GenerationRevenueRemainderConfig
+    | CustomGenerationLinkedPolicyConfig
+)
 
 
 @dataclass(frozen=True)
@@ -421,6 +477,7 @@ class ProjectConfig:
     itc_rate: float | None = None
     ptc: ProductionTaxCreditConfig | None = None
     market: RevenueConfig | None = None
+    generation_linked_policies: tuple[GenerationLinkedPolicyConfig, ...] = ()
     tax_rate: float | None = None
     tax_allow_refund: bool = False
     valuation: ProjectValuation | None = None

@@ -98,8 +98,8 @@ project = (
         amortization_term=DEBT_TERM_YEARS,
     )
     .tax(rate=TAX_RATE)
-    .revenue_from_generation(
-        sell_price_per_unit=POWER_PRICE_PER_MWH,
+    .generation_revenue(
+        price=POWER_PRICE_PER_MWH,
         label="Electricity Revenue",
     )
     .production_tax_credit(
