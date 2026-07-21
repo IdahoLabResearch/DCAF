@@ -887,6 +887,13 @@ def test_sort_bare_call_sorts_by_date(_create_cf_stream):
     assert result.entries == [flows[0], flows[1], flows[2], flows[3]]
 
 
+def test_sort_default_attribute_descending(_create_cf_stream):
+    """sort(descending=True) sorts by the default date attribute descending."""
+    cf_stream, flows = _create_cf_stream
+    result = cf_stream.sort(descending=True)
+    assert result.entries == [flows[3], flows[2], flows[1], flows[0]]
+
+
 def test_sort_attr_amount_descending(_create_cf_stream):
     """sort(attr='amount', descending=True) sorts by amount descending."""
     cf_stream, flows = _create_cf_stream

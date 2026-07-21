@@ -643,7 +643,7 @@ class CashFlowStream(BaseStream[CashFlow]):
         descending: bool = ...,
     ) -> "CashFlowStream": ...
     @overload
-    def sort(self) -> "CashFlowStream": ...
+    def sort(self, *, descending: bool = ...) -> "CashFlowStream": ...
 
     def sort(
         self,
@@ -710,7 +710,7 @@ class CashFlowStream(BaseStream[CashFlow]):
         if fn is not None:
             return super().sort(fn, descending=descending)
         if attr is None:
-            return super().sort()
+            return super().sort(attr="date", descending=descending)
         return super().sort(attr=attr, descending=descending)
 
     def scale(self, factor: float) -> "CashFlowStream":
