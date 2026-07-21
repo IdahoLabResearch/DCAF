@@ -1,3 +1,5 @@
+# © 2026 Battelle Energy Alliance, LLC
+# ALL RIGHTS RESERVED
 """Generation-linked contract terms for project-level revenue policies."""
 
 from __future__ import annotations
@@ -241,7 +243,7 @@ class EnergyContract:
     end : date, optional
         Exclusive contract end date.
     label : str
-        Label template for generated revenue cashflows.
+        Label applied to generated revenue cashflows.
     shortfall : {"error"}
         Shortfall handling mode. Currently only ``"error"`` is supported.
     generation_share : float, optional
@@ -312,7 +314,8 @@ class EnergyContract:
         end : date, optional
             Exclusive contract end date.
         label : str, optional
-            Label template for generated revenue cashflows.
+            Label applied to generated revenue cashflows. Default is
+            ``"Contract Revenue"``.
         shortfall : {"error"}, optional
             Shortfall handling mode. Currently only ``"error"`` is supported.
         pro_forma_category : ProFormaCategory or str or None, optional
@@ -363,7 +366,8 @@ class EnergyContract:
         end : date, optional
             Exclusive contract end date.
         label : str, optional
-            Label template for generated revenue cashflows.
+            Label applied to generated revenue cashflows. Default is
+            ``"Contract Revenue"``.
         shortfall : {"error"}, optional
             Shortfall handling mode. Currently only ``"error"`` is supported.
         pro_forma_category : ProFormaCategory or str or None, optional
@@ -416,7 +420,8 @@ class EnergyContract:
         end : date, optional
             Exclusive contract end date.
         label : str, optional
-            Label template for generated revenue cashflows.
+            Label applied to generated revenue cashflows. Default is
+            ``"Contract Revenue"``.
         shortfall : {"error"}, optional
             Shortfall handling mode. Currently only ``"error"`` is supported.
         pro_forma_category : ProFormaCategory or str or None, optional

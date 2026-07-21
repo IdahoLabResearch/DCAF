@@ -215,7 +215,7 @@ class TestComputeTaxableIncome:
         assert result.entries[0].amount == 120_000  # 100k + 50k - 20k - 10k
 
     def test_custom_label(self):
-        """Test custom label template."""
+        """Test a custom taxable-income label."""
         revenue = CashFlowStream(
             [
                 CashFlow(
@@ -413,7 +413,7 @@ class TestTaxLiability:
         assert len(result.entries) == 0
 
     def test_custom_label(self):
-        """Test custom label template."""
+        """Test a custom tax-liability label."""
         taxable_income = CashFlowStream(
             [
                 CashFlow(

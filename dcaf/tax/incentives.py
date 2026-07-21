@@ -14,7 +14,6 @@ Functions:
 from datetime import date
 
 from dcaf.finance.escalation import EscalationPolicy
-from dcaf.shared.formatting import format_label
 from dcaf.shared.types import (
     DayCountConvention,
     Period,
@@ -70,9 +69,7 @@ def ptc(
         ``escalation_period``. With the default ``escalation_period="year"``,
         this is an annual escalation rate. Default is ``0.0``.
     label : str, optional
-        Label template applied to each generated credit cashflow. If ``"{n}"``
-        is present, it is replaced with the 1-based count of eligible PTC
-        entries. Default is ``"PTC"``.
+        Label applied to every generated credit cashflow. Default is ``"PTC"``.
     pro_forma_category : ProFormaCategory or str or None, optional
         Pro-forma category applied to each credit flow. Default is ``"tax_credit"``.
     tax_treatment : TaxTreatment or str, optional
@@ -161,18 +158,15 @@ def ptc(
     )
 
     entries: list[CashFlow] = []
-    n = 0
     for entry in generation_stream.entries:
         if entry.date.year >= cutoff_year:
             continue
-        n += 1
         ptc_rate = rate_per_mwh * policy.factor(entry.date)
-        flow_label = format_label(label, n)
         entries.append(
             CashFlow(
                 amount=entry.amount_mwh * ptc_rate,
                 date=entry.date,
-                label=flow_label,
+                label=label,
                 is_cash=True,
                 pro_forma_category=resolved_category,
                 tax_treatment=resolved_tax_treatment,

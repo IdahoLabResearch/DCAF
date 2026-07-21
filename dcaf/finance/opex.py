@@ -10,7 +10,13 @@ For variable OPEX, use ``GenerationStream.to_cost()`` directly.
 from datetime import date
 
 from dcaf.finance.escalation import EscalationPolicy
-from dcaf.shared.types import DayCountConvention, Period, ProFormaCategory, TaxTreatment, TimingConvention
+from dcaf.shared.types import (
+    DayCountConvention,
+    Period,
+    ProFormaCategory,
+    TaxTreatment,
+    TimingConvention,
+)
 from dcaf.shared.validation import validate_finite
 from dcaf.streams.cashflows import CashFlowStream
 
@@ -71,8 +77,7 @@ def fixed_opex(
         must not be combined with ``escalation``, ``escalation_period``, or
         ``amount_reference_date``.
     label : str
-        Label template; ``{n}`` is replaced with the 1-based period index.
-        Default is ``"Fixed OPEX"``.
+        Label applied to every generated cashflow. Default is ``"Fixed OPEX"``.
     pro_forma_category : ProFormaCategory or str or None
         Pro-forma category applied to every cashflow. Default is ``"operating_cost"``.
     tax_treatment : TaxTreatment or str

@@ -11,7 +11,6 @@ Functions:
     tax_liability: Apply tax rate to taxable income to generate tax payment cashflows
 """
 
-from dcaf.shared.formatting import format_label
 from dcaf.shared.time import period_end
 from dcaf.shared.types import ProFormaCategory, TaxTreatment, normalize_cashflow_classification
 from dcaf.shared.validation import validate_non_negative
@@ -34,7 +33,7 @@ def compute_taxable_income(
     deductible_stream : CashFlowStream
         Stream of tax-deductible cashflows.
     label : str, optional
-        Label template for taxable income flows. Use ``{n}`` for sequential numbering.
+        Label applied to every taxable income flow. Default is ``"Taxable Income"``.
 
     Returns
     -------
@@ -75,12 +74,12 @@ def compute_taxable_income(
             CashFlow(
                 amount=net,
                 date=period_end(period, "year"),
-                label=format_label(label, period_num),
+                label=label,
                 is_cash=False,
                 pro_forma_category=None,
                 tax_treatment=TaxTreatment.NONE,
             )
-            for period_num, (period, net) in enumerate(net_by_period.items(), start=1)
+            for period, net in net_by_period.items()
         ]
     )
 
@@ -105,7 +104,7 @@ def tax_liability(
     tax_rate : float
         Scalar tax rate (e.g. ``0.21`` for 21%).
     label : str, optional
-        Label template for tax flows. Use ``{n}`` for sequential numbering.
+        Label applied to every tax flow. Default is ``"Tax Liability"``.
     pro_forma_category : ProFormaCategory or str or None, optional
         Pro-forma category. Default is ``"tax"``.
     tax_treatment : TaxTreatment or str, optional
@@ -159,12 +158,12 @@ def tax_liability(
             CashFlow(
                 amount=cf.amount * tax_rate * -1,  # Negative = expense/outflow
                 date=cf.date,
-                label=format_label(label, i),
+                label=label,
                 is_cash=True,  # Tax payments are actual cash outflows
                 pro_forma_category=resolved_category,
                 tax_treatment=resolved_tax_treatment,
             )
-            for i, cf in enumerate(income.entries, start=1)
+            for cf in income.entries
         ]
     )
 

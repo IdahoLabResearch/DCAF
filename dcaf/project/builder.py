@@ -318,8 +318,7 @@ class EnergyProject:
             Generation period frequency. Defaults to the project-wide frequency
             set at construction time.
         label : str, optional
-            Label template for individual generation entries. Use ``{n}`` as a
-            period index placeholder if desired.
+            Label applied to every generation entry. Default is ``"Generation"``.
 
         Returns
         -------
@@ -538,8 +537,8 @@ class EnergyProject:
             scheduled price must contain an entry whose date exactly matches
             every generation event; schedule entries are not carried forward.
         label : str, optional
-            Label template for individual revenue cashflows. Use ``{n}`` as a
-            period index placeholder if desired.
+            Label applied to every generated revenue cashflow. Default is
+            ``"Revenue"``.
         pro_forma_category : ProFormaCategory or str or None, optional
             Pro-forma category for the revenue flows. Default is revenue.
         tax_treatment : TaxTreatment or str, optional
@@ -616,8 +615,8 @@ class EnergyProject:
             unallocated generation event; schedule entries are not carried
             forward.
         label : str, optional
-            Label template for generated revenue cashflows. Use ``{n}`` as a
-            period index placeholder if desired.
+            Label applied to generated revenue cashflows. Default is
+            ``"Remainder Revenue"``.
         pro_forma_category : ProFormaCategory or str or None, optional
             Pro-forma category for generated cashflows. Default is revenue.
         tax_treatment : TaxTreatment or str, optional
@@ -739,8 +738,7 @@ class EnergyProject:
         escalation_policy : EscalationPolicy, optional
             Fully configured escalation policy. Overrides simple-rate inputs.
         label : str, optional
-            Label template for individual cost cashflows. Use ``{n}`` as a
-            period index placeholder if desired.
+            Label applied to every fixed-cost cashflow. Default is ``"Fixed OPEX"``.
 
         Returns
         -------
@@ -798,7 +796,8 @@ class EnergyProject:
         escalation_policy : EscalationPolicy, optional
             Fully configured escalation policy.
         label : str, optional
-            Label template. Use ``{n}`` as a period index placeholder if desired.
+            Label applied to every variable-cost cashflow. Default is
+            ``"Variable Cost"``.
 
         Returns
         -------
@@ -1045,7 +1044,8 @@ class EnergyProject:
         convention : MACRSConvention, optional
             MACRS convention. Default is ``"half-year"``.
         label : str, optional
-            Label template. Use ``{n}`` as a period index placeholder if desired.
+            Label applied to every MACRS depreciation flow. Default is
+            ``"MACRS Depreciation"``.
 
         Returns
         -------
@@ -1100,7 +1100,8 @@ class EnergyProject:
         terminal_catch_up : bool, optional
             Accumulate remaining basis in the final period. Default is ``False``.
         label : str, optional
-            Label template. Use ``{n}`` as a period index placeholder if desired.
+            Label applied to every VDB depreciation flow. Default is
+            ``"VDB Depreciation"``.
 
         Returns
         -------
@@ -1170,7 +1171,7 @@ class EnergyProject:
         escalation_policy : EscalationPolicy, optional
             Fully configured escalation policy.
         label : str, optional
-            Label template. Use ``{n}`` as a period index placeholder if desired.
+            Label applied to every PTC cashflow. Default is ``"PTC"``.
 
         Returns
         -------

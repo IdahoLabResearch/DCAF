@@ -2,7 +2,6 @@
 # ALL RIGHTS RESERVED
 """Shared types and utility functions."""
 
-from dcaf.shared.formatting import format_label
 from dcaf.shared.time import (
     PeriodTruncationWarning,
     PeriodWindow,
@@ -56,7 +55,6 @@ __all__ = [
     "elapsed_hours",
     "elapsed_periods",
     "event_date",
-    "format_label",
     "hours_per_period",
     "period_windows",
     "period_window_event_date",

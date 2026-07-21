@@ -150,19 +150,6 @@ def test_timing_begin_uses_period_start_dates():
     assert [flow.date for flow in stream.entries] == [date(2025, 1, 1), date(2026, 1, 1)]
 
 
-def test_default_label():
-    """Default label does not contain period index."""
-    stream = fixed_opex(amount=1000, start=date(2025, 1, 1), periods=2)
-    assert stream.entries[0].label == stream.entries[1].label
-
-
-def test_custom_label_with_template():
-    """Label template '{n}' is replaced with the 1-based period index."""
-    stream = fixed_opex(amount=1000, start=date(2025, 1, 1), periods=2, label="Maintenance {n}")
-    assert stream.entries[0].label == "Maintenance 1"
-    assert stream.entries[1].label == "Maintenance 2"
-
-
 def test_custom_classification_applied_to_all_flows():
     """Caller-supplied classification overrides the defaults on every flow."""
     stream = fixed_opex(

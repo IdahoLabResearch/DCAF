@@ -134,8 +134,7 @@ def test_from_recurring_annual_escalation_is_date_based():
     )
     expected_dates = [date(2026, 4, 4), date(2026, 5, 4), date(2026, 6, 4)]
     expected_amounts = [
-        -200.0 * _annual_factor(date(2026, 3, 5), flow_date, 0.1)
-        for flow_date in expected_dates
+        -200.0 * _annual_factor(date(2026, 3, 5), flow_date, 0.1) for flow_date in expected_dates
     ]
     for i, flow in enumerate(cf_stream.entries):
         assert flow.date == expected_dates[i]
@@ -154,7 +153,7 @@ def test_from_recurring_supports_explicit_nonannual_escalation_period():
         amount=10_000.0,
         frequency="quarter",
         escalation=0.2,
-        label="quarter #{n}",
+        label="quarterly payment",
         escalation_period="quarter",
     )
     expected_dates = [date(2030, 12, 3), date(2031, 3, 3), date(2031, 6, 3)]
@@ -165,7 +164,7 @@ def test_from_recurring_supports_explicit_nonannual_escalation_period():
     for i, flow in enumerate(cf_stream.entries):
         assert flow.date == expected_dates[i]
         assert flow.amount == pytest.approx(expected_amounts[i])
-        assert flow.label == f"quarter #{i + 1}"
+        assert flow.label == "quarterly payment"
 
 
 def test_from_recurring_annual_escalation_supports_daily_frequency():

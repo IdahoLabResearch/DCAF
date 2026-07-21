@@ -18,7 +18,6 @@ from dcaf.finance.escalation import (
     EscalationPolicy,
     _resolve_escalation_policy_override,
 )
-from dcaf.shared.formatting import format_label
 from dcaf.shared.time import (
     elapsed_hours,
     period_window_event_date,
@@ -266,7 +265,7 @@ class GenerationStream(BaseStream[Generation]):
         frequency : Period, optional
             Generation frequency. Default ``"year"``.
         label : str, optional
-            Label template. ``{n}`` is replaced with the 1-based period index.
+            Label applied to every generated entry. Default is ``"Generation"``.
         day_count_convention : DayCountConvention, optional
             Day-count convention used to compute elapsed capacity hours.
         timing : {"end", "begin", "middle"}, optional
@@ -302,15 +301,14 @@ class GenerationStream(BaseStream[Generation]):
             day_count_convention,
             context="GenerationStream.from_capacity periods",
         )
-        for i, window in enumerate(windows, start=1):
+        for window in windows:
             hours = elapsed_hours(window.start, window.end, day_count_convention)
             mwh = capacity_mw * capacity_factor * hours
-            gen_label = format_label(label, i)
             entries.append(
                 Generation(
                     amount_mwh=mwh,
                     date=period_window_event_date(window, timing),
-                    label=gen_label,
+                    label=label,
                 )
             )
         return cls(entries)
@@ -459,8 +457,7 @@ class GenerationStream(BaseStream[Generation]):
         frequency : Period, optional
             Generation frequency. Default ``"year"``.
         label : str, optional
-            Label template for the appended entries. ``{n}`` is
-            replaced with the 1-based period index.
+            Label applied to every appended entry. Default is ``"Generation"``.
         day_count_convention : DayCountConvention, optional
             Day-count convention used to compute elapsed capacity hours.
         timing : {"end", "begin", "middle"}, optional
@@ -706,7 +703,8 @@ class GenerationStream(BaseStream[Generation]):
             must not be combined with ``escalation``, ``escalation_period``, or
             ``amount_reference_date``.
         label : str, optional
-            Label template. ``{n}`` is replaced with the 1-based period index.
+            Label applied to every generated cashflow. Default is
+            ``"Generation Revenue"``.
         pro_forma_category : ProFormaCategory or str or None, optional
             Pro-forma category for the revenue flows. Default is ``"revenue"``.
         tax_treatment : TaxTreatment or str, optional
@@ -738,14 +736,13 @@ class GenerationStream(BaseStream[Generation]):
             pro_forma_category, tax_treatment
         )
         entries: list[CashFlow] = []
-        for i, entry in enumerate(self.entries):
+        for entry in self.entries:
             price = price_per_mwh * escalation_policy.factor(entry.date)
-            flow_label = format_label(label, i + 1)
             entries.append(
                 CashFlow(
                     amount=entry.amount_mwh * price,
                     date=entry.date,
-                    label=flow_label,
+                    label=label,
                     is_cash=True,
                     pro_forma_category=resolved_category,
                     tax_treatment=resolved_tax_treatment,
@@ -790,7 +787,8 @@ class GenerationStream(BaseStream[Generation]):
             must not be combined with ``escalation``, ``escalation_period``, or
             ``amount_reference_date``.
         label : str, optional
-            Label template. ``{n}`` is replaced with the 1-based period index.
+            Label applied to every generated cashflow. Default is
+            ``"Variable Cost"``.
         pro_forma_category : ProFormaCategory or str or None, optional
             Pro-forma category for the cost flows. Default is ``"operating_cost"``.
         tax_treatment : TaxTreatment or str, optional
@@ -822,14 +820,13 @@ class GenerationStream(BaseStream[Generation]):
             pro_forma_category, tax_treatment
         )
         entries: list[CashFlow] = []
-        for i, entry in enumerate(self.entries):
+        for entry in self.entries:
             cost = rate_per_mwh * escalation_policy.factor(entry.date)
-            flow_label = format_label(label, i + 1)
             entries.append(
                 CashFlow(
                     amount=-entry.amount_mwh * cost,
                     date=entry.date,
-                    label=flow_label,
+                    label=label,
                     is_cash=True,
                     pro_forma_category=resolved_category,
                     tax_treatment=resolved_tax_treatment,
