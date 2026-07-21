@@ -42,7 +42,6 @@ from dcaf.project._builder_config import (
 from dcaf.project.analysis import ProjectAnalysis
 from dcaf.project.contracts import GenerationPrice, GenerationSettlementEvent, EnergyContract
 from dcaf.project.timeline import ProjectTimeline
-from dcaf.shared.formatting import format_label
 from dcaf.shared.time import (
     ScheduleTruncationWarning,
     elapsed_hours,
@@ -421,8 +420,7 @@ class ProjectCompiler:
                 phase_end=ops_end,
             )
             entries: list[Generation] = []
-            for index, modeled_period in enumerate(schedule, start=1):
-                label = format_label(generation.label, index)
+            for modeled_period in schedule:
                 hours = elapsed_hours(
                     modeled_period.start,
                     modeled_period.end,
@@ -432,7 +430,7 @@ class ProjectCompiler:
                     Generation(
                         amount_mwh=(generation.capacity_mw * generation.capacity_factor * hours),
                         date=modeled_period.event_date,
-                        label=label,
+                        label=generation.label,
                     )
                 )
             base_generation = GenerationStream(entries)
@@ -782,7 +780,6 @@ class ProjectCompiler:
         requests: tuple[ContractGenerationRequest, ...],
     ) -> CashFlowStream:
         entries: list[CashFlow] = []
-        request_index = 0
         category, tax_treatment = normalize_cashflow_classification(
             registration.contract.pro_forma_category,
             registration.contract.tax_treatment,
@@ -798,12 +795,11 @@ class ProjectCompiler:
                 delivered_mwh=request.requested_mwh,
             )
             price = registration.contract.price.resolve(event)
-            request_index += 1
             entries.append(
                 CashFlow(
                     amount=event.delivered_mwh * price,
                     date=entry.date,
-                    label=format_label(registration.contract.label, request_index),
+                    label=registration.contract.label,
                     is_cash=True,
                     pro_forma_category=category,
                     tax_treatment=tax_treatment,
@@ -819,7 +815,6 @@ class ProjectCompiler:
         requested_by_entry: tuple[float, ...],
     ) -> CashFlowStream:
         entries: list[CashFlow] = []
-        remainder_index = 0
         category, tax_treatment = normalize_cashflow_classification(
             registration.pro_forma_category,
             registration.tax_treatment,
@@ -835,12 +830,11 @@ class ProjectCompiler:
                 delivered_mwh=delivered_mwh,
             )
             price = registration.price.resolve(event)
-            remainder_index += 1
             entries.append(
                 CashFlow(
                     amount=event.delivered_mwh * price,
                     date=entry.date,
-                    label=format_label(registration.label, remainder_index),
+                    label=registration.label,
                     is_cash=True,
                     pro_forma_category=category,
                     tax_treatment=tax_treatment,
@@ -863,7 +857,7 @@ class ProjectCompiler:
             pro_forma_category,
             tax_treatment,
         )
-        for index, entry in enumerate(generation.entries, start=1):
+        for entry in generation.entries:
             event = _settlement_event(
                 component_name=name,
                 entry=entry,
@@ -874,7 +868,7 @@ class ProjectCompiler:
                 CashFlow(
                     amount=event.delivered_mwh * price.resolve(event),
                     date=entry.date,
-                    label=format_label(label, index),
+                    label=label,
                     is_cash=True,
                     pro_forma_category=category,
                     tax_treatment=resolved_tax_treatment,
@@ -915,8 +909,7 @@ class ProjectCompiler:
             self.config.day_count_convention,
         )
         entries: list[CashFlow] = []
-        for index, modeled_period in enumerate(schedule, start=1):
-            label = format_label(fixed.label, index)
+        for modeled_period in schedule:
             entries.append(
                 CashFlow(
                     amount=(
@@ -925,7 +918,7 @@ class ProjectCompiler:
                         * modeled_period.fraction
                     ),
                     date=modeled_period.event_date,
-                    label=label,
+                    label=fixed.label,
                     is_cash=True,
                     pro_forma_category=ProFormaCategory.OPERATING_COST,
                     tax_treatment=TaxTreatment.DEDUCTIBLE,

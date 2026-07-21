@@ -25,7 +25,6 @@ from dcaf.finance.escalation import (
     EscalationPolicy,
     _resolve_escalation_policy_override,
 )
-from dcaf.shared.formatting import format_label
 from dcaf.shared.time import period_window_event_date, period_windows
 from dcaf.shared.types import (
     DayCountConvention,
@@ -370,8 +369,8 @@ class CashFlowStream(BaseStream[CashFlow]):
             must not be combined with ``escalation``, ``escalation_period``, or
             ``amount_reference_date``.
         label : str, optional
-            Label for the cashflows. Can include {n} placeholder for period number
-            (1-indexed). Default is "Recurring Payment".
+            Label applied to every generated cashflow. Default is
+            ``"Recurring Payment"``.
         is_cash : bool, optional
             Whether the cashflows represent actual cash movements. Default is True.
         pro_forma_category : ProFormaCategory or str or None, optional
@@ -411,15 +410,14 @@ class CashFlowStream(BaseStream[CashFlow]):
             day_count_convention,
             context="CashFlowStream.from_recurring periods",
         )
-        for i, window in enumerate(windows, start=1):
+        for window in windows:
             flow_date = period_window_event_date(window, timing)
             escalated_amount = amount * escalation_policy.factor(flow_date) * window.fraction
-            flow_label = format_label(label, i)
             entries.append(
                 CashFlow(
                     amount=escalated_amount,
                     date=flow_date,
-                    label=flow_label,
+                    label=label,
                     is_cash=is_cash,
                     pro_forma_category=resolved_category,
                     tax_treatment=resolved_tax_treatment,
