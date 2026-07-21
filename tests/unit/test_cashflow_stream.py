@@ -134,8 +134,7 @@ def test_from_recurring_annual_escalation_is_date_based():
     )
     expected_dates = [date(2026, 4, 4), date(2026, 5, 4), date(2026, 6, 4)]
     expected_amounts = [
-        -200.0 * _annual_factor(date(2026, 3, 5), flow_date, 0.1)
-        for flow_date in expected_dates
+        -200.0 * _annual_factor(date(2026, 3, 5), flow_date, 0.1) for flow_date in expected_dates
     ]
     for i, flow in enumerate(cf_stream.entries):
         assert flow.date == expected_dates[i]

@@ -1,3 +1,5 @@
+# © 2026 Battelle Energy Alliance, LLC
+# ALL RIGHTS RESERVED
 """Generation-linked contract terms for project-level revenue policies."""
 
 from __future__ import annotations

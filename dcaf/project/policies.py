@@ -1,3 +1,5 @@
+# © 2026 Battelle Energy Alliance, LLC
+# ALL RIGHTS RESERVED
 """Public protocol for generation-linked project cash-flow policies."""
 
 from __future__ import annotations

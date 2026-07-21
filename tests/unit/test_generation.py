@@ -183,7 +183,7 @@ def test_from_capacity_rejects_capacity_factor_outside_unit_interval(capacity_fa
             periods=1,
         )
 
-        
+
 def test_from_capacity_supports_timing_conventions():
     begin = GenerationStream.from_capacity(1.0, 1.0, date(2030, 1, 1), 1, timing="begin")
     middle = GenerationStream.from_capacity(1.0, 1.0, date(2030, 1, 1), 1, timing="middle")

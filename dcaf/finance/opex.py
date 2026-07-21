@@ -10,7 +10,13 @@ For variable OPEX, use ``GenerationStream.to_cost()`` directly.
 from datetime import date
 
 from dcaf.finance.escalation import EscalationPolicy
-from dcaf.shared.types import DayCountConvention, Period, ProFormaCategory, TaxTreatment, TimingConvention
+from dcaf.shared.types import (
+    DayCountConvention,
+    Period,
+    ProFormaCategory,
+    TaxTreatment,
+    TimingConvention,
+)
 from dcaf.shared.validation import validate_finite
 from dcaf.streams.cashflows import CashFlowStream
 
