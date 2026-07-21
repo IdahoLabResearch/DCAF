@@ -1,3 +1,5 @@
+# © 2026 Battelle Energy Alliance, LLC
+# ALL RIGHTS RESERVED
 from datetime import date
 from math import inf, nan
 from typing import cast
@@ -279,7 +281,9 @@ def test_generation_revenue_callable_receives_whole_project_settlement_context()
     events: list[GenerationSettlementEvent] = []
 
     def price(event: GenerationSettlementEvent) -> float:
-        events.append(event)  # creates an external artifact that the `price` function was called for every generation event
+        events.append(
+            event
+        )  # creates an external artifact that the `price` function was called for every generation event
         return prices[event.date]
 
     analysis = (

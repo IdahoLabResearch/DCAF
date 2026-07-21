@@ -7,7 +7,7 @@ repos:
     -   id: end-of-file-fixer
     -   id: check-added-large-files
 
-# Run tests, including doctests
+# Project checks
 -   repo: local
     hooks:
     -   id: copyright-header
@@ -22,6 +22,13 @@ repos:
         types: [python]
         always_run: true
         pass_filenames: false
+    -   id: mypy
+        name: mypy
+        entry: uv run mypy dcaf/
+        language: system
+        types: [python]
+        always_run: true
+        pass_filenames: false
 
 # Linting and formatting
 -   repo: https://github.com/astral-sh/ruff-pre-commit
@@ -29,4 +36,3 @@ repos:
     hooks:
     -   id: ruff-check
     -   id: ruff-format
-        args: [ --check ]
