@@ -23,7 +23,7 @@ it with `uv run` (e.g. `uv run python`), or activate `.venv` directly.
 Once DCAF is published as a package, you can instead add it to your own project:
 
 ```bash
-uv add dcaf      # or: pip install dcaf
+uv add dcaf-idaholab      # or: pip install dcaf-idaholab
 ```
 
 ## 2. Build and analyze a project
