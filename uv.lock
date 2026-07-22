@@ -444,7 +444,7 @@ toml = [
 ]
 
 [[package]]
-name = "dcaf"
+name = "dcaf-idaholab"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

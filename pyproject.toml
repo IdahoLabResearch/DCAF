@@ -3,15 +3,52 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "dcaf"
+name = "dcaf-idaholab"
 version = "0.1.0"
 description = "Discounted Cashflow Analysis Framework is a financial engineering library for nuclear energy projects."
 readme = "README.md"
 requires-python = ">=3.11"
+license = "MIT"
+authors = [
+    {name = "Dylan J. McDowell"},
+    {name = "Jacob A Bryan"},
+    {name = "Caleb M Sitton"},
+    {name = "Gabriel J Soto Gonzalez"},
+    {name = "Nahuel Guaita"},
+    {name = "Paul W Talbot"},
+]
+maintainers = [
+    {name = "Idaho National Laboratory"},
+]
+keywords = [
+    "discounted cash flow",
+    "financial engineering",
+    "nuclear energy",
+    "techno-economic analysis",
+    "extended power uprate",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Office/Business :: Financial",
+    "Topic :: Scientific/Engineering",
+]
 dependencies = [
     "python-dateutil>=2.9.0.post0",
     "types-python-dateutil>=2.9.0.20260302",
 ]
+
+[project.urls]
+Homepage = "https://github.com/IdahoLabResearch/DCAF"
+Documentation = "https://github.com/IdahoLabResearch/DCAF/tree/main/docs"
+Repository = "https://github.com/IdahoLabResearch/DCAF.git"
+Issues = "https://github.com/IdahoLabResearch/DCAF/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["dcaf"]
 
 
 [dependency-groups]

@@ -1,13 +1,28 @@
 # DCAF
 
- The Discounted Cashfow Analysis Framework is a
- professional financial engineering library for nuclear energy project cost and
- metric calculations, with a focus on Extended Power Uprate (EPU) projects.
+The Discounted Cash Flow Analysis Framework is a professional financial engineering
+library for nuclear energy project cost and metric calculations, with a focus on
+Extended Power Uprate (EPU) projects.
+
+## Installation
+
+Install the `dcaf-idaholab` distribution from PyPI:
+
+```bash
+uv add dcaf-idaholab
+# or: pip install dcaf-idaholab
+```
+
+The Python import package remains `dcaf`:
+
+```python
+from dcaf import EnergyProject
+```
 
 ## Overview
 
-DCAF provides high-fidelity cost modeling and financial analyis tools
-specifcally designed for nuclear energy projects. The library enables detailed
+DCAF provides high-fidelity cost modeling and financial analysis tools
+specifically designed for nuclear energy projects. The library enables detailed
 financial analysis including:
 
 - Net Present Value (NPV), Discounted Cashflow (DCF) and Internal Rate of Return
