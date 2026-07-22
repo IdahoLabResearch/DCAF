@@ -840,7 +840,8 @@ class CashFlowStream(BaseStream[CashFlow]):
         Parameters
         ----------
         rate : float
-            The annual discount rate as a decimal (e.g., 0.10 for 10%).
+            The annual discount rate as a decimal (e.g., 0.10 for 10%). Must be
+            finite and greater than ``-1``.
         valuation_date : date
             The date at which to calculate the present value. This is the reference
             point for all discounting/compounding calculations.
@@ -853,6 +854,11 @@ class CashFlowStream(BaseStream[CashFlow]):
         float
             The net present value of all cash cashflows in the stream, evaluated
             at the valuation date.
+
+        Raises
+        ------
+        ValueError
+            If ``rate`` is not finite or is less than or equal to ``-1``.
 
         Examples
         --------

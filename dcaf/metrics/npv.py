@@ -6,9 +6,11 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from datetime import date
+from math import fsum
 
 from dcaf.shared.time import timedelta_fractional_years
 from dcaf.shared.types import DayCountConvention
+from dcaf.shared.validation import validate_finite
 
 
 def npv(
@@ -33,7 +35,8 @@ def npv(
         ``(amount, date)`` pairs to discount. Both financial amounts and
         physical quantities (e.g. MWh) are supported.
     rate : float
-        Annual discount rate as a decimal (e.g. ``0.10`` for 10%).
+        Annual discount rate as a decimal (e.g. ``0.10`` for 10%). Must be
+        finite and greater than ``-1``.
     valuation_date : date
         Reference date for discounting/compounding.
     convention : DayCountConvention, optional
@@ -46,6 +49,11 @@ def npv(
         Sum of present values. Returns ``0.0`` for an empty *values*
         sequence.
 
+    Raises
+    ------
+    ValueError
+        If *rate* is not finite or is less than or equal to ``-1``.
+
     Examples
     --------
     >>> from datetime import date
@@ -56,9 +64,12 @@ def npv(
     ... )  # doctest: +SKIP
     0.0  # approximately
     """
+    validate_finite(rate, "rate")
+    if rate <= -1.0:
+        raise ValueError("rate must be greater than -1.0")
+
     one_plus_r = 1.0 + rate
-    total = 0.0
-    for amount, d in values:
-        t = timedelta_fractional_years(valuation_date, d, convention)
-        total += amount / one_plus_r**t
-    return total
+    return fsum(
+        amount / one_plus_r ** timedelta_fractional_years(valuation_date, d, convention)
+        for amount, d in values
+    )

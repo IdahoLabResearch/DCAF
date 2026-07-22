@@ -568,6 +568,14 @@ def test_discounted_sum_zero_rate():
     assert abs(gs.discounted_sum(0.0, date(2030, 1, 1)) - gs.sum()) < 1e-6
 
 
+def test_discounted_sum_rejects_non_finite_rate():
+    """The generation wrapper enforces the shared finite-rate requirement."""
+    gs = GenerationStream([Generation(1000.0, date(2030, 1, 1))])
+
+    with pytest.raises(ValueError, match="rate must be finite"):
+        gs.discounted_sum(float("inf"), date(2030, 1, 1))
+
+
 def test_discounted_sum_uses_constant_rate_escalation_for_discounting():
     """Discounted sum matches evaluation through the shared constant-rate policy."""
     valuation_date = date(2030, 1, 1)

@@ -636,6 +636,29 @@ def test_npv_no_cashflows():
     assert abs(npv) < tol
 
 
+def test_npv_preserves_small_remainder_under_cancellation():
+    """At zero rate, exact offsetting amounts leave the original small cashflow."""
+    valuation_date = date(2026, 1, 1)
+    stream = CashFlowStream(
+        [
+            CashFlow(1_000_000_000_000.0, valuation_date),
+            CashFlow(0.01, valuation_date),
+            CashFlow(-1_000_000_000_000.0, valuation_date),
+        ]
+    )
+
+    assert stream.npv(rate=0.0, valuation_date=valuation_date) == 0.01
+
+
+def test_npv_rejects_rate_at_minus_one():
+    """The stream wrapper enforces the shared real-valued rate domain."""
+    valuation_date = date(2026, 1, 1)
+    stream = CashFlowStream([CashFlow(100.0, date(2026, 7, 1))])
+
+    with pytest.raises(ValueError, match="rate must be greater than -1.0"):
+        stream.npv(rate=-1.0, valuation_date=valuation_date)
+
+
 # ---- filter by classification / is_cash keyword tests ----
 
 
