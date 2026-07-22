@@ -3,7 +3,7 @@
 """
 Core cashflow abstractions for discounted cash-flow analysis.
 
-Provides CashFlow (immutable data point), CashFlowStream (functional container),
+Provides CashFlow (immutable data point), CashFlowStream (functional-style container),
 CashFlowGroup (grouped container), and structured cashflow classification fields.
 """
 
@@ -254,9 +254,16 @@ class CashFlowStream(BaseStream[CashFlow]):
 
     Preserves insertion order and supports sequence-style operations (iteration,
     indexing, slicing, ``len()``) alongside domain-specific helpers for building,
-    filtering, transforming, grouping, and discounting cashflows. All
-    mutating-style operations return a new ``CashFlowStream``; the original is
-    never modified.
+    filtering, transforming, grouping, and discounting cashflows. Mutating-style
+    methods such as :meth:`append`, :meth:`extend`, :meth:`filter`, :meth:`apply`,
+    :meth:`sort`, and :meth:`scale` return a new ``CashFlowStream`` without modifying
+    the source stream. The container itself is not immutable: callers can mutate its
+    public :attr:`entries` list directly.
+
+    Attributes
+    ----------
+    entries : list[CashFlow]
+        Public mutable list containing the stream's frozen ``CashFlow`` values.
 
     Examples
     --------

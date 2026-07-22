@@ -9,7 +9,7 @@ transformation the builder doesn't expose. Streams are also the clearest way to 
 *what the builder produces under the hood*.
 ```
 
-DCAF's primitives are two parallel families of immutable, dated values:
+DCAF's stream primitives are two parallel families of dated entry values and containers:
 
 | Single value | Container | Grouped container |
 |--------------|-----------|-------------------|
@@ -22,8 +22,8 @@ A `CashFlow` is a frozen record: an `amount`, a `date`, a `label`, an `is_cash` 
 (cash vs. accrual items like depreciation), a `pro_forma_category` (how it appears in
 a statement), and a `tax_treatment` (`TAXABLE`, `DEDUCTIBLE`, or `NONE`).
 
-A `CashFlowStream` is a functional container. Every operation returns a *new* stream,
-so chains never mutate the original:
+A `CashFlowStream` is a functional-style container. Stream-producing methods return a
+*new* stream, so chains using those methods do not mutate the original:
 
 ```python
 from datetime import date
@@ -68,11 +68,26 @@ gen.sum()                                                       # total MWh
 `GenerationGroup` — a dict-like container of sub-streams supporting `aggregate(...)`,
 `apply_to_groups(...)`, `filter_groups(...)`, and `ungroup()` to flatten back.
 
-## Immutability and composition
+## Entry and container mutation semantics
 
-All data classes are frozen and all operations return new instances. This makes
-streams safe to share, easy to reason about, and naturally composable — the same
-properties the [`EnergyProject`](energy_project.md) builder relies on.
+`CashFlow` and `Generation` are frozen values. Their attributes cannot be reassigned.
+
+`CashFlowStream` and `GenerationStream` are not immutable containers. Their public
+`entries` attributes are mutable lists, so callers can modify a stream directly through
+that attribute. Methods such as `append()`, `extend()`, `filter()`, `apply()`, `sort()`,
+and `scale()` follow a non-mutating contract: they return new streams without changing
+the source stream.
+
+```python
+original = CashFlowStream([CashFlow(100.0, date(2026, 1, 1))])
+scaled = original.scale(2.0)
+
+print(original.entries[0].amount)  # 100.0: scale() did not mutate original
+print(scaled.entries[0].amount)    # 200.0
+
+original.entries.append(CashFlow(50.0, date(2026, 2, 1)))
+print(len(original.entries))       # 2: entries itself is mutable
+```
 
 ```{seealso}
 - [Streams API reference](../api/streams.md) for full signatures.

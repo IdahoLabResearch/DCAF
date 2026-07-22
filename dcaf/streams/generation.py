@@ -3,8 +3,8 @@
 """
 Generation stream module for physical energy quantities.
 
-Provides Generation (single data point), GenerationStream (container),
-and GenerationGroup (grouped container) for modeling MWh production.
+Provides Generation (immutable data point), GenerationStream (functional-style
+container), and GenerationGroup (grouped container) for modeling MWh production.
 """
 
 import datetime as dt
@@ -204,8 +204,15 @@ class GenerationStream(BaseStream[Generation]):
     Mirrors the ``CashFlowStream`` pattern for physical energy quantities.
     Supports iteration, indexing, slicing, and ``len()``, alongside
     domain-specific helpers for building, filtering, transforming, and
-    converting generation to revenue or cost cashflows. All mutating-style
-    operations return a new ``GenerationStream``; the original is never modified.
+    converting generation to revenue or cost cashflows. Mutating-style methods
+    return a new ``GenerationStream`` without modifying the source stream. The
+    container itself is not immutable: callers can mutate its public :attr:`entries`
+    list directly.
+
+    Attributes
+    ----------
+    entries : list[Generation]
+        Public mutable list containing the stream's frozen ``Generation`` values.
 
     Examples
     --------
