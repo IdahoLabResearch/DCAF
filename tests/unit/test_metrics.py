@@ -5,6 +5,7 @@
 from datetime import date
 
 import pytest
+from hypothesis import example, given, settings, strategies as st
 
 from dcaf.metrics import irr, lcoe, npv
 from dcaf.streams import CashFlow, CashFlowStream
@@ -122,6 +123,42 @@ class TestIrr:
         )
         result = irr(stream)
         assert result == pytest.approx(0.12321245982864881, abs=1e-8)
+
+    @given(
+        target_rate=st.floats(min_value=-0.75, max_value=1.0, allow_subnormal=False),
+        principal=st.floats(min_value=1.0, max_value=1e9, allow_subnormal=False),
+        allocation_weights=st.lists(
+            st.floats(min_value=0.01, max_value=1.0, allow_subnormal=False),
+            min_size=1,
+            max_size=8,
+        ),
+    )
+    @example(
+        target_rate=0.875,
+        principal=1.0,
+        allocation_weights=[0.125, 0.375, 0.0625, 0.25, 1.0, 0.75, 0.75],
+    )
+    @settings(max_examples=10_000)
+    def test_recovers_manufactured_unique_root(
+        self,
+        target_rate: float,
+        principal: float,
+        allocation_weights: list[float],
+    ):
+        """IRR recovers an independently manufactured unique root."""
+        total_weight = sum(allocation_weights)
+        returns = [
+            CashFlow(
+                principal * weight / total_weight * (1.0 + target_rate) ** year,
+                date(2025 + year, 1, 1),
+            )
+            for year, weight in enumerate(allocation_weights, start=1)
+        ]
+        stream = CashFlowStream([CashFlow(-principal, date(2025, 1, 1)), *returns])
+
+        # At the target rate, each return's PV is its allocated share of the principal.
+        # The single sign change also makes that manufactured root unique.
+        assert irr(stream, tol=1e-10) == pytest.approx(target_rate, rel=1e-7, abs=1e-7)
 
     def test_npv_is_zero_at_irr(self):
         """NPV at the IRR should be approximately zero."""

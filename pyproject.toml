@@ -72,6 +72,7 @@ docs = [
 ]
 
 tests = [
+    "hypothesis>=6.160.0",
     "jupyter>=1.1.1",
     "pytest>=8.0.0",
     "pytest-cov>=7.0.0",
