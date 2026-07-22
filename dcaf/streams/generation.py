@@ -645,7 +645,7 @@ class GenerationStream(BaseStream[Generation]):
         Parameters
         ----------
         rate : float
-            Discount rate.
+            Annual discount rate. Must be finite and greater than ``-1``.
         valuation_date : date
             Reference date.
         convention : DayCountConvention, optional
@@ -655,6 +655,11 @@ class GenerationStream(BaseStream[Generation]):
         -------
         float
             Discounted total MWh.
+
+        Raises
+        ------
+        ValueError
+            If ``rate`` is not finite or is less than or equal to ``-1``.
 
         Examples
         --------

@@ -44,6 +44,28 @@ class TestNpv:
         """Empty iterable returns 0.0."""
         assert npv([], rate=0.10, valuation_date=date(2025, 1, 1)) == 0.0
 
+    def test_allows_finite_negative_rate_above_minus_one(self):
+        """A finite rate above -1 remains in the real-valued NPV domain."""
+        values = [(50.0, date(2026, 1, 1))]
+
+        assert npv(values, rate=-0.5, valuation_date=date(2025, 1, 1)) == pytest.approx(100.0)
+
+    @pytest.mark.parametrize("rate", [-1.0, -1.1])
+    def test_rejects_rate_at_or_below_minus_one(self, rate):
+        """Rates at or below -1 are singular or complex for fractional periods."""
+        values = [(100.0, date(2026, 7, 1))]
+
+        with pytest.raises(ValueError, match="rate must be greater than -1.0"):
+            npv(values, rate=rate, valuation_date=date(2026, 1, 1))
+
+    @pytest.mark.parametrize("rate", [float("nan"), float("inf"), float("-inf")])
+    def test_rejects_non_finite_rate(self, rate):
+        """NPV requires a finite discount rate."""
+        values = [(100.0, date(2026, 7, 1))]
+
+        with pytest.raises(ValueError, match="rate must be finite"):
+            npv(values, rate=rate, valuation_date=date(2026, 1, 1))
+
     def test_compounding_past_values(self):
         """Values before valuation_date are compounded forward."""
         # 2025 is not a leap year: 2024-01-01 → 2025-01-01 = 366 days (2024 is leap)
