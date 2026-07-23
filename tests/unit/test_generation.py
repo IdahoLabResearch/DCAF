@@ -268,20 +268,21 @@ def test_from_outage_rejects_invalid_inputs():
 # === GenerationStream.from_streams ===
 
 
-def test_from_streams_combines():
-    """from_streams combines multiple GenerationStreams."""
-    gs1 = GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 2)
-    gs2 = GenerationStream.from_capacity(50, 0.8, date(2032, 1, 1), 3)
-    combined = GenerationStream.from_streams(gs1, gs2)
-    assert combined.count() == 5
+def test_from_streams_preserves_order_and_duplicates():
+    """from_streams concatenates mixed input forms without removing duplicates."""
+    first = Generation(100.0, date(2030, 1, 1), label="first")
+    duplicate = Generation(200.0, date(2031, 1, 1), label="duplicate")
+    middle = Generation(300.0, date(2032, 1, 1), label="middle")
+    last = Generation(400.0, date(2033, 1, 1), label="last")
 
+    result = GenerationStream.from_streams(
+        [first, duplicate],
+        GenerationStream([duplicate]),
+        GenerationStream([middle]),
+        last,
+    )
 
-def test_from_streams_accepts_entries_and_iterables():
-    """from_streams also accepts individual Generation entries and plain iterables."""
-    g1 = Generation(100.0, date(2030, 1, 1))
-    g2 = Generation(200.0, date(2031, 1, 1))
-    combined = GenerationStream.from_streams(g1, [g2])
-    assert combined.entries == [g1, g2]
+    assert result.entries == [first, duplicate, duplicate, middle, last]
 
 
 def test_from_streams_rejects_other_stream_types():

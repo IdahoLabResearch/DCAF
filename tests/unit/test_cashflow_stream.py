@@ -275,22 +275,19 @@ def test_from_recurring_rejects_escalation_builder_override():
         )
 
 
-def test_from_streams():
-    """
-    Tests the CashFlowStream.from_streams method, providing a CashFlow, a CashFlowStream,
-    a list of CashFlow objects, and a set of CashFlow objects as arguments.
-    """
-    cf = CashFlow(amount=100.0, date=date(2020, 1, 1))
-    cf_stream_old = CashFlowStream([CashFlow(amount=-300.0, date=date(2023, 1, 1))])
-    cf_list = [
-        CashFlow(amount=200.0, date=date(2021, 1, 1)),
-        CashFlow(amount=-100.0, date=date(2022, 1, 1)),
-    ]
-    cf_set = {CashFlow(amount=-200.0, date=date(2025, 1, 1))}
+def test_from_streams_preserves_order_and_duplicates():
+    """from_streams concatenates mixed input forms without removing duplicates."""
+    first = CashFlow(100.0, date(2026, 1, 1), label="first")
+    duplicate = CashFlow(200.0, date(2026, 2, 1), label="duplicate")
+    last = CashFlow(300.0, date(2026, 3, 1), label="last")
 
-    cf_stream_new = CashFlowStream.from_streams(cf, cf_stream_old, cf_list, cf_set)
-    expected_flows = {cf, cf_stream_old.entries[0], cf_list[0], cf_list[1], list(cf_set)[0]}
-    assert set(cf_stream_new.entries) == expected_flows
+    result = CashFlowStream.from_streams(
+        [first, duplicate],
+        CashFlowStream([duplicate]),
+        last,
+    )
+
+    assert result.entries == [first, duplicate, duplicate, last]
 
 
 def test_from_streams_rejects_other_stream_types():
