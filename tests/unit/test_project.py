@@ -1192,6 +1192,49 @@ def test_project_pro_forma_groups_categories_and_computes_subtotals():
     assert "project:tax_liability" not in row_map
 
 
+@pytest.mark.parametrize(
+    ("annual_rate", "expected_refund", "expected_shield"),
+    [(0.0, 20.0, 0.0), (0.10, 22.0, 2.0)],
+)
+def test_project_pro_forma_interest_tax_shield_preserves_refund_policy(
+    annual_rate,
+    expected_refund,
+    expected_shield,
+):
+    schedule = AmortizationSchedule.build(
+        principal=100.0,
+        annual_rate=annual_rate,
+        term=1,
+        start_date=date(2026, 1, 1),
+        frequency="year",
+    )
+    analysis = (
+        EnergyProject()
+        .add_cashflow_stream(
+            name="deduction",
+            stream=CashFlowStream(
+                [
+                    CashFlow(
+                        -100.0,
+                        date(2026, 1, 1),
+                        pro_forma_category="operating_cost",
+                        tax_treatment="deductible",
+                    )
+                ]
+            ),
+        )
+        .debt_schedule(schedule=schedule)
+        .tax(rate=0.20, allow_refund=True)
+        .analyze()
+    )
+
+    row_map = analysis.pro_forma().row_map()
+
+    assert row_map["Taxes"] == pytest.approx((expected_refund,))
+    assert row_map["Financing Interest"] == pytest.approx((-100.0 * annual_rate,))
+    assert row_map["Interest Tax Shield"] == pytest.approx((expected_shield,))
+
+
 # --- Multiple named cost items ---
 
 

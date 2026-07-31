@@ -227,6 +227,9 @@ class ProjectAnalysis:
         Inferred constant annual escalation rate used to construct a synthetic
         unit-price revenue basis when no market revenue basis is configured and
         the caller does not supply an explicit escalation policy.
+    tax_allow_refund : bool
+        Whether negative taxable income generates a tax refund. This policy is
+        preserved when computing counterfactual taxes for the interest tax shield.
     """
 
     timeline: ProjectTimeline
@@ -238,6 +241,7 @@ class ProjectAnalysis:
     tax_rate: float | None
     levelized_revenue_basis: CashFlowGroup[str] | None = None
     levelized_cost_escalation_rate: float | None = None
+    tax_allow_refund: bool = False
 
     @property
     def cashflows(self) -> CashFlowStream:
@@ -459,7 +463,10 @@ class ProjectAnalysis:
             taxable_revenue, deductions_without_interest, label="Taxable Income Before Interest"
         )
         taxes_without_interest = tax_liability(
-            taxable_income_without_interest, tax_rate=self.tax_rate, label="Taxes Before Interest"
+            taxable_income_without_interest,
+            tax_rate=self.tax_rate,
+            label="Taxes Before Interest",
+            allow_refund=self.tax_allow_refund,
         )
         actual_by_date = self.taxes.group_by(lambda flow: flow.date).aggregate(lambda s: s.sum())
         hypothetical_by_date = taxes_without_interest.group_by(lambda flow: flow.date).aggregate(
