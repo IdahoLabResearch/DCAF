@@ -172,10 +172,26 @@ def test_vdb_schedule_half_year_convention_can_add_terminal_catch_up():
     )
 
     assert stream.count() == 6
-    assert stream.entries[0].date == date(2027, 1, 1)
+    assert stream.entries[0].date == date(2026, 1, 1)
+    assert stream.entries[-1].date == date(2031, 1, 1)
     assert -stream.entries[0].amount == pytest.approx(200.0)
     assert -stream.entries[-1].amount == pytest.approx(54.0)
     assert sum(entry.amount for entry in stream.entries) == pytest.approx(-1000.0)
+
+
+def test_vdb_schedule_half_year_convention_without_catch_up_has_life_entries():
+    """Including the placed-in-service date must not add an extra schedule period."""
+    stream = vdb_schedule(
+        cost_basis=1000.0,
+        salvage_value=0.0,
+        placed_in_service=date(2026, 1, 1),
+        life=5,
+        convention="half-year",
+    )
+
+    assert [entry.date for entry in stream.entries] == [
+        date(year, 1, 1) for year in range(2026, 2031)
+    ]
 
 
 def test_vdb_schedule_mid_quarter_convention_uses_explicit_date_grid():
@@ -248,6 +264,7 @@ def test_vdb_mid_quarter_first_period_by_quarter(placed, expected_first_period):
         schedule_dates=tuple(date(year, 12, 31) for year in range(2029, 2037)),
         terminal_catch_up=True,
     )
+    assert stream.entries[0].date == date(2030, 12, 31)
     assert -stream.entries[0].amount == pytest.approx(expected_first_period)
 
 
@@ -271,7 +288,7 @@ def test_vdb_schedule_best_of_convention_matches_workbook_shape():
     schedule_dates = tuple(date(year, 12, 31) for year in range(2030, 2047))
     # Workbook models the asset entering service at the start of 2031 (Q1), with the
     # first deduction at year-end 2031. Under literal-date quarter semantics that is
-    # the date 2031-01-01 (skips the 2030-12-31 grid point as an exclusive lower bound).
+    # the date 2031-01-01, so the preceding 2030-12-31 grid point is skipped.
     stream = vdb_schedule(
         cost_basis=877824.3662585187,
         salvage_value=0.0,
