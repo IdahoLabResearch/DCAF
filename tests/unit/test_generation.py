@@ -24,6 +24,27 @@ def test_generation_defaults():
     g = Generation(amount_mwh=100.0, date=date(2030, 1, 1))
     assert g.amount_mwh == 100.0
     assert g.label == ""
+    assert g.period_start is None
+    assert g.period_end is None
+
+
+@pytest.mark.parametrize(
+    ("period_start", "period_end"),
+    [
+        (date(2030, 1, 1), None),
+        (None, date(2030, 1, 2)),
+        (date(2030, 1, 1), date(2030, 1, 1)),
+        (date(2030, 1, 2), date(2030, 1, 1)),
+    ],
+)
+def test_generation_rejects_invalid_period_bounds(period_start, period_end):
+    with pytest.raises(ValueError, match="period"):
+        Generation(
+            amount_mwh=100.0,
+            date=date(2030, 1, 1),
+            period_start=period_start,
+            period_end=period_end,
+        )
 
 
 def test_generation_immutable():
@@ -35,7 +56,13 @@ def test_generation_immutable():
 
 def test_generation_replace():
     """replace method replaces the specified parameters."""
-    old_g = Generation(amount_mwh=100.0, date=date(2026, 1, 1), label="old_gen")
+    old_g = Generation(
+        amount_mwh=100.0,
+        date=date(2026, 1, 1),
+        label="old_gen",
+        period_start=date(2026, 1, 1),
+        period_end=date(2026, 1, 2),
+    )
     new_g = old_g.replace(amount_mwh=150.0, label="new_gen")
 
     # Check that replacements were made
@@ -44,6 +71,8 @@ def test_generation_replace():
 
     # Check that other parameters are untouched
     assert new_g.date == date(2026, 1, 1)
+    assert new_g.period_start == old_g.period_start
+    assert new_g.period_end == old_g.period_end
 
     # Check that original stream is unmodified
     assert old_g.amount_mwh == 100.0
@@ -64,6 +93,8 @@ def test_from_capacity_annual():
     expected_mwh = 100 * 0.92 * 8760
     assert abs(gs.entries[0].amount_mwh - expected_mwh) < 1e-6
     assert gs.entries[0].date == date(2030, 12, 31)
+    assert gs.entries[0].period_start == date(2030, 1, 1)
+    assert gs.entries[0].period_end == date(2031, 1, 1)
     assert gs.entries[1].date == date(2031, 12, 31)
     assert gs.entries[2].date == date(2032, 12, 31)
 
@@ -208,6 +239,8 @@ def test_from_outage_creates_negative_generation():
     assert outage.entries[0].amount_mwh == pytest.approx(-(1000.0 * 0.92 * 24.0 * 10.0))
     assert outage.entries[0].date == date(2030, 5, 10)
     assert outage.entries[0].label == "Refueling extension"
+    assert outage.entries[0].period_start == date(2030, 5, 1)
+    assert outage.entries[0].period_end == date(2030, 5, 11)
 
 
 def test_from_outage_supports_partial_reduction_and_timing():

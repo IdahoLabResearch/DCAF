@@ -49,17 +49,59 @@ class Generation:
     amount_mwh : float
         Energy produced in MWh.
     date : date
-        Date of the generation.
+        Recognition date used to place the entry in time for grouping, pricing,
+        escalation, discounting, and conversion to cashflows. When
+        ``period_start`` and ``period_end`` are provided, this is the booking
+        date for generation accumulated over that period rather than the date
+        on which all generation physically occurred. It is normally selected
+        from the period according to a timing convention, such as its beginning,
+        middle, or final day.
     label : str
         Descriptive label.
+    period_start : date or None
+        Inclusive start of the period represented by ``amount_mwh``. Must be
+        provided together with ``period_end``.
+    period_end : date or None
+        Exclusive end of the period represented by ``amount_mwh``. Must be
+        provided together with ``period_start``.
+
+    Raises
+    ------
+    ValueError
+        If only one period bound is provided or the period is empty or reversed.
+
+    Notes
+    -----
+    ``period_start`` and ``period_end`` describe the physical generation interval
+    using half-open ``[period_start, period_end)`` semantics. If they are omitted,
+    the entry is treated as a point event occurring on ``date``. The recognition
+    date remains the date used by stream operations and financial calculations in
+    both cases.
     """
 
     amount_mwh: float
     date: date
     label: str = ""
+    period_start: dt.date | None = None
+    period_end: dt.date | None = None
+
+    def __post_init__(self) -> None:
+        if (self.period_start is None) != (self.period_end is None):
+            raise ValueError("period_start and period_end must be provided together")
+        if (
+            self.period_start is not None
+            and self.period_end is not None
+            and self.period_end <= self.period_start
+        ):
+            raise ValueError("period_end must be after period_start")
 
     def replace(
-        self, amount_mwh: float | None = None, date: dt.date | None = None, label: str | None = None
+        self,
+        amount_mwh: float | None = None,
+        date: dt.date | None = None,
+        label: str | None = None,
+        period_start: dt.date | None = None,
+        period_end: dt.date | None = None,
     ) -> "Generation":
         """
         Return a new version of this Generation with the specified changes to parameters.
@@ -68,7 +110,11 @@ class Generation:
         ----------
         amount_mwh: float | None = None
         date: date | None = None
+            Replacement recognition date. For an interval-backed entry, changing
+            this does not change its physical generation period.
         label: str | None = None
+        period_start: date | None = None
+        period_end: date | None = None
 
         Returns
         -------
@@ -98,6 +144,8 @@ class Generation:
             amount_mwh=self.amount_mwh if amount_mwh is None else amount_mwh,
             date=self.date if date is None else date,
             label=self.label if label is None else label,
+            period_start=self.period_start if period_start is None else period_start,
+            period_end=self.period_end if period_end is None else period_end,
         )
 
 
@@ -316,6 +364,8 @@ class GenerationStream(BaseStream[Generation]):
                     amount_mwh=mwh,
                     date=period_window_event_date(window, timing),
                     label=label,
+                    period_start=window.start,
+                    period_end=window.end,
                 )
             )
         return cls(entries)
@@ -404,6 +454,8 @@ class GenerationStream(BaseStream[Generation]):
                     amount_mwh=-lost_mwh,
                     date=_outage_event_date(start=start, end=end, timing=timing),
                     label=label,
+                    period_start=start,
+                    period_end=end,
                 )
             ]
         )
