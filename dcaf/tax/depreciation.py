@@ -150,7 +150,7 @@ def _build_vdb_candidate_schedule(
     period_number = 0
 
     for current_date in dates:
-        if current_date <= placed_in_service:
+        if current_date < placed_in_service:
             continue
         period_number += 1
 
@@ -411,7 +411,8 @@ def vdb_schedule(
     schedule_dates : Sequence[date] | None, optional
         Explicit dates for convention-aware schedule entries. When provided,
         depreciation flows are placed on these dates instead of
-        ``placed_in_service + n * frequency``.
+        ``placed_in_service + n * frequency``. Dates before
+        ``placed_in_service`` are ignored; a matching date is included.
     valuation_rate : float | None, optional
         Annual discount rate used when ``convention`` is
         ``"best-of-half-year-mid-quarter"``.
@@ -470,7 +471,7 @@ def vdb_schedule(
     ...     terminal_catch_up=True,
     ... )
     >>> aligned.entries[0].date
-    datetime.date(2031, 12, 31)
+    datetime.date(2030, 12, 31)
     """
     if isinstance(life, bool) or not isinstance(life, int) or life <= 0:
         raise ValueError("life must be a positive integer")
@@ -508,7 +509,7 @@ def vdb_schedule(
     if convention != "none":
         if normalized_schedule_dates is None:
             delta = time_delta_per_period(frequency)
-            period_count = life + 1 + (1 if terminal_catch_up else 0)
+            period_count = life + (1 if terminal_catch_up else 0)
             generated_dates: list[date] = []
             current_date = placed_in_service
             for _ in range(period_count):
