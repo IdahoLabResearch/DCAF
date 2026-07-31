@@ -432,6 +432,8 @@ class ProjectCompiler:
                         amount_mwh=(generation.capacity_mw * generation.capacity_factor * hours),
                         date=modeled_period.event_date,
                         label=generation.label,
+                        period_start=modeled_period.start,
+                        period_end=modeled_period.end,
                     )
                 )
             base_generation = GenerationStream(entries)

@@ -2,9 +2,10 @@
 # ALL RIGHTS RESERVED
 """Tests for tax incentive functions."""
 
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
+from dateutil.relativedelta import relativedelta
 
 from dcaf.streams.cashflows import CashFlow, CashFlowStream
 from dcaf.tax.depreciation import macrs_schedule
@@ -135,6 +136,144 @@ class TestPTC:
         assert result.entries[0].amount == pytest.approx(27_500.0)
         assert result.entries[0].pro_forma_category is ProFormaCategory.TAX_CREDIT
         assert result.entries[0].tax_treatment is TaxTreatment.NONE
+
+    def test_ptc_point_entries_include_partial_final_calendar_year(self):
+        """An exact ten-year window includes January through June of the final year."""
+        start = date(2030, 7, 1)
+        generation = GenerationStream(
+            [Generation(100.0, start + relativedelta(months=index)) for index in range(126)]
+        )
+
+        result = ptc(generation, rate_per_mwh=2.0, years=10)
+
+        assert result.count() == 120
+        assert result.entries[-1].date == date(2040, 6, 1)
+        assert sum(flow.amount for flow in result if flow.date.year == 2030) == pytest.approx(
+            1_200.0
+        )
+        assert sum(flow.amount for flow in result if flow.date.year == 2040) == pytest.approx(
+            1_200.0
+        )
+        assert result.sum() == pytest.approx(24_000.0)
+
+    def test_ptc_prorates_annual_generation_and_reconciles_known_total(self):
+        """One MWh per day over ten years receives exactly ten years of PTC."""
+        eligibility_start = date(2030, 7, 1)
+        eligibility_end = date(2040, 7, 1)
+        periods = [
+            (eligibility_start, date(2031, 1, 1)),
+            *[(date(year, 1, 1), date(year + 1, 1, 1)) for year in range(2031, 2041)],
+        ]
+        generation = GenerationStream(
+            [
+                Generation(
+                    amount_mwh=float((period_end - period_start).days),
+                    date=period_end - timedelta(days=1),
+                    period_start=period_start,
+                    period_end=period_end,
+                )
+                for period_start, period_end in periods
+            ]
+        )
+
+        result = ptc(generation, rate_per_mwh=2.0, years=10)
+
+        known_eligible_mwh = float((eligibility_end - eligibility_start).days)
+        assert result.count() == 11
+        assert result.entries[0].amount == pytest.approx(184.0 * 2.0)
+        assert result.entries[-1].date == date(2040, 12, 31)
+        assert result.entries[-1].amount == pytest.approx(182.0 * 2.0)
+        assert result.sum() == pytest.approx(known_eligible_mwh * 2.0)
+
+    @pytest.mark.parametrize(
+        ("convention", "final_period_mwh", "expected_final_mwh", "expected_total_mwh"),
+        [
+            ("actual/actual", 366.0, 182.0, 366.0),
+            ("actual/365-no-leap", 365.0, 181.0, 365.0),
+        ],
+    )
+    def test_ptc_prorates_annual_generation_using_day_count_convention(
+        self,
+        convention,
+        final_period_mwh,
+        expected_final_mwh,
+        expected_total_mwh,
+    ):
+        generation = GenerationStream(
+            [
+                Generation(
+                    184.0,
+                    date(2039, 12, 31),
+                    period_start=date(2039, 7, 1),
+                    period_end=date(2040, 1, 1),
+                ),
+                Generation(
+                    final_period_mwh,
+                    date(2040, 12, 31),
+                    period_start=date(2040, 1, 1),
+                    period_end=date(2041, 1, 1),
+                ),
+            ]
+        )
+
+        result = ptc(
+            generation,
+            rate_per_mwh=1.0,
+            years=1,
+            day_count_convention=convention,
+        )
+
+        assert result.entries[-1].amount == pytest.approx(expected_final_mwh)
+        assert result.sum() == pytest.approx(expected_total_mwh)
+
+    def test_ptc_interval_eligibility_is_independent_of_booking_timing(self):
+        periods = [
+            (date(2039, 7, 1), date(2040, 1, 1)),
+            (date(2040, 1, 1), date(2041, 1, 1)),
+        ]
+        begin = GenerationStream(
+            [
+                Generation(
+                    float((period_end - period_start).days),
+                    period_start,
+                    period_start=period_start,
+                    period_end=period_end,
+                )
+                for period_start, period_end in periods
+            ]
+        )
+        end = GenerationStream(
+            [
+                Generation(
+                    float((period_end - period_start).days),
+                    period_end - timedelta(days=1),
+                    period_start=period_start,
+                    period_end=period_end,
+                )
+                for period_start, period_end in periods
+            ]
+        )
+
+        begin_credits = ptc(begin, rate_per_mwh=1.0, years=1)
+        end_credits = ptc(end, rate_per_mwh=1.0, years=1)
+
+        assert [flow.amount for flow in begin_credits] == pytest.approx(
+            [flow.amount for flow in end_credits]
+        )
+        assert begin_credits.sum() == pytest.approx(366.0)
+
+    def test_ptc_leap_day_anniversary_is_exclusive_february_28(self):
+        generation = GenerationStream(
+            [
+                Generation(100.0, date(2024, 2, 29)),
+                Generation(100.0, date(2025, 2, 27)),
+                Generation(100.0, date(2025, 2, 28)),
+            ]
+        )
+
+        result = ptc(generation, rate_per_mwh=1.0, years=1)
+
+        assert [flow.date for flow in result] == [date(2024, 2, 29), date(2025, 2, 27)]
 
     def test_ptc_escalation(self):
         """PTC rate escalates."""
