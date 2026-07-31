@@ -293,6 +293,7 @@ class ProjectCompiler:
             tax_rate=self.config.tax_rate,
             levelized_revenue_basis=CashFlowGroup(levelized_revenue_basis.streams),
             levelized_cost_escalation_rate=self.infer_levelized_cost_escalation_rate(),
+            tax_allow_refund=self.config.tax_allow_refund,
         )
 
     def validate_generation_revenue_configuration(self) -> None:
