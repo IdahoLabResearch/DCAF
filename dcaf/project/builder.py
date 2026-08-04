@@ -60,15 +60,6 @@ from dcaf.shared.types import (
 )
 
 
-def _coerce_generation_price(price: GenerationPrice | float, *, field_name: str) -> GenerationPrice:
-    """Normalize a scalar fixed price or explicit generation price policy."""
-    if isinstance(price, GenerationPrice):
-        return price
-    if isinstance(price, int | float) and not isinstance(price, bool):
-        return GenerationPrice.fixed(float(price))
-    raise TypeError(f"{field_name} must be a GenerationPrice or float")
-
-
 class EnergyProject:
     """Immutable fluent builder for composing and analyzing energy project cash flows.
 
@@ -468,9 +459,11 @@ class EnergyProject:
         timing : TimingConvention, optional
             Booking-date convention for generated cashflows.
         sell_price_per_unit : float, optional
-            Explicit outage price per MWh. When omitted, a fixed price
-            configured with :meth:`generation_revenue` is used. Scheduled and
-            callable generation-revenue prices require an explicit outage price.
+            Explicit outage price per MWh. When omitted, a scalar ``price``
+            configured with :meth:`generation_revenue` is used with the same
+            project-default escalation, or a fixed ``price_policy`` is used
+            without escalation. Scheduled and callable generation-revenue
+            policies require an explicit outage price.
         fixed_cost : float, optional
             Additional one-time outage cost. Sign is ignored.
         cost_per_day : float, optional
@@ -521,7 +514,8 @@ class EnergyProject:
     def generation_revenue(
         self,
         *,
-        price: GenerationPrice | float,
+        price: float | None = None,
+        price_policy: GenerationPrice | None = None,
         label: str | None = None,
         pro_forma_category: ProFormaCategory | str | None = ProFormaCategory.REVENUE,
         tax_treatment: TaxTreatment | str = TaxTreatment.TAXABLE,
@@ -530,12 +524,17 @@ class EnergyProject:
 
         Parameters
         ----------
-        price : float or GenerationPrice
-            Per-MWh settlement price for each generation event. A float is
-            treated as a fixed price via :meth:`GenerationPrice.fixed`; pass
-            ``GenerationPrice`` directly for scheduled or callable prices. A
-            scheduled price must contain an entry whose date exactly matches
-            every generation event; schedule entries are not carried forward.
+        price : float, optional
+            Base per-MWh settlement price for each generation event. The price
+            inherits the project-wide rate configured by
+            :meth:`default_escalation`. When that default has no
+            ``amount_reference_date``, the earliest generation event is the
+            reference date. Mutually exclusive with ``price_policy``.
+        price_policy : GenerationPrice, optional
+            Complete settlement-price policy that does not inherit the project
+            default escalation. A scheduled policy must contain an entry whose
+            date exactly matches every generation event; schedule entries are
+            not carried forward. Mutually exclusive with ``price``.
         label : str, optional
             Label applied to every generated revenue cashflow. Default is
             ``"Revenue"``.
@@ -548,7 +547,23 @@ class EnergyProject:
         -------
         EnergyProject
             New project with updated revenue configuration.
+
+        Raises
+        ------
+        TypeError
+            If ``price`` is not a scalar or ``price_policy`` is not a
+            ``GenerationPrice``.
+        ValueError
+            If neither or both price arguments are provided, ``price`` is not
+            finite, generation revenue is already configured, or whole-project
+            revenue is combined with contract or remainder revenue.
         """
+        if (price is None) == (price_policy is None):
+            raise ValueError("provide exactly one of price or price_policy")
+        if price is not None and (not isinstance(price, int | float) or isinstance(price, bool)):
+            raise TypeError("generation_revenue price must be a finite scalar")
+        if price_policy is not None and not isinstance(price_policy, GenerationPrice):
+            raise TypeError("generation_revenue price_policy must be a GenerationPrice")
         if self._config.market is not None:
             raise ValueError("generation_revenue may only be called once")
         if self._has_generation_revenue_policies():
@@ -556,8 +571,14 @@ class EnergyProject:
                 "generation_revenue cannot be combined with "
                 "generation_revenue_contract or generation_revenue_remainder"
             )
+        selected_price: float | GenerationPrice
+        if price is not None:
+            selected_price = float(price)
+        else:
+            assert price_policy is not None
+            selected_price = price_policy
         updated = RevenueConfig(
-            price=_coerce_generation_price(price, field_name="generation_revenue price"),
+            price=selected_price,
             label="Revenue" if label is None else label,
             pro_forma_category=pro_forma_category,
             tax_treatment=tax_treatment,

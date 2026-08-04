@@ -6,12 +6,20 @@ first-class options on the builder.
 
 ## Escalation
 
-A project-wide default escalation is applied to cost items and tax credits relative to a
-reference date:
+A project-wide default escalation is applied to scalar generation-revenue prices, cost
+items, and tax credits relative to a reference date:
 
 ```python
-project = project.default_escalation(rate=0.025, amount_reference_date=date(2025, 1, 1))
+project = (
+    project
+    .default_escalation(rate=0.025, amount_reference_date=date(2025, 1, 1))
+    .generation_revenue(price=45.0)
+)
 ```
+
+Here, `45.0` is the price on January 1, 2025. If the default omits
+`amount_reference_date`, the earliest generation event becomes the scalar price's
+reference date.
 
 Many per-component methods can override the default with their own `escalation=`
 argument — a bare float for a constant rate, or an
@@ -28,11 +36,19 @@ revenue_escalation = ConstantRateEscalation(date(2025, 1, 1), rate=0.025)
 project = (
     project
     .generation_revenue(
-        price=GenerationPrice.callable(lambda event: 45.0 * revenue_escalation.factor(event.date))
+        price_policy=GenerationPrice.callable(
+            lambda event: 45.0 * revenue_escalation.factor(event.date)
+        )
     )
     .fixed_opex(amount=10_000_000.0, escalation=0.03)
 )
 ```
+
+An explicit `GenerationPrice` passed as `price_policy` is a complete settlement-price
+policy and does not inherit `default_escalation`. This keeps
+`GenerationPrice.fixed(...)` constant and prevents scheduled or callable prices from
+being escalated twice. Use a callable, as above, when revenue needs escalation
+different from the project default.
 
 For explicit date-indexed prices, `GenerationPrice.schedule(...)` requires an exact
 date match for every generation settlement being priced. Schedule entries are not

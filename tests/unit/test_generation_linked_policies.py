@@ -28,6 +28,15 @@ def _annual_generation() -> GenerationStream:
     )
 
 
+def _two_year_generation() -> GenerationStream:
+    return GenerationStream(
+        [
+            Generation(100.0, date(2026, 1, 1)),
+            Generation(100.0, date(2027, 1, 1)),
+        ]
+    )
+
+
 def _fraction_of_generation_contract(
     generation_share: float = 0.50,
     price: float = 45.0,
@@ -174,7 +183,10 @@ def test_generation_revenue_replaces_revenue_from_generation_for_whole_project_s
                 ]
             )
         )
-        .generation_revenue(price=GenerationPrice.fixed(50.0), label="Generation Revenue")
+        .generation_revenue(
+            price_policy=GenerationPrice.fixed(50.0),
+            label="Generation Revenue",
+        )
         .analyze()
     )
 
@@ -188,7 +200,7 @@ def test_generation_revenue_replaces_revenue_from_generation_for_whole_project_s
     assert not hasattr(EnergyProject(), "revenue_from_generation")
 
 
-def test_generation_revenue_accepts_float_price_as_fixed_generation_price():
+def test_generation_revenue_float_price_is_unescalated_without_project_default():
     analysis = (
         EnergyProject()
         .generation_stream(
@@ -208,6 +220,156 @@ def test_generation_revenue_accepts_float_price_as_fixed_generation_price():
     assert [flow.amount for flow in revenue] == pytest.approx([5_000.0, 10_000.0])
 
 
+@pytest.mark.parametrize(("price", "expected_revenue"), [(0, 0.0), (-50, -5_000.0)])
+def test_generation_revenue_accepts_zero_and_negative_scalar_prices(
+    price: int,
+    expected_revenue: float,
+):
+    analysis = (
+        EnergyProject()
+        .generation_stream(stream=GenerationStream([Generation(100.0, date(2026, 1, 1))]))
+        .generation_revenue(price=price)
+        .analyze()
+    )
+
+    assert analysis.cashflow_components["revenue"].sum() == pytest.approx(expected_revenue)
+
+
+@pytest.mark.parametrize("price", [float("nan"), float("inf"), float("-inf")])
+def test_generation_revenue_rejects_non_finite_scalar_prices(price: float):
+    with pytest.raises(ValueError, match="generation_revenue price must be finite"):
+        EnergyProject().generation_revenue(price=price)
+
+
+def test_generation_revenue_rejects_bool_scalar_price():
+    with pytest.raises(TypeError, match="generation_revenue price must be a finite scalar"):
+        EnergyProject().generation_revenue(price=True)  # type: ignore[arg-type]
+
+
+def test_generation_revenue_float_price_uses_project_default_escalation():
+    analysis = (
+        EnergyProject()
+        .default_escalation(rate=0.10)
+        .generation_stream(stream=_two_year_generation())
+        .generation_revenue(price=50.0)
+        .analyze()
+    )
+
+    revenue = analysis.cashflow_components["revenue"]
+
+    assert [flow.amount for flow in revenue] == pytest.approx([5_000.0, 5_500.0])
+
+
+def test_generation_revenue_float_price_uses_earliest_date_in_unsorted_generation():
+    analysis = (
+        EnergyProject()
+        .default_escalation(rate=0.10)
+        .generation_stream(
+            stream=GenerationStream(
+                [
+                    Generation(100.0, date(2027, 1, 1)),
+                    Generation(100.0, date(2026, 1, 1)),
+                ]
+            )
+        )
+        .generation_revenue(price=50.0)
+        .analyze()
+    )
+
+    revenue = analysis.cashflow_components["revenue"]
+
+    assert [flow.amount for flow in revenue] == pytest.approx([5_500.0, 5_000.0])
+
+
+def test_generation_revenue_float_price_uses_default_escalation_reference_date():
+    analysis = (
+        EnergyProject()
+        .default_escalation(rate=0.10, amount_reference_date=date(2025, 1, 1))
+        .generation_stream(stream=_two_year_generation())
+        .generation_revenue(price=50.0)
+        .analyze()
+    )
+
+    revenue = analysis.cashflow_components["revenue"]
+
+    assert [flow.amount for flow in revenue] == pytest.approx([5_500.0, 6_050.0])
+
+
+@pytest.mark.parametrize(
+    "price",
+    [
+        GenerationPrice.fixed(50.0),
+        GenerationPrice.schedule(
+            {
+                date(2026, 1, 1): 50.0,
+                date(2027, 1, 1): 50.0,
+            }
+        ),
+        GenerationPrice.callable(lambda _event: 50.0),
+    ],
+    ids=["fixed", "schedule", "callable"],
+)
+def test_explicit_generation_price_ignores_project_default_escalation(
+    price: GenerationPrice,
+):
+    analysis = (
+        EnergyProject()
+        .default_escalation(rate=0.10)
+        .generation_stream(stream=_two_year_generation())
+        .generation_revenue(price_policy=price)
+        .analyze()
+    )
+
+    revenue = analysis.cashflow_components["revenue"]
+
+    assert [flow.amount for flow in revenue] == pytest.approx([5_000.0, 5_000.0])
+
+
+def test_generation_revenue_rejects_generation_price_in_scalar_price_argument():
+    invalid_price = cast(float, GenerationPrice.fixed(50.0))
+
+    with pytest.raises(TypeError, match="generation_revenue price must be a finite scalar"):
+        EnergyProject().generation_revenue(price=invalid_price)
+
+
+def test_generation_revenue_requires_exactly_one_price_source():
+    with pytest.raises(ValueError, match="provide exactly one of price or price_policy"):
+        EnergyProject().generation_revenue()
+
+    with pytest.raises(ValueError, match="provide exactly one of price or price_policy"):
+        EnergyProject().generation_revenue(
+            price=50.0,
+            price_policy=GenerationPrice.fixed(50.0),
+        )
+
+
+def test_generation_contract_and_remainder_prices_ignore_project_default_escalation():
+    analysis = (
+        EnergyProject()
+        .default_escalation(rate=0.10)
+        .generation_stream(stream=_two_year_generation())
+        .generation_revenue_contract(
+            name="revenue:ppa",
+            contract=EnergyContract.fraction_of_generation(
+                generation_share=0.50,
+                price=GenerationPrice.fixed(50.0),
+            ),
+        )
+        .generation_revenue_remainder(
+            name="revenue:merchant",
+            price=GenerationPrice.fixed(40.0),
+        )
+        .analyze()
+    )
+
+    assert [flow.amount for flow in analysis.cashflow_components["revenue:ppa"]] == (
+        pytest.approx([2_500.0, 2_500.0])
+    )
+    assert [flow.amount for flow in analysis.cashflow_components["revenue:merchant"]] == (
+        pytest.approx([2_000.0, 2_000.0])
+    )
+
+
 def test_generation_revenue_schedule_settles_each_event_at_its_exact_date_price():
     """Exact-date prices settle 100 MWh at $45 and 200 MWh at $47."""
     analysis = (
@@ -221,7 +383,7 @@ def test_generation_revenue_schedule_settles_each_event_at_its_exact_date_price(
             )
         )
         .generation_revenue(
-            price=GenerationPrice.schedule(
+            price_policy=GenerationPrice.schedule(
                 {
                     date(2026, 1, 1): 45.0,
                     date(2027, 1, 1): 47.0,
@@ -270,7 +432,7 @@ def test_generation_revenue_schedule_requires_an_exact_one_to_one_date_domain(
         (
             EnergyProject()
             .generation_stream(stream=generation)
-            .generation_revenue(price=GenerationPrice.schedule(price_schedule))
+            .generation_revenue(price_policy=GenerationPrice.schedule(price_schedule))
             .analyze()
         )
 
@@ -296,7 +458,7 @@ def test_generation_revenue_callable_receives_whole_project_settlement_context()
                 ]
             )
         )
-        .generation_revenue(price=GenerationPrice.callable(price))
+        .generation_revenue(price_policy=GenerationPrice.callable(price))
         .analyze()
     )
 
@@ -324,13 +486,13 @@ def test_generation_revenue_may_only_be_called_once():
     with pytest.raises(ValueError, match="generation_revenue may only be called once"):
         (
             EnergyProject()
-            .generation_revenue(price=GenerationPrice.fixed(50.0))
-            .generation_revenue(price=GenerationPrice.fixed(60.0))
+            .generation_revenue(price_policy=GenerationPrice.fixed(50.0))
+            .generation_revenue(price_policy=GenerationPrice.fixed(60.0))
         )
 
 
 def test_generation_revenue_is_mutually_exclusive_with_contract_revenue_methods():
-    whole_project = EnergyProject().generation_revenue(price=GenerationPrice.fixed(50.0))
+    whole_project = EnergyProject().generation_revenue(price_policy=GenerationPrice.fixed(50.0))
 
     with pytest.raises(
         ValueError,
@@ -363,7 +525,7 @@ def test_generation_revenue_is_mutually_exclusive_with_contract_revenue_methods(
                 name="revenue:ppa",
                 contract=_fraction_of_generation_contract(),
             )
-            .generation_revenue(price=GenerationPrice.fixed(50.0))
+            .generation_revenue(price_policy=GenerationPrice.fixed(50.0))
         )
 
 
@@ -439,14 +601,14 @@ def test_only_one_generation_revenue_remainder_is_allowed():
         )
 
 
-def test_generation_revenue_prices_must_be_generation_prices_or_floats():
+def test_generation_revenue_policy_and_remainder_prices_must_be_generation_prices():
     bad_price = cast(GenerationPrice, object())
 
     with pytest.raises(
         TypeError,
-        match="generation_revenue price must be a GenerationPrice or float",
+        match="generation_revenue price_policy must be a GenerationPrice",
     ):
-        EnergyProject().generation_revenue(price=bad_price)
+        EnergyProject().generation_revenue(price_policy=bad_price)
 
     with pytest.raises(
         TypeError,
@@ -463,7 +625,7 @@ def test_generation_revenue_methods_require_generation_at_analysis_time():
         ValueError,
         match="generation revenue requires generation to be configured",
     ):
-        EnergyProject().generation_revenue(price=GenerationPrice.fixed(50.0)).analyze()
+        EnergyProject().generation_revenue(price_policy=GenerationPrice.fixed(50.0)).analyze()
 
     with pytest.raises(
         ValueError,

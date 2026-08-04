@@ -235,7 +235,7 @@ class ProjectCompiler:
             component_streams.add_named(
                 "construction_outage",
                 outage_name,
-                self.build_construction_outage(outage_config),
+                self.build_construction_outage(outage_config, generation),
             )
 
         itc_stream = self.build_itc(construction_stream)
@@ -503,21 +503,34 @@ class ProjectCompiler:
     def build_construction_outage(
         self,
         outage: ConstructionOutageConfig,
+        generation: GenerationStream,
     ) -> CashFlowStream:
         """Build operating-cost cashflows for a construction outage on baseline generation."""
         if outage.sell_price_per_unit is None:
             # TODO: Support schedule and callable prices after defining how an outage's
             # aggregate booking event should be priced.
             market = self.config.market
-            if market is None or market.price.mode != "fixed" or market.price.fixed_price is None:
+            if market is None or (
+                isinstance(market.price, GenerationPrice)
+                and (market.price.mode != "fixed" or market.price.fixed_price is None)
+            ):
                 raise ValueError(
                     f"construction_outage {outage.name!r} requires sell_price_per_unit "
-                    "unless generation_revenue is configured with a fixed price; "
+                    "unless generation_revenue is configured with price or a fixed "
+                    "price_policy; "
                     "scheduled and callable generation_revenue prices are not supported "
                     "for construction outages"
                 )
-            price_per_mwh = market.price.fixed_price
-            escalation = EscalationSettings(explicit=True)
+            if isinstance(market.price, GenerationPrice):
+                assert market.price.fixed_price is not None
+                price_per_mwh = market.price.fixed_price
+                escalation = EscalationSettings(explicit=True)
+            else:
+                price_per_mwh = market.price
+                escalation = EscalationSettings(
+                    policy=self._generation_revenue_price_escalation(generation),
+                    explicit=True,
+                )
         else:
             price_per_mwh = outage.sell_price_per_unit
             escalation = self.context.effective_escalation(outage.escalation)
@@ -555,20 +568,45 @@ class ProjectCompiler:
         market = self.config.market
         if market is None:
             return CashFlowStream()
-        self._validate_price_schedule_alignment(
-            name="revenue",
-            price=market.price,
-            generation=generation,
-        )
+        if isinstance(market.price, GenerationPrice):
+            self._validate_price_schedule_alignment(
+                name="revenue",
+                price=market.price,
+                generation=generation,
+            )
         if not generation.entries:
             return CashFlowStream()
+        price_escalation: EscalationPolicy | None = None
+        if isinstance(market.price, float):
+            price_escalation = self._generation_revenue_price_escalation(generation)
         return self._revenue_cashflows_from_generation(
             name="revenue",
             generation=generation,
             price=market.price,
+            price_escalation=price_escalation,
             label=market.label,
             pro_forma_category=market.pro_forma_category,
             tax_treatment=market.tax_treatment,
+        )
+
+    def _generation_revenue_price_escalation(
+        self,
+        generation: GenerationStream,
+    ) -> EscalationPolicy | None:
+        """Resolve the shared scalar-price escalation for revenue and outage fallback."""
+        escalation = self.config.default_escalation
+        if escalation.policy is not None:
+            return escalation.policy
+        reference_date = escalation.amount_reference_date
+        if reference_date is None:
+            if not generation.entries:
+                return None
+            reference_date = min(entry.date for entry in generation.entries)
+        return ConstantRateEscalation(
+            reference_date=reference_date,
+            rate=escalation.escalation,
+            period=escalation.escalation_period,
+            day_count_convention=self.config.day_count_convention,
         )
 
     def build_revenue_basis(self, generation: GenerationStream) -> CashFlowStream:
@@ -850,7 +888,8 @@ class ProjectCompiler:
         *,
         name: str,
         generation: GenerationStream,
-        price: GenerationPrice,
+        price: float | GenerationPrice,
+        price_escalation: EscalationPolicy | None,
         label: str,
         pro_forma_category: ProFormaCategory | str | None,
         tax_treatment: TaxTreatment | str,
@@ -867,9 +906,13 @@ class ProjectCompiler:
                 requested_mwh=entry.amount_mwh,
                 delivered_mwh=entry.amount_mwh,
             )
+            escalation_factor = (
+                1.0 if price_escalation is None else price_escalation.factor(entry.date)
+            )
+            resolved_price = price.resolve(event) if isinstance(price, GenerationPrice) else price
             entries.append(
                 CashFlow(
-                    amount=event.delivered_mwh * price.resolve(event),
+                    amount=event.delivered_mwh * resolved_price * escalation_factor,
                     date=entry.date,
                     label=label,
                     is_cash=True,

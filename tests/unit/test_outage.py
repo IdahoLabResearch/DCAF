@@ -11,7 +11,7 @@ from dcaf.finance.escalation import ConstantRateEscalation
 from dcaf.finance.outage import construction_outage, generator_outage
 from dcaf.shared.time import timedelta_fractional_years
 from dcaf.shared.types import ProFormaCategory, TaxTreatment
-from dcaf.streams import GenerationStream
+from dcaf.streams import Generation, GenerationStream
 
 
 def test_generator_outage_matches_classmethod():
@@ -221,7 +221,7 @@ def test_construction_outage_equivalence_with_builder_method():
             operations_start=date(2026, 1, 1),
             operations_end=date(2027, 1, 1),
         )
-        .generation_revenue(price=GenerationPrice.fixed(sell_price))
+        .generation_revenue(price_policy=GenerationPrice.fixed(sell_price))
         .construction_outage(
             capacity_mw=1000.0,
             capacity_factor=0.92,
@@ -253,16 +253,17 @@ def test_construction_outage_equivalence_with_builder_method():
 
 
 def test_construction_outage_market_price_lookup_via_builder():
-    """The builder still falls back to the configured market price when none is given."""
+    """An explicit fixed market policy remains fixed when used for outage fallback."""
     project = (
         EnergyProject()
+        .default_escalation(rate=0.10, amount_reference_date=date(2024, 5, 11))
         .generation(
             capacity_mw=10.0,
             capacity_factor=1.0,
             operations_start=date(2026, 1, 1),
             operations_end=date(2027, 1, 1),
         )
-        .generation_revenue(price=GenerationPrice.fixed(42.0))
+        .generation_revenue(price_policy=GenerationPrice.fixed(42.0))
         .construction_outage(
             start=date(2025, 5, 1),
             end=date(2025, 5, 11),
@@ -274,6 +275,78 @@ def test_construction_outage_market_price_lookup_via_builder():
     impact = analysis.cashflow_components["construction_outage"]
     expected = -(1000.0 * 0.92 * 24.0 * 10.0 * 42.0)
     assert impact.sum() == pytest.approx(expected)
+
+
+def test_construction_outage_scalar_market_price_inherits_default_escalation():
+    project = (
+        EnergyProject()
+        .default_escalation(rate=0.10, amount_reference_date=date(2025, 1, 1))
+        .generation(
+            capacity_mw=10.0,
+            capacity_factor=1.0,
+            operations_start=date(2026, 1, 1),
+            operations_end=date(2027, 1, 1),
+        )
+        .generation_revenue(price=50.0)
+        .construction_outage(
+            start=date(2026, 1, 1),
+            end=date(2026, 1, 2),
+            capacity_mw=1.0,
+            capacity_factor=1.0,
+            timing="begin",
+        )
+    )
+
+    impact = project.analyze().cashflow_components["construction_outage"]
+
+    assert impact.sum() == pytest.approx(-(24.0 * 50.0 * 1.10))
+
+
+def test_construction_outage_scalar_market_price_uses_earliest_generation_reference():
+    project = (
+        EnergyProject()
+        .default_escalation(rate=0.10)
+        .generation_stream(
+            stream=GenerationStream(
+                [
+                    Generation(100.0, date(2026, 1, 1)),
+                    Generation(100.0, date(2027, 1, 1)),
+                ]
+            )
+        )
+        .generation_revenue(price=50.0)
+        .construction_outage(
+            start=date(2027, 1, 1),
+            end=date(2027, 1, 2),
+            capacity_mw=1.0,
+            capacity_factor=1.0,
+            timing="begin",
+        )
+    )
+
+    impact = project.analyze().cashflow_components["construction_outage"]
+
+    assert impact.sum() == pytest.approx(-(24.0 * 50.0 * 1.10))
+
+
+def test_construction_outage_scalar_market_price_deflates_before_generation_reference():
+    project = (
+        EnergyProject()
+        .default_escalation(rate=0.10)
+        .generation_stream(stream=GenerationStream([Generation(100.0, date(2026, 1, 1))]))
+        .generation_revenue(price=50.0)
+        .construction_outage(
+            start=date(2025, 1, 1),
+            end=date(2025, 1, 2),
+            capacity_mw=1.0,
+            capacity_factor=1.0,
+            timing="begin",
+        )
+    )
+
+    impact = project.analyze().cashflow_components["construction_outage"]
+
+    assert impact.sum() == pytest.approx(-(24.0 * 50.0 / 1.10))
 
 
 @pytest.mark.parametrize(
@@ -294,7 +367,7 @@ def test_construction_outage_requires_explicit_price_for_dynamic_generation_reve
             operations_start=date(2026, 1, 1),
             operations_end=date(2027, 1, 1),
         )
-        .generation_revenue(price=market_price)
+        .generation_revenue(price_policy=market_price)
         .construction_outage(
             start=date(2025, 5, 1),
             end=date(2025, 5, 11),
@@ -306,8 +379,8 @@ def test_construction_outage_requires_explicit_price_for_dynamic_generation_reve
     with pytest.raises(
         ValueError,
         match=(
-            "requires sell_price_per_unit unless generation_revenue is configured with a fixed "
-            "price"
+            "requires sell_price_per_unit unless generation_revenue is configured with price "
+            "or a fixed price_policy"
         ),
     ):
         project.analyze()
