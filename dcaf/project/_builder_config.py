@@ -395,16 +395,22 @@ class ProductionTaxCreditConfig:
 
 @dataclass(frozen=True)
 class RevenueConfig:
-    """Whole-project generation revenue configuration."""
+    """Whole-project revenue configuration with scalar or explicit policy pricing."""
 
-    price: GenerationPrice
+    price: float | GenerationPrice
     label: str = "Revenue"
     pro_forma_category: ProFormaCategory | str | None = ProFormaCategory.REVENUE
     tax_treatment: TaxTreatment | str = TaxTreatment.TAXABLE
 
     def __post_init__(self) -> None:
         if not isinstance(self.price, GenerationPrice):
-            raise TypeError("generation_revenue price must be a GenerationPrice")
+            if not isinstance(self.price, int | float) or isinstance(self.price, bool):
+                raise TypeError(
+                    "generation_revenue price must be a finite scalar or GenerationPrice"
+                )
+            price = float(self.price)
+            validate_finite(price, "generation_revenue price")
+            object.__setattr__(self, "price", price)
         category, treatment = normalize_cashflow_classification(
             self.pro_forma_category,
             self.tax_treatment,

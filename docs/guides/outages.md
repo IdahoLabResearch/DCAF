@@ -25,6 +25,12 @@ project = project.construction_outage(
 )
 ```
 
+When `sell_price_per_unit` is omitted, the outage reuses whole-project generation
+pricing. A scalar `.generation_revenue(price=...)` inherits the same project-default
+escalation for outage lost revenue. A fixed
+`.generation_revenue(price_policy=GenerationPrice.fixed(...))` remains un-escalated.
+Scheduled and callable price policies require an explicit outage price.
+
 Each outage becomes a component named `construction_outage:<name>`, so you can call
 `.construction_outage(...)` multiple times and read each back individually:
 

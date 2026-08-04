@@ -45,7 +45,7 @@ keyword-only.
 
 | Method | Purpose |
 |--------|---------|
-| `.generation_revenue(price=...)` | Revenue = generation × price. |
+| `.generation_revenue(price=..., price_policy=...)` | Whole-project revenue; provide one scalar price or explicit `GenerationPrice` policy. |
 | `.generation_revenue_contract(name=, contract=)` | Contracted generation revenue such as PPAs. |
 | `.generation_revenue_remainder(name=, price=)` | Revenue from generation not allocated to contracts. |
 | `.fixed_opex(amount=, frequency=, ...)` | Recurring fixed operating cost. |
