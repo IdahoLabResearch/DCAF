@@ -121,9 +121,10 @@ class TestConstructionTimingEndOfPeriod:
     """The user's primary example: annual CAPEX during construction."""
 
     def test_annual_capex_end_timing(self):
-        """Construction 2025-02-01 to 2027-05-17, annual.
+        """Construction is active from 2025-02-01 through 2027-05-17, annually.
 
-        Expected dates: 2025-12-31, 2026-12-31, 2027-05-17.
+        Its exclusive end is 2027-05-18. Expected booking dates are
+        2025-12-31, 2026-12-31, and the last included day, 2027-05-17.
         """
         project = (
             EnergyProject()
@@ -148,6 +149,70 @@ class TestConstructionTimingEndOfPeriod:
             date(2025, 12, 31),
             date(2026, 12, 31),
             date(2027, 5, 17),
+        ]
+
+    def test_midyear_construction_uses_calendar_year_periods(self):
+        analysis = (
+            EnergyProject()
+            .construction(
+                overnight_cost=1_000_000,
+                cod_date=date(2030, 4, 16),
+                spend_profile="flat",
+                construction_start=date(2025, 7, 1),
+                construction_end=date(2030, 4, 16),
+                period="year",
+            )
+            .analyze()
+        )
+
+        assert [flow.date for flow in analysis.cashflow_components["construction"]] == [
+            date(2025, 12, 31),
+            date(2026, 12, 31),
+            date(2027, 12, 31),
+            date(2028, 12, 31),
+            date(2029, 12, 31),
+            date(2030, 4, 15),
+        ]
+
+    def test_construction_timing_overrides_project_timing(self):
+        analysis = (
+            EnergyProject(timing="end")
+            .construction(
+                overnight_cost=1_000_000,
+                cod_date=date(2027, 4, 16),
+                spend_profile="flat",
+                construction_start=date(2025, 7, 1),
+                construction_end=date(2027, 4, 16),
+                period="year",
+                timing="begin",
+            )
+            .analyze()
+        )
+
+        assert [flow.date for flow in analysis.cashflow_components["construction"]] == [
+            date(2025, 7, 1),
+            date(2026, 1, 1),
+            date(2027, 1, 1),
+        ]
+
+    def test_construction_inherits_project_timing(self):
+        analysis = (
+            EnergyProject(timing="begin")
+            .construction(
+                overnight_cost=1_000_000,
+                cod_date=date(2027, 4, 16),
+                spend_profile="flat",
+                construction_start=date(2025, 7, 1),
+                construction_end=date(2027, 4, 16),
+                period="year",
+            )
+            .analyze()
+        )
+
+        assert [flow.date for flow in analysis.cashflow_components["construction"]] == [
+            date(2025, 7, 1),
+            date(2026, 1, 1),
+            date(2027, 1, 1),
         ]
 
 
@@ -677,11 +742,29 @@ class TestConstructionStandaloneTimingFix:
         )
         spend_flows = [cf for cf in stream.entries if cf.label == "Construction Spend"]
         dates = [cf.date for cf in spend_flows]
-        # phase_end = 2025-04-20 - 1 day = 2025-04-19
-        # 4 periods: (Jan 15-Feb 15), (Feb 15-Mar 15), (Mar 15-Apr 15), (Apr 15-Apr 20)
+        # The exclusive April 20 end makes April 19 the final booking date.
         assert dates == [
             date(2025, 1, 31),
             date(2025, 2, 28),
             date(2025, 3, 31),
             date(2025, 4, 19),
+        ]
+
+    def test_explicit_begin_timing_books_calendar_window_starts(self):
+        from dcaf.finance.construction import construction_spend_schedule
+
+        stream = construction_spend_schedule(
+            total_cost=100_000,
+            start_date=date(2025, 1, 15),
+            end_date=date(2025, 4, 20),
+            period="month",
+            profile="flat",
+            timing="begin",
+        )
+
+        assert [flow.date for flow in stream if flow.label == "Construction Spend"] == [
+            date(2025, 1, 15),
+            date(2025, 2, 1),
+            date(2025, 3, 1),
+            date(2025, 4, 1),
         ]

@@ -883,6 +883,7 @@ class ProjectCompiler:
             end_date=end,
             period=construction.period,
             profile=construction.spend_profile,
+            timing=construction.timing or self.config.timeline.timing,
             financing=financing,
             escalation=escalation.escalation,
             escalation_period=escalation.escalation_period,

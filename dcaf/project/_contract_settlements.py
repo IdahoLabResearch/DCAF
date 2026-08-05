@@ -12,6 +12,7 @@ from typing import assert_never
 from dcaf.project.contracts import EnergyContract, GenerationSettlementEvent
 from dcaf.shared.time import (
     PeriodWindow,
+    _calendar_period_windows,
     elapsed_hours,
     period_start,
     period_window_event_date,
@@ -21,7 +22,6 @@ from dcaf.shared.types import DayCountConvention, Period, TimingConvention
 from dcaf.streams.generation import (
     GenerationStream,
     _GenerationSettlement,
-    _calendar_period_windows,
     _generation_settlements,
     _prorated_generation_amount,
 )

@@ -3,7 +3,7 @@
 """Tests for construction spend schedule APIs, helpers, and reference accessors."""
 
 import inspect
-from datetime import date, timedelta
+from datetime import date
 
 import pytest
 
@@ -37,10 +37,6 @@ UPFRONT_CURVE = SPEND_PROFILES["upfront"]
 
 def _annual_factor(start: date, end: date, rate: float) -> float:
     return (1.0 + rate) ** ((end - start).days / 365.0)
-
-
-def _midpoint_date(start: date, end: date) -> date:
-    return start + timedelta(days=((end - start).days // 2))
 
 
 @pytest.mark.parametrize(
@@ -160,6 +156,7 @@ def test_builder_escalation_preserves_existing_kwargs():
         1_000_000,
         date(2025, 1, 1),
         date(2026, 1, 1),
+        timing="begin",
     ).escalation(
         0.01,
         escalation_period="month",
@@ -170,6 +167,7 @@ def test_builder_escalation_preserves_existing_kwargs():
     assert updated.config.escalation == 0.02
     assert updated.config.escalation_period.value == "month"
     assert updated.config.amount_reference_date == date(2024, 1, 1)
+    assert updated.config.timing == "begin"
 
 
 def test_builder_escalation_policy_resets_simple_config_and_applies_override():
@@ -178,7 +176,7 @@ def test_builder_escalation_policy_resets_simple_config_and_applies_override():
         points=((date(2025, 1, 1), 100.0), (date(2026, 1, 1), 110.0)),
     )
     builder = (
-        ConstructionSpendBuilder(1_000_000, date(2025, 7, 1), date(2026, 7, 1), period="year")
+        ConstructionSpendBuilder(1_000_000, date(2025, 1, 1), date(2026, 1, 1), period="year")
         .escalation(0.03, amount_reference_date=date(2025, 1, 1))
         .escalation_policy(policy)
     )
@@ -187,9 +185,8 @@ def test_builder_escalation_policy_resets_simple_config_and_applies_override():
     assert builder.config.escalation_period.value == "year"
     assert builder.config.amount_reference_date is None
 
-    midpoint = _midpoint_date(date(2025, 7, 1), date(2026, 7, 1))
     stream = builder.build()
-    assert stream.entries[0].amount == pytest.approx(-1_000_000 * policy.factor(midpoint))
+    assert stream.entries[0].amount == pytest.approx(-1_000_000 * policy.factor(date(2025, 12, 31)))
 
 
 def test_builder_escalation_after_policy_returns_to_simple_behavior():
@@ -198,13 +195,12 @@ def test_builder_escalation_after_policy_returns_to_simple_behavior():
         points=((date(2025, 1, 1), 100.0), (date(2026, 1, 1), 110.0)),
     )
     builder = (
-        ConstructionSpendBuilder(1_000_000, date(2025, 7, 1), date(2026, 7, 1), period="year")
+        ConstructionSpendBuilder(1_000_000, date(2025, 1, 1), date(2026, 1, 1), period="year")
         .escalation_policy(policy)
         .escalation(0.05)
     )
 
-    midpoint = _midpoint_date(date(2025, 7, 1), date(2026, 7, 1))
-    expected_amount = -1_000_000 * _annual_factor(date(2025, 7, 1), midpoint, 0.05)
+    expected_amount = -1_000_000 * _annual_factor(date(2025, 1, 1), date(2025, 12, 31), 0.05)
     stream = builder.build()
     assert stream.entries[0].amount == pytest.approx(expected_amount)
 
@@ -450,10 +446,11 @@ def test_construction_spend_final_stub_flow_booked_at_stub_end():
         date(2025, 1, 31),
         date(2025, 2, 28),
         date(2025, 3, 31),
+        date(2025, 4, 9),
     ]
 
 
-def test_month_end_monthly_schedule_stays_anchored_to_start_date():
+def test_month_end_monthly_schedule_uses_calendar_periods():
     stream = construction_spend_schedule(
         1000,
         date(2025, 1, 31),
@@ -469,10 +466,11 @@ def test_month_end_monthly_schedule_stays_anchored_to_start_date():
         date(2025, 2, 28),
         date(2025, 3, 31),
         date(2025, 4, 30),
+        date(2025, 5, 30),
     ]
 
 
-def test_late_month_quarterly_schedule_stays_anchored_to_start_date():
+def test_late_month_quarterly_schedule_uses_calendar_periods():
     stream = construction_spend_schedule(
         1000,
         date(2025, 8, 31),
@@ -488,20 +486,21 @@ def test_late_month_quarterly_schedule_stays_anchored_to_start_date():
         date(2025, 9, 30),
         date(2025, 12, 31),
         date(2026, 3, 31),
+        date(2026, 5, 30),
     ]
 
 
-def test_custom_profile_total_spend():
+def test_custom_profile_partial_calendar_periods_conserve_total_spend():
     profile = SpendProfile.custom(((0.0, 0.6), (0.5, 0.4), (1.0, 0.0)))
     stream = construction_spend_schedule(
         1_000_000,
-        date(2025, 1, 1),
-        date(2026, 1, 1),
+        date(2025, 7, 1),
+        date(2030, 4, 16),
+        period="year",
         profile=profile,
     )
 
-    total = sum(cf.amount for cf in stream.entries)
-    assert abs(total - (-1_000_000)) < 1.0
+    assert sum(cf.amount for cf in stream.entries) == pytest.approx(-1_000_000)
 
 
 def test_builder_schedule_wraps_custom_profile():
@@ -535,9 +534,9 @@ def test_escalation_increases_total():
     assert escalated_total > base_total
 
 
-def test_construction_escalation_uses_period_midpoint():
-    start_date = date(2025, 1, 1)
-    end_date = date(2026, 1, 1)
+def test_construction_escalation_uses_calendar_period_booking_dates():
+    start_date = date(2025, 7, 1)
+    end_date = date(2026, 7, 1)
     stream = construction_spend_schedule(
         1_000_000,
         start_date,
@@ -545,12 +544,15 @@ def test_construction_escalation_uses_period_midpoint():
         period="year",
         profile="flat",
         escalation=0.05,
+        day_count_convention="actual/365-fixed",
     )
 
-    midpoint = _midpoint_date(start_date, end_date)
-    expected_amount = -1_000_000 * _annual_factor(start_date, midpoint, 0.05)
-    assert len(stream.entries) == 1
-    assert stream.entries[0].amount == pytest.approx(expected_amount)
+    expected_amounts = [
+        -1_000_000 * 184.0 / 365.0 * _annual_factor(start_date, date(2025, 12, 31), 0.05),
+        -1_000_000 * 181.0 / 365.0 * _annual_factor(start_date, date(2026, 6, 30), 0.05),
+    ]
+    assert [flow.date for flow in stream] == [date(2025, 12, 31), date(2026, 6, 30)]
+    assert [flow.amount for flow in stream] == pytest.approx(expected_amounts)
 
 
 def test_construction_supports_explicit_nonannual_escalation_period():
@@ -566,16 +568,15 @@ def test_construction_supports_explicit_nonannual_escalation_period():
         escalation_period="month",
     )
 
-    midpoint = _midpoint_date(start_date, end_date)
     policy = ConstantRateEscalation(start_date, rate=0.01, period="month")
-    expected_amount = -1_000_000 * policy.factor(midpoint)
+    expected_amount = -1_000_000 * policy.factor(date(2025, 12, 31))
     assert stream.entries[0].amount == pytest.approx(expected_amount)
 
 
 def test_construction_supports_earlier_amount_reference_date():
-    start_date = date(2025, 7, 1)
-    end_date = date(2026, 7, 1)
-    reference_date = date(2025, 1, 1)
+    start_date = date(2025, 1, 1)
+    end_date = date(2026, 1, 1)
+    reference_date = date(2024, 1, 1)
     stream = construction_spend_schedule(
         1_000_000,
         start_date,
@@ -586,14 +587,14 @@ def test_construction_supports_earlier_amount_reference_date():
         amount_reference_date=reference_date,
     )
 
-    midpoint = _midpoint_date(start_date, end_date)
-    expected_amount = -1_000_000 * _annual_factor(reference_date, midpoint, 0.12)
+    # actual/actual spans one full leap year plus 364/365 of 2025.
+    expected_amount = -1_000_000 * 1.12 ** (1.0 + 364.0 / 365.0)
     assert stream.entries[0].amount == pytest.approx(expected_amount)
 
 
 def test_construction_supports_escalation_policy():
-    start_date = date(2025, 7, 1)
-    end_date = date(2026, 7, 1)
+    start_date = date(2025, 1, 1)
+    end_date = date(2026, 1, 1)
     policy = IndexSeriesEscalation(
         reference_date=date(2025, 1, 1),
         points=((date(2025, 1, 1), 100.0), (date(2026, 1, 1), 110.0)),
@@ -607,8 +608,7 @@ def test_construction_supports_escalation_policy():
         escalation_policy=policy,
     )
 
-    midpoint = _midpoint_date(start_date, end_date)
-    assert stream.entries[0].amount == pytest.approx(-1_000_000 * policy.factor(midpoint))
+    assert stream.entries[0].amount == pytest.approx(-1_000_000 * policy.factor(date(2025, 12, 31)))
 
 
 def test_construction_rejects_mixed_simple_and_policy_inputs():

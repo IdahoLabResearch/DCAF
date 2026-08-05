@@ -361,6 +361,25 @@ def time_delta_per_period(period: Period) -> relativedelta:
             assert_never(normalized_period)
 
 
+def _calendar_period_windows(
+    start: date,
+    end: date,
+    frequency: Period,
+) -> list[tuple[date, date]]:
+    """Return calendar-aligned half-open windows intersecting ``[start, end)``."""
+    delta = time_delta_per_period(frequency)
+    calendar_start = period_start(start, frequency)
+    windows: list[tuple[date, date]] = []
+    while calendar_start < end:
+        calendar_end = calendar_start + delta
+        overlap_start = max(start, calendar_start)
+        overlap_end = min(end, calendar_end)
+        if overlap_end > overlap_start:
+            windows.append((overlap_start, overlap_end))
+        calendar_start = calendar_end
+    return windows
+
+
 def _validate_period_count(periods: int | float) -> float:
     """Validate a user-supplied schedule duration count."""
     if isinstance(periods, bool) or not isinstance(periods, (int, float)):

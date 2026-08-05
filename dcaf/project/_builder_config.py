@@ -274,6 +274,7 @@ class ConstructionScheduleConfig:
     construction_start: date | None = None
     construction_end: date | None = None
     period: Period = "month"
+    timing: TimingConvention | None = None
     escalation: EscalationSettings = field(default_factory=EscalationSettings)
 
     def __post_init__(self) -> None:

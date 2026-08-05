@@ -22,11 +22,11 @@ from dcaf.finance.escalation import (
 )
 from dcaf.shared.time import (
     PeriodWindow,
+    _calendar_period_windows,
     elapsed_hours,
     period_start,
     period_window_event_date,
     period_windows,
-    time_delta_per_period,
 )
 from dcaf.shared.types import (
     DayCountConvention,
@@ -199,21 +199,6 @@ class _GenerationSettlement:
     period_end: dt.date
     label: str
     available_mwh: float
-
-
-def _calendar_period_windows(start: date, end: date, frequency: Period) -> list[tuple[date, date]]:
-    """Return calendar-aligned half-open windows intersecting ``[start, end)``."""
-    delta = time_delta_per_period(frequency)
-    calendar_start = period_start(start, frequency)
-    windows: list[tuple[date, date]] = []
-    while calendar_start < end:
-        calendar_end = calendar_start + delta
-        overlap_start = max(start, calendar_start)
-        overlap_end = min(end, calendar_end)
-        if overlap_end > overlap_start:
-            windows.append((overlap_start, overlap_end))
-        calendar_start = calendar_end
-    return windows
 
 
 def _prorated_generation_amount(

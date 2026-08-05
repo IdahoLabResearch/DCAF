@@ -846,6 +846,7 @@ class EnergyProject:
         construction_start: date | None = None,
         construction_end: date | None = None,
         period: Period = "month",
+        timing: TimingConvention | None = None,
         escalation: float | None = None,
         escalation_period: Period | None = None,
         amount_reference_date: date | None = None,
@@ -873,9 +874,16 @@ class EnergyProject:
             Construction start date. Required when ``spend_profile`` is provided.
         construction_end : date, optional
             Construction end date (exclusive). Defaults to ``cod_date`` (or
-            ``operations_start``) when omitted.
+            ``operations_start``) when omitted. With end timing, the final
+            spend is booked on the preceding, last included construction day.
         period : Period, optional
-            Construction sub-period frequency. Default is ``"month"``.
+            Calendar period used to aggregate construction spend. Default is
+            ``"month"``.
+        timing : {"begin", "middle", "end"}, optional
+            Booking convention for distributed construction spend. Defaults to
+            the project timing convention. This does not affect a construction
+            cost booked as a single cashflow at COD when ``spend_profile`` is
+            omitted.
         escalation : float, optional
             Annual cost escalation rate during construction. When omitted, falls
             back to the project-wide rate set by :meth:`default_escalation`.
@@ -901,6 +909,7 @@ class EnergyProject:
             construction_start=construction_start,
             construction_end=construction_end,
             period=period,
+            timing=timing,
             escalation=updated_escalation(
                 EscalationSettings(),
                 escalation=escalation,

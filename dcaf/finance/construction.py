@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace as dc_replace
-from datetime import date, timedelta
+from datetime import date
 from typing import Self, TypeAlias, cast
 
 from dcaf.streams.cashflows import CashFlow, CashFlowStream
@@ -24,6 +24,7 @@ from dcaf.shared.types import (
     SpendSchedule,
     SpendScheduleName,
     TaxTreatment,
+    TimingConvention,
     _InterestTreatmentEnum,
     _PeriodEnum,
     parse_day_count_convention,
@@ -31,7 +32,9 @@ from dcaf.shared.types import (
     parse_period,
 )
 from dcaf.shared.time import (
-    period_end as calendar_period_end,
+    PeriodWindow,
+    _calendar_period_windows,
+    period_window_event_date,
     time_delta_per_period,
     timedelta_fractional_years,
 )
@@ -322,18 +325,21 @@ class ConstructionSpendConfig:
     start_date : date
         Construction start date.
     end_date : date
-        Construction completion date. Must be after ``start_date``.
+        Exclusive construction end. Must be after ``start_date``.
     period : Period, optional
-        Cashflow granularity. Default is ``"month"``.
+        Calendar period used to aggregate construction spend. Default is
+        ``"month"``.
     profile : SpendProfile or SpendScheduleName, optional
         Spend timing profile applied across the construction duration. Passing a
         string uses a named built-in curve. Default is ``"flat"``.
+    timing : {"begin", "middle", "end"}, optional
+        Booking convention for non-upfront spend. Default is ``"end"``.
     financing : ConstructionFinancing or None, optional
         Debt and construction-interest assumptions. Passing ``None`` uses
         unlevered construction with no interest.
     escalation : float, optional
         Compound escalation rate, interpreted over ``escalation_period`` and
-        evaluated at each period midpoint. With the default
+        evaluated at each spend booking date. With the default
         ``escalation_period="year"``, this is an annual escalation rate.
         Default is ``0.0``.
     escalation_period : Period, optional
@@ -341,7 +347,7 @@ class ConstructionSpendConfig:
         ``"year"``.
     amount_reference_date : date, optional
         Date at which ``total_cost`` is known. Escalation is evaluated from this
-        date to each spend-period midpoint. Defaults to ``start_date``.
+        date to each spend booking date. Defaults to ``start_date``.
     day_count_convention : {"actual/365-no-leap", "actual/365-fixed", "actual/actual"}, optional
         Day-count convention used for annual construction escalation and
         construction-period interest.
@@ -375,6 +381,7 @@ class ConstructionSpendConfig:
     escalation_period: Period | _PeriodEnum = "year"
     amount_reference_date: date | None = None
     day_count_convention: DayCountConvention = "actual/actual"
+    timing: TimingConvention = "end"
 
     def __post_init__(self) -> None:
         if self.total_cost <= 0:
@@ -458,6 +465,7 @@ def _scheduled_spend_amount(
     config: ConstructionSpendConfig,
     current: date,
     period_end: date,
+    booking_date: date,
     escalation_policy: EscalationPolicy,
 ) -> float:
     """Compute escalated spend allocated to a single period."""
@@ -466,9 +474,7 @@ def _scheduled_spend_amount(
     t_end = (period_end - config.start_date).days / total_days
     spend_fraction = _integrate_curve(config.profile.schedule, t_start, t_end)
 
-    mid_days = ((current - config.start_date).days + (period_end - config.start_date).days) // 2
-    mid_date = config.start_date + timedelta(days=mid_days)
-    escalation_factor = escalation_policy.factor(mid_date)
+    escalation_factor = escalation_policy.factor(booking_date)
     return config.total_cost * spend_fraction * escalation_factor
 
 
@@ -490,28 +496,30 @@ def _scheduled_spends(
             )
         ]
 
-    periods = _iter_period_boundaries(
+    periods = _calendar_period_windows(
         config.start_date,
         config.end_date,
-        parse_period(str(config.period)),
+        cast(Period, str(config.period)),
     )
     spends: list[_ScheduledSpend] = []
 
-    # Construction phase ends the day before end_date (which is exclusive).
-    phase_end = config.end_date - timedelta(days=1)
-
-    period_str = cast(Period, str(config.period))
-
     for current, window_end in periods:
+        booking_date = period_window_event_date(
+            PeriodWindow(start=current, end=window_end),
+            config.timing,
+        )
         spends.append(
             _ScheduledSpend(
                 start_date=current,
                 end_date=window_end,
-                booking_date=min(
-                    calendar_period_end(current, period_str),
-                    phase_end,
+                booking_date=booking_date,
+                spend_amount=_scheduled_spend_amount(
+                    config,
+                    current,
+                    window_end,
+                    booking_date,
+                    effective_policy,
                 ),
-                spend_amount=_scheduled_spend_amount(config, current, window_end, effective_policy),
             )
         )
 
@@ -639,12 +647,15 @@ class ConstructionSpendBuilder:
     start_date : date
         Construction start date.
     end_date : date
-        Construction completion date.
+        Exclusive construction end.
     period : Period, optional
-        Cashflow granularity. Default is ``"month"``.
+        Calendar period used to aggregate construction spend. Default is
+        ``"month"``.
     profile : SpendProfile or SpendScheduleName, optional
         Spend timing profile. Passing a string uses a named built-in curve.
         Default is ``"flat"``.
+    timing : {"begin", "middle", "end"}, optional
+        Booking convention for non-upfront spend. Default is ``"end"``.
     financing : ConstructionFinancing or None, optional
         Debt and construction-interest assumptions. Default is unlevered
         construction.
@@ -657,7 +668,7 @@ class ConstructionSpendBuilder:
         ``"year"``.
     amount_reference_date : date, optional
         Date at which ``total_cost`` is known. Escalation is evaluated from this
-        date to each spend-period midpoint. Defaults to ``start_date``.
+        date to each spend booking date. Defaults to ``start_date``.
 
     Notes
     -----
@@ -687,6 +698,7 @@ class ConstructionSpendBuilder:
         period: Period = "month",
         *,
         profile: ConstructionProfileInput = "flat",
+        timing: TimingConvention = "end",
         financing: ConstructionFinancing | None = None,
         escalation: float = 0.0,
         escalation_period: Period = "year",
@@ -699,6 +711,7 @@ class ConstructionSpendBuilder:
             end_date=end_date,
             period=parse_period(str(period)),
             profile=_normalize_profile(profile),
+            timing=timing,
             financing=_normalize_financing(financing),
             escalation=escalation,
             escalation_period=parse_period(str(escalation_period)),
@@ -868,7 +881,7 @@ class ConstructionSpendBuilder:
         Parameters
         ----------
         policy : EscalationPolicy or None
-            Built escalation policy to apply at each period midpoint. Pass
+            Built escalation policy to apply at each spend booking date. Pass
             ``None`` to clear any existing override and return to simple
             keyword-based escalation settings.
 
@@ -918,7 +931,7 @@ class ConstructionSpendBuilder:
         Parameters
         ----------
         rate : float
-            Compound escalation rate applied to each period midpoint.
+            Compound escalation rate applied to each spend booking date.
         escalation_period : Period, optional
             Compounding period associated with ``rate``. When omitted, the
             existing builder setting is preserved.
@@ -941,13 +954,8 @@ class ConstructionSpendBuilder:
         0.03
         """
         return self._copy(
-            config=ConstructionSpendConfig(
-                total_cost=self._config.total_cost,
-                start_date=self._config.start_date,
-                end_date=self._config.end_date,
-                period=self._config.period,
-                profile=self._config.profile,
-                financing=self._config.financing,
+            config=dc_replace(
+                self._config,
                 escalation=rate,
                 escalation_period=(
                     self._config.escalation_period
@@ -959,7 +967,6 @@ class ConstructionSpendBuilder:
                     if isinstance(amount_reference_date, _UnsetType)
                     else amount_reference_date
                 ),
-                day_count_convention=self._config.day_count_convention,
             ),
             escalation_policy=None,
         )
@@ -1015,6 +1022,7 @@ def construction_spend_schedule(
     period: Period = "month",
     *,
     profile: ConstructionProfileInput = "flat",
+    timing: TimingConvention = "end",
     financing: ConstructionFinancing | None = None,
     escalation: float = 0.0,
     escalation_period: Period = "year",
@@ -1031,18 +1039,22 @@ def construction_spend_schedule(
     start_date : date
         Construction start date.
     end_date : date
-        Construction completion date.
+        Exclusive construction end. The last included construction day is the
+        preceding calendar day.
     period : Period, optional
-        Cashflow granularity. Default is ``"month"``.
+        Calendar period used to aggregate construction spend. Default is
+        ``"month"``.
     profile : SpendProfile or SpendScheduleName, optional
         Spend timing profile. The default is ``"flat"``, which keeps the implicit
         profile visible in the function signature.
+    timing : {"begin", "middle", "end"}, optional
+        Booking convention for non-upfront spend. Default is ``"end"``.
     financing : ConstructionFinancing or None, optional
         Debt and construction-interest assumptions. Default is unlevered
         construction.
     escalation : float, optional
         Compound escalation rate, interpreted over ``escalation_period`` and
-        evaluated at each period midpoint. With the default
+        evaluated at each spend booking date. With the default
         ``escalation_period="year"``, this is an annual escalation rate.
         Default is ``0.0``.
     escalation_period : Period, optional
@@ -1050,7 +1062,7 @@ def construction_spend_schedule(
         ``"year"``.
     amount_reference_date : date, optional
         Date at which ``total_cost`` is known. Escalation is evaluated from this
-        date to each spend-period midpoint. Defaults to ``start_date``.
+        date to each spend booking date. Defaults to ``start_date``.
     escalation_policy : EscalationPolicy, optional
         Advanced override for custom escalation behavior. When provided, it
         must not be combined with ``escalation``, ``escalation_period``, or
@@ -1079,6 +1091,18 @@ def construction_spend_schedule(
     >>> len(stream.entries) > 0
     True
 
+    Calendar-year booking uses half-open construction bounds. Construction
+    active through April 15 therefore has an exclusive end of April 16:
+
+    >>> annual = construction_spend_schedule(
+    ...     1_000_000,
+    ...     date(2025, 7, 1),
+    ...     date(2030, 4, 16),
+    ...     period="year",
+    ... )
+    >>> [flow.date for flow in annual.entries][-2:]
+    [datetime.date(2029, 12, 31), datetime.date(2030, 4, 15)]
+
     Usage with explicit financing and a named profile:
 
     >>> from dcaf.finance.construction import ConstructionFinancing
@@ -1105,6 +1129,7 @@ def construction_spend_schedule(
         end_date=end_date,
         period=period,
         profile=profile,
+        timing=timing,
         financing=financing,
         escalation=escalation,
         escalation_period=escalation_period,
