@@ -707,7 +707,7 @@ def test_project_day_count_convention_affects_construction_interest():
                 capacity_mw=0.0,
                 capacity_factor=0.0,
                 operations_start=date(2024, 4, 1),
-                operations_end=date(2025, 1, 1),
+                operations_end=date(2025, 4, 1),
             )
             .construction(
                 overnight_cost=1200.0,

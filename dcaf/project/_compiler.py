@@ -13,7 +13,7 @@ from typing import Literal
 
 from dateutil.relativedelta import relativedelta
 
-from dcaf.finance.amortization import AmortizationSchedule
+from dcaf.finance.amortization import AmortizationSchedule, _calendarize_amortization_schedule
 from dcaf.finance.construction import (
     ConstructionCashFlows,
     ConstructionFinancing,
@@ -1161,7 +1161,9 @@ class ProjectCompiler:
 
         Handles two paths: construction-debt-based amortization (principal
         derived from recorded financing proceeds) and explicit schedule overrides.
-        Returns an empty stream when no debt is configured.
+        Internally generated payments are allocated across calendar periods;
+        explicit schedule dates and amounts are preserved. Returns an empty
+        stream when no debt is configured.
         """
         # Explicit schedule override takes precedence
         if self.config.debt_schedule is not None:
@@ -1199,21 +1201,22 @@ class ProjectCompiler:
             if debt.amortization_start is not None
             else self.require_timeline_date("operations_start")
         )
-        schedule = AmortizationSchedule.build(
-            principal=principal,
-            annual_rate=debt.amortization_rate,
-            term=debt.amortization_term,
-            start_date=start,
+        schedule = _calendarize_amortization_schedule(
+            AmortizationSchedule.build(
+                principal=principal,
+                annual_rate=debt.amortization_rate,
+                term=debt.amortization_term,
+                start_date=start,
+                frequency=debt.amortization_frequency,
+            ),
             frequency=debt.amortization_frequency,
+            timing=self.config.timeline.timing,
+            day_count_convention=self.config.day_count_convention,
         )
-        ops_start = self.config.timeline.operations_start
         ops_end = self.config.timeline.operations_end
-        return self.remap_event_dates(
+        return self.truncate_cashflow_schedule(
             CashFlowStream.from_streams(schedule.interest, schedule.principal).sort(),
-            frequency=debt.amortization_frequency,
-            phase_start=ops_start,
-            phase_end=ops_end,
-            truncate_after_phase_end=True,
+            boundary=ops_end,
             component_name="debt_service",
         )
 

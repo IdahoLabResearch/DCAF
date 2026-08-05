@@ -513,45 +513,128 @@ class TestDepreciationRemapping:
         ]
 
 
-class TestDebtRemapping:
-    """Debt service dates remapped per timing convention.
+class TestDebtBooking:
+    """Debt service is allocated and booked per the project calendar.
 
     Construction-debt amortization schedules (built internally) get their
-    dates remapped according to the project timing convention. Explicit
-    debt_schedule overrides are passed through as-is.
+    payments allocated across calendar periods and booked according to the
+    project timing convention. Explicit debt_schedule overrides are passed
+    through as-is.
     """
 
-    def test_construction_debt_amortization_dates_remapped(self):
+    def test_construction_debt_amortization_prorates_first_and_last_periods(self):
         project = (
             EnergyProject()
             .generation(
                 capacity_mw=100,
                 capacity_factor=0.9,
-                operations_start=date(2025, 3, 15),
-                operations_end=date(2031, 1, 1),
+                operations_start=date(2025, 7, 1),
+                operations_end=date(2028, 1, 1),
             )
             .construction(
-                overnight_cost=1_000_000,
+                overnight_cost=1_200,
                 spend_profile="upfront",
                 construction_start=date(2024, 1, 1),
                 period="year",
             )
             .generation_revenue(price_policy=GenerationPrice.fixed(50.0))
             .construction_financing(
-                debt_fraction=0.5,
-                amortization_rate=0.05,
-                amortization_term=3,
+                debt_fraction=1.0,
+                amortization_rate=0.0,
+                amortization_term=2,
                 amortization_frequency="year",
             )
         )
         analysis = project.analyze()
-        debt_stream = analysis.cashflow_components["debt_service"]
-        unique_dates = sorted(set(cf.date for cf in debt_stream.entries))
-        # Amortization starts at operations_start (2025-03-15).
-        # With "end" timing, remapped to min(year-end, ops_end):
-        assert unique_dates[0] == date(2025, 12, 31)
-        assert unique_dates[1] == date(2026, 12, 31)
-        assert unique_dates[2] == date(2027, 12, 31)
+        principal = [
+            flow
+            for flow in analysis.cashflow_components["debt_service"]
+            if flow.label == "Principal"
+        ]
+
+        assert [flow.date for flow in principal] == [
+            date(2025, 12, 31),
+            date(2026, 12, 31),
+            date(2027, 6, 30),
+        ]
+        assert [flow.amount for flow in principal] == pytest.approx(
+            [-600.0 * 184.0 / 365.0, -600.0, -600.0 * 181.0 / 365.0]
+        )
+        assert sum(flow.amount for flow in principal) == pytest.approx(-1_200.0)
+
+    def test_construction_debt_amortization_prorates_across_leap_day(self):
+        analysis = (
+            EnergyProject()
+            .generation(
+                capacity_mw=100,
+                operations_start=date(2023, 7, 1),
+                operations_end=date(2025, 1, 1),
+            )
+            .construction(
+                overnight_cost=3_660,
+                spend_profile="upfront",
+                construction_start=date(2023, 1, 1),
+                period="year",
+            )
+            .construction_financing(
+                debt_fraction=1.0,
+                amortization_rate=0.10,
+                amortization_term=1,
+                amortization_frequency="year",
+            )
+            .analyze()
+        )
+        debt_service = analysis.cashflow_components["debt_service"]
+        interest = [flow for flow in debt_service if flow.label == "Interest"]
+        principal = [flow for flow in debt_service if flow.label == "Principal"]
+
+        assert [flow.date for flow in principal] == [date(2023, 12, 31), date(2024, 6, 30)]
+        assert [flow.amount for flow in principal] == pytest.approx([-1_840.0, -1_820.0])
+        assert [flow.amount for flow in interest] == pytest.approx([-184.0, -182.0])
+
+    def test_construction_debt_amortization_preserves_month_end_anchor(self):
+        analysis = (
+            EnergyProject()
+            .generation(
+                capacity_mw=100,
+                operations_start=date(2025, 1, 1),
+                operations_end=date(2025, 6, 1),
+            )
+            .construction(
+                overnight_cost=300,
+                spend_profile="upfront",
+                construction_start=date(2024, 1, 1),
+            )
+            .construction_financing(
+                debt_fraction=1.0,
+                amortization_rate=0.0,
+                amortization_term=3,
+                amortization_frequency="month",
+                amortization_start=date(2025, 1, 31),
+            )
+            .analyze()
+        )
+        principal = [
+            flow
+            for flow in analysis.cashflow_components["debt_service"]
+            if flow.label == "Principal"
+        ]
+
+        assert [flow.date for flow in principal] == [
+            date(2025, 1, 31),
+            date(2025, 2, 28),
+            date(2025, 3, 31),
+            date(2025, 4, 29),
+        ]
+        assert [flow.amount for flow in principal] == pytest.approx(
+            [
+                -100.0 / 28.0,
+                -100.0 * (27.0 / 28.0 + 1.0 / 31.0),
+                -100.0 * (30.0 / 31.0 + 1.0 / 30.0),
+                -100.0 * 29.0 / 30.0,
+            ]
+        )
+        assert sum(flow.amount for flow in principal) == pytest.approx(-300.0)
 
     def test_construction_debt_after_operations_end_is_truncated_with_warning(self):
         project = (

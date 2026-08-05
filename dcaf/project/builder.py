@@ -977,9 +977,13 @@ class EnergyProject:
         servicing_period : Period, optional
             Period frequency for construction-period interest accrual.
         amortization_frequency : Period, optional
-            Payment frequency for permanent debt. Default is ``"year"``.
+            Calendar frequency used to book permanent-debt payments. Nominal
+            amortization amounts are allocated pro rata when the first or last
+            calendar period is partial. Default is ``"year"``.
         amortization_start : date, optional
-            First amortization payment date. Defaults to ``operations_start``.
+            Start of the first nominal amortization period. Defaults to
+            ``operations_start``. The first cashflow date is determined by the
+            project timing convention.
 
         Returns
         -------

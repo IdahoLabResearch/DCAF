@@ -19,18 +19,28 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
+from math import fsum
 from typing import Self, assert_never, overload
 
 from dcaf.streams.cashflows import CashFlow, CashFlowStream
 from dcaf.shared.types import (
+    DayCountConvention,
     Period,
     ProFormaCategory,
     TaxTreatment,
+    TimingConvention,
     _PeriodEnum,
     normalize_cashflow_classification,
     parse_period,
 )
-from dcaf.shared.time import time_delta_per_period
+from dcaf.shared.time import (
+    PeriodWindow,
+    _calendar_period_windows,
+    elapsed_hours,
+    period_start,
+    period_window_event_date,
+    time_delta_per_period,
+)
 
 
 @dataclass(frozen=True)
@@ -308,6 +318,94 @@ def amortize(
         interest_tax_treatment=interest_tax_treatment,
         principal_pro_forma_category=principal_pro_forma_category,
         principal_tax_treatment=principal_tax_treatment,
+    )
+
+
+def _calendarize_cashflow_stream(
+    stream: CashFlowStream,
+    *,
+    frequency: Period,
+    timing: TimingConvention,
+    day_count_convention: DayCountConvention,
+) -> CashFlowStream:
+    """Allocate nominal payment intervals into calendar booking periods.
+
+    Each original flow represents the interval from its anchored date to the
+    next anchored date. Amounts are split by elapsed hours, with a final
+    residual preserving each flow exactly, then aggregated by calendar period.
+    """
+    if not stream.entries:
+        return stream
+
+    delta = time_delta_per_period(frequency)
+    grouped: dict[date, list[tuple[CashFlow, date, date, float]]] = {}
+    schedule_end = stream.entries[0].date + delta * len(stream.entries)
+    for flow_index, flow in enumerate(stream.entries):
+        source_end = (
+            stream.entries[flow_index + 1].date
+            if flow_index + 1 < len(stream.entries)
+            else schedule_end
+        )
+        windows = _calendar_period_windows(flow.date, source_end, frequency)
+        source_hours = elapsed_hours(flow.date, source_end, day_count_convention)
+        allocated: list[float] = []
+        for window_index, (window_start, window_end) in enumerate(windows):
+            if window_index == len(windows) - 1:
+                amount = flow.amount - fsum(allocated)
+            elif source_hours == 0.0:
+                amount = 0.0
+            else:
+                amount = (
+                    flow.amount
+                    * elapsed_hours(window_start, window_end, day_count_convention)
+                    / source_hours
+                )
+            allocated.append(amount)
+            calendar_start = period_start(window_start, frequency)
+            grouped.setdefault(calendar_start, []).append((flow, window_start, window_end, amount))
+
+    entries: list[CashFlow] = []
+    for allocations in grouped.values():
+        window = PeriodWindow(
+            start=min(allocation[1] for allocation in allocations),
+            end=max(allocation[2] for allocation in allocations),
+        )
+        entries.append(
+            allocations[0][0].replace(
+                amount=fsum(allocation[3] for allocation in allocations),
+                date=period_window_event_date(window, timing),
+            )
+        )
+    return CashFlowStream(entries).sort()
+
+
+def _calendarize_amortization_schedule(
+    schedule: AmortizationSchedule,
+    *,
+    frequency: Period,
+    timing: TimingConvention,
+    day_count_convention: DayCountConvention,
+) -> AmortizationSchedule:
+    """Calendarize all schedule components without changing total principal or interest."""
+    return AmortizationSchedule(
+        total=_calendarize_cashflow_stream(
+            schedule.total,
+            frequency=frequency,
+            timing=timing,
+            day_count_convention=day_count_convention,
+        ),
+        interest=_calendarize_cashflow_stream(
+            schedule.interest,
+            frequency=frequency,
+            timing=timing,
+            day_count_convention=day_count_convention,
+        ),
+        principal=_calendarize_cashflow_stream(
+            schedule.principal,
+            frequency=frequency,
+            timing=timing,
+            day_count_convention=day_count_convention,
+        ),
     )
 
 
