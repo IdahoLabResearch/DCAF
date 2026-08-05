@@ -2,7 +2,7 @@
 # ALL RIGHTS RESERVED
 """Tests for tax incentive functions."""
 
-from datetime import date, timedelta
+from datetime import date
 
 import pytest
 from dateutil.relativedelta import relativedelta
@@ -168,7 +168,6 @@ class TestPTC:
             [
                 Generation(
                     amount_mwh=float((period_end - period_start).days),
-                    date=period_end - timedelta(days=1),
                     period_start=period_start,
                     period_end=period_end,
                 )
@@ -181,7 +180,7 @@ class TestPTC:
         known_eligible_mwh = float((eligibility_end - eligibility_start).days)
         assert result.count() == 11
         assert result.entries[0].amount == pytest.approx(184.0 * 2.0)
-        assert result.entries[-1].date == date(2040, 12, 31)
+        assert result.entries[-1].date == date(2040, 6, 30)
         assert result.entries[-1].amount == pytest.approx(182.0 * 2.0)
         assert result.sum() == pytest.approx(known_eligible_mwh * 2.0)
 
@@ -203,13 +202,11 @@ class TestPTC:
             [
                 Generation(
                     184.0,
-                    date(2039, 12, 31),
                     period_start=date(2039, 7, 1),
                     period_end=date(2040, 1, 1),
                 ),
                 Generation(
                     final_period_mwh,
-                    date(2040, 12, 31),
                     period_start=date(2040, 1, 1),
                     period_end=date(2041, 1, 1),
                 ),
@@ -231,31 +228,18 @@ class TestPTC:
             (date(2039, 7, 1), date(2040, 1, 1)),
             (date(2040, 1, 1), date(2041, 1, 1)),
         ]
-        begin = GenerationStream(
+        generation = GenerationStream(
             [
                 Generation(
                     float((period_end - period_start).days),
-                    period_start,
                     period_start=period_start,
                     period_end=period_end,
                 )
                 for period_start, period_end in periods
             ]
         )
-        end = GenerationStream(
-            [
-                Generation(
-                    float((period_end - period_start).days),
-                    period_end - timedelta(days=1),
-                    period_start=period_start,
-                    period_end=period_end,
-                )
-                for period_start, period_end in periods
-            ]
-        )
-
-        begin_credits = ptc(begin, rate_per_mwh=1.0, years=1)
-        end_credits = ptc(end, rate_per_mwh=1.0, years=1)
+        begin_credits = ptc(generation, rate_per_mwh=1.0, years=1, timing="begin")
+        end_credits = ptc(generation, rate_per_mwh=1.0, years=1, timing="end")
 
         assert [flow.amount for flow in begin_credits] == pytest.approx(
             [flow.amount for flow in end_credits]

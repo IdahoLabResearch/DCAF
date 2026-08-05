@@ -8,9 +8,11 @@ container), and GenerationGroup (grouped container) for modeling MWh production.
 """
 
 import datetime as dt
+import warnings
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Any, Callable, Iterable, TypeVar, assert_never, cast, overload
+from math import fsum
+from typing import Any, Callable, Iterable, TypeVar, cast, overload
 
 from dcaf.streams.cashflows import CashFlow, CashFlowStream
 from dcaf.finance.escalation import (
@@ -19,9 +21,12 @@ from dcaf.finance.escalation import (
     _resolve_escalation_policy_override,
 )
 from dcaf.shared.time import (
+    PeriodWindow,
     elapsed_hours,
+    period_start,
     period_window_event_date,
     period_windows,
+    time_delta_per_period,
 )
 from dcaf.shared.types import (
     DayCountConvention,
@@ -48,14 +53,11 @@ class Generation:
     ----------
     amount_mwh : float
         Energy produced in MWh.
-    date : date
-        Recognition date used to place the entry in time for grouping, pricing,
-        escalation, discounting, and conversion to cashflows. When
-        ``period_start`` and ``period_end`` are provided, this is the booking
-        date for generation accumulated over that period rather than the date
-        on which all generation physically occurred. It is normally selected
-        from the period according to a timing convention, such as its beginning,
-        middle, or final day.
+    date : date, optional
+        Legacy point date. When supplied without period bounds, it is normalized
+        to the one-day half-open period ``[date, date + 1 day)``. Project analysis
+        uses the normalized period and does not use this field directly for
+        settlement or financial timing.
     label : str
         Descriptive label.
     period_start : date or None
@@ -68,31 +70,37 @@ class Generation:
     Raises
     ------
     ValueError
-        If only one period bound is provided or the period is empty or reversed.
+        If neither a date nor complete period bounds are provided, if date and
+        period bounds are provided together, or if the period is empty or reversed.
 
     Notes
     -----
     ``period_start`` and ``period_end`` describe the physical generation interval
-    using half-open ``[period_start, period_end)`` semantics. If they are omitted,
-    the entry is treated as a point event occurring on ``date``. The recognition
-    date remains the date used by stream operations and financial calculations in
-    both cases.
+    using half-open ``[period_start, period_end)`` semantics. Cashflow dates are
+    derived later from calendar settlement periods using frequency and timing
+    conventions.
     """
 
     amount_mwh: float
-    date: date
+    date: dt.date | None = None
     label: str = ""
-    period_start: dt.date | None = None
-    period_end: dt.date | None = None
+    period_start: dt.date = cast(dt.date, None)
+    period_end: dt.date = cast(dt.date, None)
 
     def __post_init__(self) -> None:
+        if self.date is not None and (self.period_start is not None or self.period_end is not None):
+            raise ValueError("date cannot be provided together with period bounds")
+        if self.date is not None:
+            if self.date == dt.date.max:
+                raise ValueError("date must be before date.max so a one-day period can be formed")
+            object.__setattr__(self, "period_start", self.date)
+            object.__setattr__(self, "period_end", self.date + timedelta(days=1))
+            return
         if (self.period_start is None) != (self.period_end is None):
             raise ValueError("period_start and period_end must be provided together")
-        if (
-            self.period_start is not None
-            and self.period_end is not None
-            and self.period_end <= self.period_start
-        ):
+        if self.period_start is None:
+            raise ValueError("date or period_start and period_end must be provided")
+        if self.period_end is not None and self.period_end <= self.period_start:
             raise ValueError("period_end must be after period_start")
 
     def replace(
@@ -110,8 +118,8 @@ class Generation:
         ----------
         amount_mwh: float | None = None
         date: date | None = None
-            Replacement recognition date. For an interval-backed entry, changing
-            this does not change its physical generation period.
+            Replacement legacy date. Supplying a date replaces the physical
+            period with ``[date, date + 1 day)`` and emits a warning.
         label: str | None = None
         period_start: date | None = None
         period_end: date | None = None
@@ -133,25 +141,171 @@ class Generation:
 
         >>> # Perform multiple modifications
         >>> from dateutil.relativedelta import relativedelta
+        >>> import warnings
         >>> old_gen = Generation(300, date(2027, 6, 1))
-        >>> new_gen = old_gen.replace(
-        ...     amount_mwh = old_gen.amount_mwh - 50,
-        ...     date = (old_gen.date - relativedelta(months=6)),
-        ... )
+        >>> with warnings.catch_warnings():
+        ...     warnings.simplefilter("ignore")
+        ...     new_gen = old_gen.replace(
+        ...         amount_mwh=old_gen.amount_mwh - 50,
+        ...         date=old_gen.date - relativedelta(months=6),
+        ...     )
         >>> # This decreases the generation amount by 50 and moves it forward 6 months
         """
+        if date is not None and (period_start is not None or period_end is not None):
+            raise ValueError("date cannot be replaced together with period bounds")
+
+        resolved_amount = self.amount_mwh if amount_mwh is None else amount_mwh
+        resolved_label = self.label if label is None else label
+        if date is not None:
+            warnings.warn(
+                "replacing Generation.date overwrites period_start and period_end",
+                UserWarning,
+                stacklevel=2,
+            )
+            return Generation(amount_mwh=resolved_amount, date=date, label=resolved_label)
+
+        if period_start is not None or period_end is not None:
+            if self.date is not None:
+                warnings.warn(
+                    "replacing Generation period bounds causes the legacy date to be ignored",
+                    UserWarning,
+                    stacklevel=2,
+                )
+            return Generation(
+                amount_mwh=resolved_amount,
+                label=resolved_label,
+                period_start=self.period_start if period_start is None else period_start,
+                period_end=self.period_end if period_end is None else period_end,
+            )
+
+        if self.date is not None:
+            return Generation(amount_mwh=resolved_amount, date=self.date, label=resolved_label)
         return Generation(
-            amount_mwh=self.amount_mwh if amount_mwh is None else amount_mwh,
-            date=self.date if date is None else date,
-            label=self.label if label is None else label,
-            period_start=self.period_start if period_start is None else period_start,
-            period_end=self.period_end if period_end is None else period_end,
+            amount_mwh=resolved_amount,
+            label=resolved_label,
+            period_start=self.period_start,
+            period_end=self.period_end,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class _GenerationSettlement:
+    """One source generation entry allocated to a calendar settlement period."""
+
+    source_index: int
+    amount_mwh: float
+    date: dt.date
+    period_start: dt.date
+    period_end: dt.date
+    label: str
+    available_mwh: float
+
+
+def _calendar_period_windows(start: date, end: date, frequency: Period) -> list[tuple[date, date]]:
+    """Return calendar-aligned half-open windows intersecting ``[start, end)``."""
+    delta = time_delta_per_period(frequency)
+    calendar_start = period_start(start, frequency)
+    windows: list[tuple[date, date]] = []
+    while calendar_start < end:
+        calendar_end = calendar_start + delta
+        overlap_start = max(start, calendar_start)
+        overlap_end = min(end, calendar_end)
+        if overlap_end > overlap_start:
+            windows.append((overlap_start, overlap_end))
+        calendar_start = calendar_end
+    return windows
+
+
+def _prorated_generation_amount(
+    entry: Generation,
+    *,
+    start: date | None = None,
+    end: date | None = None,
+    day_count_convention: DayCountConvention,
+) -> float:
+    """Return generation available within the requested half-open interval."""
+    assert entry.period_start is not None
+    assert entry.period_end is not None
+    effective_start = entry.period_start if start is None else max(entry.period_start, start)
+    effective_end = entry.period_end if end is None else min(entry.period_end, end)
+    if effective_end <= effective_start:
+        return 0.0
+
+    source_hours = elapsed_hours(
+        entry.period_start,
+        entry.period_end,
+        day_count_convention,
+    )
+    if source_hours == 0.0 or (
+        effective_start == entry.period_start and effective_end == entry.period_end
+    ):
+        return entry.amount_mwh
+    effective_hours = elapsed_hours(effective_start, effective_end, day_count_convention)
+    return entry.amount_mwh * effective_hours / source_hours
+
+
+def _generation_settlements(
+    entries: list[Generation],
+    *,
+    frequency: Period,
+    timing: TimingConvention,
+    day_count_convention: DayCountConvention,
+    clip_start: date | None = None,
+    clip_end: date | None = None,
+) -> list[_GenerationSettlement]:
+    """Allocate each source entry independently across calendar settlement periods."""
+    settlements: list[_GenerationSettlement] = []
+    for source_index, entry in enumerate(entries):
+        assert entry.period_start is not None
+        assert entry.period_end is not None
+        effective_start = (
+            entry.period_start if clip_start is None else max(entry.period_start, clip_start)
+        )
+        effective_end = entry.period_end if clip_end is None else min(entry.period_end, clip_end)
+        if effective_end <= effective_start:
+            continue
+
+        eligible_amount = _prorated_generation_amount(
+            entry,
+            start=effective_start,
+            end=effective_end,
+            day_count_convention=day_count_convention,
+        )
+        windows = _calendar_period_windows(effective_start, effective_end, frequency)
+        allocated: list[float] = []
+        window_hours = [
+            elapsed_hours(window_start, window_end, day_count_convention)
+            for window_start, window_end in windows
+        ]
+        total_window_hours = fsum(window_hours)
+        for index, ((window_start, window_end), hours) in enumerate(
+            zip(windows, window_hours, strict=True)
+        ):
+            if index == len(windows) - 1:
+                amount_mwh = eligible_amount - fsum(allocated)
+            elif total_window_hours == 0.0:
+                amount_mwh = 0.0
+            else:
+                amount_mwh = eligible_amount * hours / total_window_hours
+            allocated.append(amount_mwh)
+            window = PeriodWindow(start=window_start, end=window_end)
+            settlements.append(
+                _GenerationSettlement(
+                    source_index=source_index,
+                    amount_mwh=amount_mwh,
+                    date=period_window_event_date(window, timing),
+                    period_start=window_start,
+                    period_end=window_end,
+                    label=entry.label,
+                    available_mwh=amount_mwh,
+                )
+            )
+    return sorted(settlements, key=lambda settlement: (settlement.date, settlement.source_index))
 
 
 def _generation_escalation(
     *,
-    entries: list[Generation],
+    dates: Iterable[date],
     escalation: float,
     escalation_period: Period,
     amount_reference_date: date | None,
@@ -168,11 +322,7 @@ def _generation_escalation(
     )
     if policy_override is not None:
         return policy_override
-    reference_date = (
-        min(entry.date for entry in entries)
-        if amount_reference_date is None
-        else amount_reference_date
-    )
+    reference_date = min(dates) if amount_reference_date is None else amount_reference_date
     return ConstantRateEscalation(
         reference_date=reference_date,
         rate=escalation,
@@ -193,20 +343,6 @@ def _validate_outage_inputs(
     validate_non_negative(capacity_factor, "capacity_factor")
     if not 0.0 <= capacity_reduction <= 1.0:
         raise ValueError("capacity_reduction must be between 0 and 1")
-
-
-def _outage_event_date(*, start: date, end: date, timing: TimingConvention) -> date:
-    """Return the booking date for an inclusive-start, exclusive-end outage interval."""
-    inclusive_end = end - timedelta(days=1)
-    match timing:
-        case "begin":
-            return start
-        case "middle":
-            return start + timedelta(days=(inclusive_end - start).days // 2)
-        case "end":
-            return inclusive_end
-        case _:
-            assert_never(timing)
 
 
 @dataclass
@@ -298,8 +434,6 @@ class GenerationStream(BaseStream[Generation]):
         frequency: Period = "year",
         label: str = "Generation",
         day_count_convention: DayCountConvention = "actual/actual",
-        *,
-        timing: TimingConvention = "end",
     ) -> "GenerationStream":
         """
         Generate a stream of periodic generation from capacity parameters.
@@ -311,22 +445,19 @@ class GenerationStream(BaseStream[Generation]):
         capacity_factor : float
             Capacity factor as a decimal (e.g. 0.92 for 92%).
         start : date
-            Date of the first generation entry.
+            Inclusive start of the first physical generation period.
         periods : int or float
             Number of periods. Fractional periods include the final complete
             days that fit in the requested period count. If the requested end
             falls within a day, the incomplete day is omitted and a warning is
             raised.
         frequency : Period, optional
-            Generation frequency. Default ``"year"``.
+            Size of the physical source periods created by this factory. This
+            does not assign financial booking dates. Default is ``"year"``.
         label : str, optional
             Label applied to every generated entry. Default is ``"Generation"``.
         day_count_convention : DayCountConvention, optional
             Day-count convention used to compute elapsed capacity hours.
-        timing : {"end", "begin", "middle"}, optional
-            Booking-date convention for each generated period. Default is
-            ``"end"``, which books on the final included date of the period.
-
         Returns
         -------
         GenerationStream
@@ -362,7 +493,6 @@ class GenerationStream(BaseStream[Generation]):
             entries.append(
                 Generation(
                     amount_mwh=mwh,
-                    date=period_window_event_date(window, timing),
                     label=label,
                     period_start=window.start,
                     period_end=window.end,
@@ -379,7 +509,6 @@ class GenerationStream(BaseStream[Generation]):
         start: date,
         end: date,
         capacity_reduction: float = 1.0,
-        timing: TimingConvention = "end",
         label: str = "Generation Outage",
         day_count_convention: DayCountConvention = "actual/actual",
     ) -> "GenerationStream":
@@ -406,10 +535,6 @@ class GenerationStream(BaseStream[Generation]):
         capacity_reduction : float, optional
             Fraction of the affected capacity unavailable during the outage.
             ``1.0`` means fully offline and ``0.5`` means half output lost.
-        timing : {"begin", "middle", "end"}, optional
-            Date assigned to the negative generation entry. ``"begin"`` uses
-            ``start``, ``"end"`` uses the final outage day, and ``"middle"``
-            uses the midpoint of the inclusive outage dates.
         label : str, optional
             Label for the negative generation entry.
         day_count_convention : DayCountConvention, optional
@@ -452,7 +577,6 @@ class GenerationStream(BaseStream[Generation]):
             [
                 Generation(
                     amount_mwh=-lost_mwh,
-                    date=_outage_event_date(start=start, end=end, timing=timing),
                     label=label,
                     period_start=start,
                     period_end=end,
@@ -496,8 +620,6 @@ class GenerationStream(BaseStream[Generation]):
         frequency: Period = "year",
         label: str = "Generation",
         day_count_convention: DayCountConvention = "actual/actual",
-        *,
-        timing: TimingConvention = "end",
     ) -> "GenerationStream":
         """
         Generate additional capacity-based entries and append them to this stream.
@@ -519,10 +641,6 @@ class GenerationStream(BaseStream[Generation]):
             Label applied to every appended entry. Default is ``"Generation"``.
         day_count_convention : DayCountConvention, optional
             Day-count convention used to compute elapsed capacity hours.
-        timing : {"end", "begin", "middle"}, optional
-            Booking-date convention for each generated period. Default is
-            ``"end"``.
-
         Returns
         -------
         GenerationStream
@@ -543,7 +661,6 @@ class GenerationStream(BaseStream[Generation]):
             frequency=frequency,
             label=label,
             day_count_convention=day_count_convention,
-            timing=timing,
         )
         return self.extend(new)
 
@@ -568,6 +685,33 @@ class GenerationStream(BaseStream[Generation]):
         GenerationStream(...)
         """
         return self._filter_where(fn)
+
+    def date_range(self, start: date | None = None, end: date | None = None) -> "GenerationStream":
+        """Return entries whose physical periods overlap a date interval.
+
+        Parameters
+        ----------
+        start : date, optional
+            Inclusive lower bound. When omitted, no lower bound is applied.
+        end : date, optional
+            Exclusive upper bound. When omitted, no upper bound is applied.
+
+        Returns
+        -------
+        GenerationStream
+            New stream containing entries that overlap half-open ``[start, end)``.
+
+        Notes
+        -----
+        Entries are selected as complete source records; their amounts and
+        period bounds are not clipped or prorated by this filtering method.
+        """
+        return self._new(
+            entry
+            for entry in self.entries
+            if (start is None or entry.period_end > start)
+            and (end is None or entry.period_start < end)
+        )
 
     @overload
     def group_by(self, fn: Callable[[Generation], KeyType]) -> "GenerationGroup[KeyType]": ...
@@ -600,7 +744,7 @@ class GenerationStream(BaseStream[Generation]):
 
         Examples
         --------
-        >>> stream.group_by(lambda g: g.date.year)
+        >>> stream.group_by(lambda g: g.period_start.year)
         GenerationGroup(...)
         >>> stream.group_by(period="month")
         GenerationGroup(...)
@@ -615,7 +759,10 @@ class GenerationStream(BaseStream[Generation]):
             return GenerationGroup(cast(dict[Any, GenerationStream], self._grouped_streams(groups)))
 
         assert period is not None
-        per_groups = self._grouped_entries_by_period(period)
+        per_groups: dict[date, list[Generation]] = {}
+        for entry in self.entries:
+            key = period_start(entry.period_start, period)
+            per_groups.setdefault(key, []).append(entry)
         return GenerationGroup(
             cast(dict[date, GenerationStream], self._grouped_streams(per_groups))
         )
@@ -643,7 +790,7 @@ class GenerationStream(BaseStream[Generation]):
         ----------
         fn : Callable[[Generation], SupportsLessThan], optional
             Sort key function applied to each entry.
-        attr : {"date", "amount_mwh", "label"}, optional
+        attr : {"date", "period_start", "period_end", "amount_mwh", "label"}, optional
             Named ``Generation`` attribute to sort by.
         descending : bool, optional
             If ``True``, sort in descending order.
@@ -656,19 +803,22 @@ class GenerationStream(BaseStream[Generation]):
         Examples
         --------
         >>> stream = GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 3)
-        >>> stream.sort(attr="date")[0].date
-        datetime.date(2030, 12, 31)
+        >>> stream.sort(attr="period_start")[0].period_start
+        datetime.date(2030, 1, 1)
         >>> stream.sort(lambda g: g.amount_mwh, descending=True).count()
         3
         """
         if fn is not None and attr is not None:
             raise ValueError("Cannot pass both a key function and 'attr' to sort()")
-        if attr not in (None, "date", "amount_mwh", "label"):
+        if attr not in (None, "date", "period_start", "period_end", "amount_mwh", "label"):
             raise AssertionError(f"Unexpected sort attribute: {attr!r}")
         if fn is not None:
             return super().sort(fn, descending=descending)
-        if attr is None:
-            return super().sort()
+        if attr is None or attr == "date":
+            return super().sort(
+                lambda entry: (entry.period_start, entry.period_end),
+                descending=descending,
+            )
         return super().sort(attr=attr, descending=descending)
 
     def scale(self, factor: float) -> "GenerationStream":
@@ -693,13 +843,20 @@ class GenerationStream(BaseStream[Generation]):
         return GenerationStream([e.replace(e.amount_mwh * factor) for e in self.entries])
 
     def discounted_sum(
-        self, rate: float, valuation_date: date, convention: DayCountConvention = "actual/actual"
+        self,
+        rate: float,
+        valuation_date: date,
+        convention: DayCountConvention = "actual/actual",
+        *,
+        frequency: Period = "year",
+        timing: TimingConvention = "end",
     ) -> float:
         """
         Compute the present-value-weighted sum of MWh (for LCOE denominator).
 
-        Each generation entry is discounted by (1 + rate)^t where t is the
-        year fraction from valuation_date to the entry's date.
+        Physical generation is first split across calendar settlement periods.
+        Each resulting quantity is discounted from its timing-derived cashflow
+        date, using the same convention as generation-derived cashflows.
 
         Parameters
         ----------
@@ -708,7 +865,12 @@ class GenerationStream(BaseStream[Generation]):
         valuation_date : date
             Reference date.
         convention : DayCountConvention, optional
-            Day count convention.
+            Day-count convention used for allocation and discounting.
+        frequency : Period, optional
+            Calendar settlement frequency. Default is ``"year"``.
+        timing : {"begin", "middle", "end"}, optional
+            Position of each settlement date within its effective calendar
+            overlap. Default is ``"end"``.
 
         Returns
         -------
@@ -726,7 +888,13 @@ class GenerationStream(BaseStream[Generation]):
         >>> stream.discounted_sum(rate=0.08, valuation_date=date(2030, 1, 1)) > 0
         True
         """
-        values = ((entry.amount_mwh, entry.date) for entry in self.entries)
+        settlements = _generation_settlements(
+            self.entries,
+            frequency=frequency,
+            timing=timing,
+            day_count_convention=convention,
+        )
+        values = ((entry.amount_mwh, entry.date) for entry in settlements)
         return npv(values, rate, valuation_date, convention)
 
     def to_revenue(
@@ -741,6 +909,8 @@ class GenerationStream(BaseStream[Generation]):
         amount_reference_date: date | None = None,
         day_count_convention: DayCountConvention = "actual/actual",
         escalation_policy: EscalationPolicy | None = None,
+        frequency: Period = "year",
+        timing: TimingConvention = "end",
     ) -> CashFlowStream:
         """
         Convert generation entries to revenue cashflows.
@@ -761,7 +931,8 @@ class GenerationStream(BaseStream[Generation]):
             Date at which ``price_per_mwh`` is known. Defaults to the earliest
             generation entry date.
         day_count_convention : DayCountConvention, optional
-            Day-count convention used for annual price escalation.
+            Day-count convention used to allocate generation across settlements
+            and for annual price escalation.
         escalation_policy : EscalationPolicy, optional
             Advanced override for custom escalation behavior. When provided, it
             must not be combined with ``escalation``, ``escalation_period``, or
@@ -773,11 +944,18 @@ class GenerationStream(BaseStream[Generation]):
             Pro-forma category for the revenue flows. Default is ``"revenue"``.
         tax_treatment : TaxTreatment or str, optional
             Tax treatment for the revenue flows. Default is ``"taxable"``.
+        frequency : Period, optional
+            Calendar frequency used to split every physical generation source.
+            Default is ``"year"``.
+        timing : {"begin", "middle", "end"}, optional
+            Position of each cashflow date within the effective settlement
+            overlap. Default is ``"end"``.
 
         Returns
         -------
         CashFlowStream
-            Cashflow stream with positive revenue amounts for each generation entry.
+            Positive revenue cashflows, ordered by cashflow date and then by
+            original generation-source order.
 
         Examples
         --------
@@ -788,8 +966,14 @@ class GenerationStream(BaseStream[Generation]):
 
         if not self.entries:
             return CashFlowStream()
+        settlements = _generation_settlements(
+            self.entries,
+            frequency=frequency,
+            timing=timing,
+            day_count_convention=day_count_convention,
+        )
         escalation_policy = _generation_escalation(
-            entries=self.entries,
+            dates=(entry.date for entry in settlements),
             escalation=escalation,
             escalation_period=escalation_period,
             amount_reference_date=amount_reference_date,
@@ -800,7 +984,7 @@ class GenerationStream(BaseStream[Generation]):
             pro_forma_category, tax_treatment
         )
         entries: list[CashFlow] = []
-        for entry in self.entries:
+        for entry in settlements:
             price = price_per_mwh * escalation_policy.factor(entry.date)
             entries.append(
                 CashFlow(
@@ -826,6 +1010,8 @@ class GenerationStream(BaseStream[Generation]):
         amount_reference_date: date | None = None,
         day_count_convention: DayCountConvention = "actual/actual",
         escalation_policy: EscalationPolicy | None = None,
+        frequency: Period = "year",
+        timing: TimingConvention = "end",
     ) -> CashFlowStream:
         """
         Convert generation entries to variable cost cashflows (negative amounts).
@@ -845,7 +1031,8 @@ class GenerationStream(BaseStream[Generation]):
             Date at which ``rate_per_mwh`` is known. Defaults to the earliest
             generation entry date.
         day_count_convention : DayCountConvention, optional
-            Day-count convention used for annual cost escalation.
+            Day-count convention used to allocate generation across settlements
+            and for annual cost escalation.
         escalation_policy : EscalationPolicy, optional
             Advanced override for custom escalation behavior. When provided, it
             must not be combined with ``escalation``, ``escalation_period``, or
@@ -857,11 +1044,18 @@ class GenerationStream(BaseStream[Generation]):
             Pro-forma category for the cost flows. Default is ``"operating_cost"``.
         tax_treatment : TaxTreatment or str, optional
             Tax treatment for the cost flows. Default is ``"deductible"``.
+        frequency : Period, optional
+            Calendar frequency used to split every physical generation source.
+            Default is ``"year"``.
+        timing : {"begin", "middle", "end"}, optional
+            Position of each cashflow date within the effective settlement
+            overlap. Default is ``"end"``.
 
         Returns
         -------
         CashFlowStream
-            Cashflow stream with negative variable cost amounts for each generation entry.
+            Negative variable-cost cashflows, ordered by cashflow date and then
+            by original generation-source order.
 
         Examples
         --------
@@ -872,8 +1066,14 @@ class GenerationStream(BaseStream[Generation]):
 
         if not self.entries:
             return CashFlowStream()
+        settlements = _generation_settlements(
+            self.entries,
+            frequency=frequency,
+            timing=timing,
+            day_count_convention=day_count_convention,
+        )
         escalation_policy = _generation_escalation(
-            entries=self.entries,
+            dates=(entry.date for entry in settlements),
             escalation=escalation,
             escalation_period=escalation_period,
             amount_reference_date=amount_reference_date,
@@ -884,7 +1084,7 @@ class GenerationStream(BaseStream[Generation]):
             pro_forma_category, tax_treatment
         )
         entries: list[CashFlow] = []
-        for entry in self.entries:
+        for entry in settlements:
             cost = rate_per_mwh * escalation_policy.factor(entry.date)
             entries.append(
                 CashFlow(

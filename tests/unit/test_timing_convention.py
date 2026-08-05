@@ -2,9 +2,10 @@
 # ALL RIGHTS RESERVED
 """Tests for the timing convention feature.
 
-Verifies that CashFlow and Generation events are dated according to the
-timing convention (end-of-period or begin-of-period), capped by phase
-boundaries, when created through the high-level EnergyProject builder.
+Verifies that cashflows are dated according to the timing convention
+(end-of-period or begin-of-period), capped by phase boundaries, when created
+through the high-level EnergyProject builder. Physical generation retains only
+its period bounds.
 """
 
 from datetime import date, timedelta
@@ -178,14 +179,10 @@ class TestOperationsTimingEndOfPeriod:
             .fixed_opex(amount=1_000_000, frequency="year")
         )
 
-    def test_generation_dates_end_of_period(self, project):
+    def test_generation_uses_physical_period_bounds(self, project):
         analysis = project.analyze()
-        gen_dates = [g.date for g in analysis.generation.entries]
-        # Year-end, capped by operations_end:
-        # Two full periods before ops_end (2030-06-15 + 2yr = 2032-06-15 > ops_end)
-        assert gen_dates == [
-            date(2030, 12, 31),
-            date(2031, 12, 31),
+        assert [(g.date, g.period_start, g.period_end) for g in analysis.generation] == [
+            (None, date(2030, 6, 15), date(2032, 3, 11))
         ]
 
     def test_fixed_opex_dates_end_of_period(self, project):
@@ -204,6 +201,7 @@ class TestOperationsTimingEndOfPeriod:
         assert revenue_dates == [
             date(2030, 12, 31),
             date(2031, 12, 31),
+            date(2032, 3, 10),
         ]
 
 
@@ -215,7 +213,7 @@ class TestOperationsTimingEndOfPeriod:
 class TestBeginOfPeriodTiming:
     """Events placed at the start of the calendar period, floored by phase start."""
 
-    def test_generation_dates_begin_timing(self):
+    def test_generation_revenue_dates_begin_timing(self):
         project = (
             EnergyProject(timing="begin")
             .generation(
@@ -233,12 +231,12 @@ class TestBeginOfPeriodTiming:
             .generation_revenue(price_policy=GenerationPrice.fixed(50.0))
         )
         analysis = project.analyze()
-        gen_dates = [g.date for g in analysis.generation.entries]
+        revenue_dates = [cf.date for cf in analysis.cashflow_components["revenue"]]
         # begin timing: max(period_start(dt, year), ops_start)
         # dt=2025-02-01: period_start=2025-01-01, max(2025-01-01, 2025-02-01) = 2025-02-01
         # dt=2026-02-01: period_start=2026-01-01, max(2026-01-01, 2025-02-01) = 2026-01-01
         # dt=2027-02-01: period_start=2027-01-01, max(2027-01-01, 2025-02-01) = 2027-01-01
-        assert gen_dates == [
+        assert revenue_dates == [
             date(2025, 2, 1),
             date(2026, 1, 1),
             date(2027, 1, 1),
@@ -284,7 +282,7 @@ class TestBeginOfPeriodTiming:
 class TestMiddleOfPeriodTiming:
     """Events placed at the midpoint of the effective period window."""
 
-    def test_generation_dates_middle_timing(self):
+    def test_generation_revenue_dates_middle_timing(self):
         project = (
             EnergyProject(timing="middle")
             .generation(
@@ -302,11 +300,11 @@ class TestMiddleOfPeriodTiming:
             .generation_revenue(price_policy=GenerationPrice.fixed(50.0))
         )
         analysis = project.analyze()
-        gen_dates = [g.date for g in analysis.generation.entries]
+        revenue_dates = [cf.date for cf in analysis.cashflow_components["revenue"]]
         # Full calendar years, midpoint = Jul 2 (182 days from Jan 1)
-        assert gen_dates[0] == date(2025, 1, 1) + timedelta(days=182)
-        assert gen_dates[1] == date(2026, 1, 1) + timedelta(days=182)
-        assert gen_dates[2] == date(2027, 1, 1) + timedelta(days=182)
+        assert revenue_dates[0] == date(2025, 1, 1) + timedelta(days=182)
+        assert revenue_dates[1] == date(2026, 1, 1) + timedelta(days=182)
+        assert revenue_dates[2] == date(2027, 1, 1) + timedelta(days=182)
 
     def test_middle_timing_partial_first_and_last_period(self):
         project = (
@@ -326,13 +324,13 @@ class TestMiddleOfPeriodTiming:
             .generation_revenue(price_policy=GenerationPrice.fixed(50.0))
         )
         analysis = project.analyze()
-        gen_dates = [g.date for g in analysis.generation.entries]
+        revenue_dates = [cf.date for cf in analysis.cashflow_components["revenue"]]
         # Period 1 (dt=2025-04-01): effective Apr 1 – Dec 31 (275 days), mid = 137
-        assert gen_dates[0] == date(2025, 4, 1) + timedelta(days=137)
+        assert revenue_dates[0] == date(2025, 4, 1) + timedelta(days=137)
         # Period 2 (dt=2026-04-01): full year Jan 1 – Dec 31 (365 days), mid = 182
-        assert gen_dates[1] == date(2026, 1, 1) + timedelta(days=182)
+        assert revenue_dates[1] == date(2026, 1, 1) + timedelta(days=182)
         # Period 3 (dt=2027-04-01): effective Jan 1 – Sep 15 (257 days), mid = 128
-        assert gen_dates[2] == date(2027, 1, 1) + timedelta(days=128)
+        assert revenue_dates[2] == date(2027, 1, 1) + timedelta(days=128)
 
 
 # ---------------------------------------------------------------------------
@@ -343,7 +341,7 @@ class TestMiddleOfPeriodTiming:
 class TestPerComponentTimingOverride:
     """Per-component timing overrides the project-level default."""
 
-    def test_generation_begin_with_project_end(self):
+    def test_fixed_opex_begin_with_project_end(self):
         project = (
             EnergyProject(timing="end")
             .generation(
@@ -351,7 +349,6 @@ class TestPerComponentTimingOverride:
                 capacity_factor=0.9,
                 operations_start=date(2025, 4, 1),
                 operations_end=date(2028, 1, 1),
-                timing="begin",
             )
             .construction(
                 overnight_cost=1000,
@@ -360,25 +357,24 @@ class TestPerComponentTimingOverride:
                 period="year",
             )
             .generation_revenue(price_policy=GenerationPrice.fixed(50.0))
-            .fixed_opex(amount=100_000, frequency="year")
+            .fixed_opex(amount=100_000, frequency="year", timing="begin")
         )
         analysis = project.analyze()
 
-        # Generation uses "begin" (override)
-        gen_dates = [g.date for g in analysis.generation.entries]
-        assert gen_dates == [
-            date(2025, 4, 1),  # max(2025-01-01, 2025-04-01) = 2025-04-01
-            date(2026, 1, 1),  # max(2026-01-01, 2025-04-01) = 2026-01-01
-            date(2027, 1, 1),  # max(2027-01-01, 2025-04-01) = 2027-01-01
-        ]
-
-        # OPEX uses "end" (project default)
-        opex_stream = analysis.cashflow_components["fixed_opex"]
-        opex_dates = [cf.date for cf in opex_stream.entries]
-        assert opex_dates == [
+        revenue_dates = [cf.date for cf in analysis.cashflow_components["revenue"]]
+        assert revenue_dates == [
             date(2025, 12, 31),
             date(2026, 12, 31),
             date(2027, 12, 31),
+        ]
+
+        # The explicit fixed-OPEX timing rule remains independent of the project default.
+        opex_stream = analysis.cashflow_components["fixed_opex"]
+        opex_dates = [cf.date for cf in opex_stream.entries]
+        assert opex_dates == [
+            date(2025, 4, 1),
+            date(2026, 1, 1),
+            date(2027, 1, 1),
         ]
 
 
@@ -577,7 +573,6 @@ class TestOperationsHorizonTruncation:
                 operations_end=date(2027, 7, 1),
                 start=date(2026, 1, 1),
                 periods=3,
-                frequency="year",
             )
             .fixed_opex(
                 amount=365.0,
@@ -594,9 +589,11 @@ class TestOperationsHorizonTruncation:
         assert len(messages) == 2
         assert any("generation schedule requested through 2029-01-01" in msg for msg in messages)
         assert any("fixed_opex schedule requested through 2029-01-01" in msg for msg in messages)
-        assert [(g.date, g.amount_mwh) for g in analysis.generation.entries] == [
-            (date(2026, 12, 31), 8760.0),
-            (date(2027, 6, 30), 4344.0),
+        assert [
+            (g.date, g.period_start, g.period_end, g.amount_mwh)
+            for g in analysis.generation.entries
+        ] == [
+            (None, date(2026, 1, 1), date(2027, 7, 1), 13_104.0),
         ]
         assert [
             (cf.date, cf.amount) for cf in analysis.cashflow_components["fixed_opex"].entries
@@ -632,12 +629,12 @@ class TestNoOperationsEnd:
             .generation_revenue(price_policy=GenerationPrice.fixed(50.0))
         )
         analysis = project.analyze()
-        gen_dates = [g.date for g in analysis.generation.entries]
-        # No phase_end → uncapped calendar year-end
-        assert gen_dates == [
+        revenue_dates = [cf.date for cf in analysis.cashflow_components["revenue"]]
+        assert revenue_dates == [
             date(2025, 12, 31),
             date(2026, 12, 31),
             date(2027, 12, 31),
+            date(2028, 5, 31),
         ]
 
 

@@ -547,14 +547,22 @@ class ProjectAnalysis:
         # use the provided escalation policy to create the basis stream
         if levelized_cost_escalation_policy is not None:
             return self.generation.to_revenue(
-                price_per_mwh=1.0, escalation_policy=levelized_cost_escalation_policy
+                price_per_mwh=1.0,
+                escalation_policy=levelized_cost_escalation_policy,
+                frequency=self.timeline.frequency,
+                timing=self.timeline.timing,
+                day_count_convention=convention,
             )
 
         # use the provided constant escalation rate to create the basis stream
         if levelized_cost_escalation_rate is not None:
             resolved_rate = self._levelized_cost_escalation_rate(levelized_cost_escalation_rate)
             return self.generation.to_revenue(
-                price_per_mwh=1.0, escalation=resolved_rate, day_count_convention=convention
+                price_per_mwh=1.0,
+                escalation=resolved_rate,
+                frequency=self.timeline.frequency,
+                timing=self.timeline.timing,
+                day_count_convention=convention,
             )
 
         #
@@ -569,7 +577,11 @@ class ProjectAnalysis:
 
         resolved_rate = self._levelized_cost_escalation_rate(None)
         return self.generation.to_revenue(
-            price_per_mwh=1.0, escalation=resolved_rate, day_count_convention=convention
+            price_per_mwh=1.0,
+            escalation=resolved_rate,
+            frequency=self.timeline.frequency,
+            timing=self.timeline.timing,
+            day_count_convention=convention,
         )
 
 

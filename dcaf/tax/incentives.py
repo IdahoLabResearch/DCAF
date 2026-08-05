@@ -16,47 +16,21 @@ from datetime import date
 from dateutil.relativedelta import relativedelta
 
 from dcaf.finance.escalation import EscalationPolicy
-from dcaf.shared.time import elapsed_hours
 from dcaf.shared.types import (
     DayCountConvention,
     Period,
     ProFormaCategory,
     TaxTreatment,
+    TimingConvention,
     normalize_cashflow_classification,
 )
 from dcaf.shared.validation import validate_non_negative
 from dcaf.streams.cashflows import CashFlow, CashFlowStream
-from dcaf.streams.generation import Generation, GenerationStream, _generation_escalation
-
-
-def _eligible_ptc_generation(
-    entry: Generation,
-    *,
-    eligibility_start: date,
-    eligibility_end: date,
-    day_count_convention: DayCountConvention,
-) -> float | None:
-    """Return eligible MWh, prorating an interval-backed generation entry by overlap."""
-    if entry.period_start is None:
-        return entry.amount_mwh if eligibility_start <= entry.date < eligibility_end else None
-
-    assert entry.period_end is not None
-    overlap_start = max(entry.period_start, eligibility_start)
-    overlap_end = min(entry.period_end, eligibility_end)
-    if overlap_end <= overlap_start:
-        return None
-    if overlap_start == entry.period_start and overlap_end == entry.period_end:
-        return entry.amount_mwh
-
-    period_hours = elapsed_hours(
-        entry.period_start,
-        entry.period_end,
-        day_count_convention,
-    )
-    eligible_hours = elapsed_hours(overlap_start, overlap_end, day_count_convention)
-    if period_hours == 0.0:
-        return 0.0
-    return entry.amount_mwh * eligible_hours / period_hours
+from dcaf.streams.generation import (
+    GenerationStream,
+    _generation_escalation,
+    _generation_settlements,
+)
 
 
 def ptc(
@@ -72,6 +46,8 @@ def ptc(
     amount_reference_date: date | None = None,
     day_count_convention: DayCountConvention = "actual/actual",
     escalation_policy: EscalationPolicy | None = None,
+    frequency: Period = "year",
+    timing: TimingConvention = "end",
 ) -> CashFlowStream:
     """
     Compute Production Tax Credit cashflows from a generation stream.
@@ -79,14 +55,12 @@ def ptc(
     This function converts eligible generation entries into positive credit
     cashflows using a per-MWh PTC rate. Eligibility uses a half-open interval
     covering the first ``years`` calendar years. The interval begins at the
-    earliest generation period start when period bounds are available, or the
-    earliest generation entry date otherwise.
+    earliest generation period start.
 
-    Entries with period bounds are prorated according to the overlap between
-    their half-open generation period and the eligibility interval. This assumes
-    generation is uniform under ``day_count_convention`` within an aggregated
-    period. Entries without period bounds are treated as point events and are
-    included only when their dates fall within the eligibility interval.
+    Entries are prorated according to the overlap between their half-open
+    generation period and the eligibility interval. This assumes generation is
+    uniform under ``day_count_convention`` within an aggregated period. Legacy
+    point-dated entries have already been normalized to one-day periods.
 
     The PTC rate may be escalated over time using the same escalation policy
     conventions used elsewhere in the generation-to-cashflow bridge. A simple
@@ -102,8 +76,8 @@ def ptc(
         Base Production Tax Credit rate in dollars per MWh.
     years : int
         Number of calendar years of PTC eligibility, measured from the earliest
-        generation period start or point-entry date. The anniversary ending the
-        eligibility interval is exclusive.
+        generation period start. The anniversary ending the eligibility interval
+        is exclusive.
     escalation : float, optional
         Compound escalation rate for the PTC value, interpreted over
         ``escalation_period``. With the default ``escalation_period="year"``,
@@ -123,11 +97,17 @@ def ptc(
         generation entry date is used as the escalation reference point.
     day_count_convention : DayCountConvention, optional
         Day-count convention used for annual PTC escalation and for prorating
-        interval-backed generation entries that cross an eligibility boundary.
+        generation entries across eligibility and settlement boundaries.
     escalation_policy : EscalationPolicy, optional
         Advanced override for custom escalation behavior. When provided, it
         must not be combined with ``escalation``, ``escalation_period``, or
         ``amount_reference_date``.
+    frequency : Period, optional
+        Calendar frequency used to split eligible generation into credit
+        cashflows. Default is ``"year"``.
+    timing : {"begin", "middle", "end"}, optional
+        Position of each credit date within its effective settlement overlap.
+        Default is ``"end"``.
 
     Returns
     -------
@@ -184,13 +164,18 @@ def ptc(
     if not generation_stream.entries:
         return CashFlowStream()
 
-    eligibility_start = min(
-        entry.period_start if entry.period_start is not None else entry.date
-        for entry in generation_stream.entries
-    )
+    eligibility_start = min(entry.period_start for entry in generation_stream.entries)
     eligibility_end = eligibility_start + relativedelta(years=years)
+    settlements = _generation_settlements(
+        generation_stream.entries,
+        frequency=frequency,
+        timing=timing,
+        day_count_convention=day_count_convention,
+        clip_start=eligibility_start,
+        clip_end=eligibility_end,
+    )
     policy = _generation_escalation(
-        entries=generation_stream.entries,
+        dates=(entry.date for entry in settlements),
         escalation=escalation,
         escalation_period=escalation_period,
         amount_reference_date=amount_reference_date,
@@ -202,19 +187,11 @@ def ptc(
     )
 
     entries: list[CashFlow] = []
-    for entry in generation_stream.entries:
-        eligible_generation = _eligible_ptc_generation(
-            entry,
-            eligibility_start=eligibility_start,
-            eligibility_end=eligibility_end,
-            day_count_convention=day_count_convention,
-        )
-        if eligible_generation is None:
-            continue
+    for entry in settlements:
         ptc_rate = rate_per_mwh * policy.factor(entry.date)
         entries.append(
             CashFlow(
-                amount=eligible_generation * ptc_rate,
+                amount=entry.amount_mwh * ptc_rate,
                 date=entry.date,
                 label=label,
                 is_cash=True,

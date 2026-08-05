@@ -161,9 +161,7 @@ class CapacityGenerationConfig:
     operations_end: date | None = None
     start: date | None = None
     periods: int | float | None = None
-    frequency: Period | None = None
     label: str = "Generation"
-    timing: TimingConvention | None = None
 
     def __post_init__(self) -> None:
         validate_non_negative(self.capacity_mw, "capacity_mw")
@@ -192,7 +190,6 @@ class GenerationOutageConfig:
     capacity_mw: float | None = None
     capacity_factor: float | None = None
     capacity_reduction: float = 1.0
-    timing: TimingConvention | None = None
     label: str = "Generation Outage"
 
     def __post_init__(self) -> None:

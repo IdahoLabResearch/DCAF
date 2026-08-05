@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import warnings
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field, replace as dc_replace
 from datetime import date
 from math import isclose
@@ -29,7 +29,6 @@ from dcaf.project._builder_config import (
     CustomGenerationLinkedPolicyConfig,
     EscalationSettings,
     FixedOpexConfig,
-    GenerationLinkedPolicyConfig,
     GenerationRevenueContractConfig,
     GenerationRevenueRemainderConfig,
     MacrsDepreciationConfig,
@@ -40,7 +39,8 @@ from dcaf.project._builder_config import (
     effective_escalation,
 )
 from dcaf.project.analysis import ProjectAnalysis
-from dcaf.project.contracts import GenerationPrice, GenerationSettlementEvent, EnergyContract
+from dcaf.project._contract_settlements import settle_generation_contracts, settlement_event
+from dcaf.project.contracts import GenerationPrice
 from dcaf.project.timeline import ProjectTimeline
 from dcaf.shared.time import (
     ScheduleTruncationWarning,
@@ -59,7 +59,12 @@ from dcaf.shared.types import (
     normalize_cashflow_classification,
 )
 from dcaf.streams.cashflows import CashFlow, CashFlowGroup, CashFlowStream
-from dcaf.streams.generation import Generation, GenerationStream
+from dcaf.streams.generation import (
+    Generation,
+    GenerationStream,
+    _GenerationSettlement,
+    _generation_settlements,
+)
 from dcaf.tax.depreciation import macrs_schedule, vdb_schedule
 from dcaf.tax.incentives import itc, itc_adjusted_basis, ptc
 from dcaf.tax.liability import compute_taxable_income, tax_liability
@@ -107,12 +112,8 @@ class AnalysisContext:
                 operations_end = gen.operations_end
         elif isinstance(gen, GenerationStream):
             if gen.entries:
-                dates = [entry.date for entry in gen.entries]
-                operations_start = min(dates)
-                # operations_end is exclusive; the latest entry date is
-                # within the operating window, so the boundary is the
-                # following day.
-                operations_end = max(dates) + relativedelta(days=1)
+                operations_start = min(entry.period_start for entry in gen.entries)
+                operations_end = max(entry.period_end for entry in gen.entries)
 
         con = config.construction
         if isinstance(con, ConstructionScheduleConfig):
@@ -141,16 +142,6 @@ class ScheduledPeriod:
     end: date
     event_date: date
     fraction: float = 1.0
-
-
-@dataclass(frozen=True, slots=True)
-class ContractGenerationRequest:
-    """Resolved request for one contract against one generation event."""
-
-    name: str
-    contract: EnergyContract
-    entry_index: int
-    requested_mwh: float
 
 
 @dataclass(slots=True)
@@ -398,45 +389,43 @@ class ProjectCompiler:
         if isinstance(generation, GenerationStream):
             base_generation = generation
         else:
-            frequency = (
-                generation.frequency
-                if generation.frequency is not None
-                else self.config.timeline.frequency
-            )
             start = (
                 generation.start
                 if generation.start is not None
                 else self.require_timeline_date("operations_start")
             )
-            timing = generation.timing or self.config.timeline.timing
             ops_start = self.config.timeline.operations_start
             ops_end = self.config.timeline.operations_end
             schedule = self.operating_schedule(
                 "generation",
                 start=start,
                 periods=generation.periods,
-                frequency=frequency,
-                timing=timing,
+                frequency=self.config.timeline.frequency,
                 phase_start=ops_start,
                 phase_end=ops_end,
             )
-            entries: list[Generation] = []
-            for modeled_period in schedule:
+            if schedule:
+                period_start = schedule[0].start
+                period_end = schedule[-1].end
                 hours = elapsed_hours(
-                    modeled_period.start,
-                    modeled_period.end,
+                    period_start,
+                    period_end,
                     self.config.day_count_convention,
                 )
-                entries.append(
-                    Generation(
-                        amount_mwh=(generation.capacity_mw * generation.capacity_factor * hours),
-                        date=modeled_period.event_date,
-                        label=generation.label,
-                        period_start=modeled_period.start,
-                        period_end=modeled_period.end,
-                    )
+                base_generation = GenerationStream(
+                    [
+                        Generation(
+                            amount_mwh=(
+                                generation.capacity_mw * generation.capacity_factor * hours
+                            ),
+                            label=generation.label,
+                            period_start=period_start,
+                            period_end=period_end,
+                        )
+                    ]
                 )
-            base_generation = GenerationStream(entries)
+            else:
+                base_generation = GenerationStream()
 
         outage_generation = self.build_generation_outages()
         if not outage_generation.entries:
@@ -482,10 +471,6 @@ class ProjectCompiler:
                     "when capacity-based generation is not configured"
                 )
 
-            timing = outage.timing
-            if capacity_defaults is not None:
-                timing = timing or capacity_defaults.timing
-
             outage_streams.append(
                 GenerationStream.from_outage(
                     capacity_mw=capacity_mw,
@@ -493,7 +478,6 @@ class ProjectCompiler:
                     start=outage.start,
                     end=outage.end,
                     capacity_reduction=outage.capacity_reduction,
-                    timing=timing or self.config.timeline.timing,
                     label=outage.label,
                     day_count_convention=self.config.day_count_convention,
                 )
@@ -528,7 +512,9 @@ class ProjectCompiler:
             else:
                 price_per_mwh = market.price
                 escalation = EscalationSettings(
-                    policy=self._generation_revenue_price_escalation(generation),
+                    policy=self._generation_revenue_price_escalation(
+                        self._project_generation_settlements(generation.entries)
+                    ),
                     explicit=True,
                 )
         else:
@@ -544,6 +530,7 @@ class ProjectCompiler:
             capacity_reduction=outage.capacity_reduction,
             fixed_cost=outage.fixed_cost,
             cost_per_day=outage.cost_per_day,
+            frequency=self.config.timeline.frequency,
             timing=outage.timing or self.config.timeline.timing,
             lost_revenue_label=outage.lost_revenue_label,
             fixed_cost_label=outage.fixed_cost_label,
@@ -568,20 +555,13 @@ class ProjectCompiler:
         market = self.config.market
         if market is None:
             return CashFlowStream()
-        if isinstance(market.price, GenerationPrice):
-            self._validate_price_schedule_alignment(
-                name="revenue",
-                price=market.price,
-                generation=generation,
-            )
-        if not generation.entries:
-            return CashFlowStream()
+        settlements = self._project_generation_settlements(generation.entries)
         price_escalation: EscalationPolicy | None = None
         if isinstance(market.price, float):
-            price_escalation = self._generation_revenue_price_escalation(generation)
+            price_escalation = self._generation_revenue_price_escalation(settlements)
         return self._revenue_cashflows_from_generation(
             name="revenue",
-            generation=generation,
+            settlements=settlements,
             price=market.price,
             price_escalation=price_escalation,
             label=market.label,
@@ -591,7 +571,7 @@ class ProjectCompiler:
 
     def _generation_revenue_price_escalation(
         self,
-        generation: GenerationStream,
+        settlements: list[_GenerationSettlement],
     ) -> EscalationPolicy | None:
         """Resolve the shared scalar-price escalation for revenue and outage fallback."""
         escalation = self.config.default_escalation
@@ -599,9 +579,9 @@ class ProjectCompiler:
             return escalation.policy
         reference_date = escalation.amount_reference_date
         if reference_date is None:
-            if not generation.entries:
+            if not settlements:
                 return None
-            reference_date = min(entry.date for entry in generation.entries)
+            reference_date = min(entry.date for entry in settlements)
         return ConstantRateEscalation(
             reference_date=reference_date,
             rate=escalation.escalation,
@@ -609,11 +589,34 @@ class ProjectCompiler:
             day_count_convention=self.config.day_count_convention,
         )
 
+    def _project_generation_settlements(
+        self,
+        entries: list[Generation],
+        *,
+        clip_start: date | None = None,
+        clip_end: date | None = None,
+    ) -> list[_GenerationSettlement]:
+        """Settle generation using the project's financial calendar conventions."""
+        return _generation_settlements(
+            entries,
+            frequency=self.config.timeline.frequency,
+            timing=self.config.timeline.timing,
+            day_count_convention=self.config.day_count_convention,
+            clip_start=clip_start,
+            clip_end=clip_end,
+        )
+
     def build_revenue_basis(self, generation: GenerationStream) -> CashFlowStream:
         """Build the unit-price basis for whole-project levelized cost."""
         if not generation.entries or self.config.market is None:
             return CashFlowStream()
-        return generation.to_revenue(price_per_mwh=1.0, label="Revenue")
+        return generation.to_revenue(
+            price_per_mwh=1.0,
+            label="Revenue",
+            frequency=self.config.timeline.frequency,
+            timing=self.config.timeline.timing,
+            day_count_convention=self.config.day_count_convention,
+        )
 
     def build_generation_linked_policy_streams(
         self,
@@ -622,32 +625,42 @@ class ProjectCompiler:
         """Build named streams for configured generation-linked policies."""
         if not self.config.generation_linked_policies:
             return ()
-
-        self._validate_generation_linked_schedule_alignment(
-            generation,
-            self.config.generation_linked_policies,
-        )
         if not generation.entries:
             return ()
 
-        contract_requests, requested_by_entry = self._contract_generation_requests(
+        settlements_by_contract, remainder_settlements = settle_generation_contracts(
             generation,
-            self.config.generation_linked_policies,
+            {
+                registration.name: registration.contract
+                for registration in self.config.generation_linked_policies
+                if isinstance(registration, GenerationRevenueContractConfig)
+            },
+            frequency=self.config.timeline.frequency,
+            timing=self.config.timeline.timing,
+            day_count_convention=self.config.day_count_convention,
         )
 
         streams: list[tuple[str, CashFlowStream]] = []
         for registration in self.config.generation_linked_policies:
             if isinstance(registration, GenerationRevenueContractConfig):
-                stream = self._contract_revenue_stream(
-                    generation=generation,
-                    registration=registration,
-                    requests=contract_requests,
+                stream = self._revenue_cashflows_from_generation(
+                    name=registration.name,
+                    settlements=settlements_by_contract[registration.name],
+                    price=registration.contract.price,
+                    price_escalation=None,
+                    label=registration.contract.label,
+                    pro_forma_category=registration.contract.pro_forma_category,
+                    tax_treatment=registration.contract.tax_treatment,
                 )
             elif isinstance(registration, GenerationRevenueRemainderConfig):
-                stream = self._remainder_revenue_stream(
-                    generation=generation,
-                    registration=registration,
-                    requested_by_entry=requested_by_entry,
+                stream = self._revenue_cashflows_from_generation(
+                    name=registration.name,
+                    settlements=remainder_settlements,
+                    price=registration.price,
+                    price_escalation=None,
+                    label=registration.label,
+                    pro_forma_category=registration.pro_forma_category,
+                    tax_treatment=registration.tax_treatment,
                 )
             elif isinstance(registration, CustomGenerationLinkedPolicyConfig):
                 stream = registration.policy.cashflows(generation)
@@ -656,256 +669,50 @@ class ProjectCompiler:
             streams.append((registration.name, stream))
         return tuple(streams)
 
-    def _validate_generation_linked_schedule_alignment(
-        self,
-        generation: GenerationStream,
-        registrations: tuple[GenerationLinkedPolicyConfig, ...],
-    ) -> None:
-        """Require custom contract quantities and prices to match compiled generation dates."""
-        generation_by_date: dict[date, list[Generation]] = {}
-        for entry in generation.entries:
-            generation_by_date.setdefault(entry.date, []).append(entry)
-
-        for registration in registrations:
-            if isinstance(registration, GenerationRevenueContractConfig):
-                self._validate_custom_contract_mwh_schedule_alignment(
-                    name=registration.name,
-                    contract=registration.contract,
-                    generation_by_date=generation_by_date,
-                )
-                self._validate_price_schedule_alignment(
-                    name=registration.name,
-                    price=registration.contract.price,
-                    generation=generation,
-                )
-            elif isinstance(registration, GenerationRevenueRemainderConfig):
-                self._validate_price_schedule_alignment(
-                    name=registration.name,
-                    price=registration.price,
-                    generation=generation,
-                )
-
-    @staticmethod
-    def _validate_custom_contract_mwh_schedule_alignment(
-        *,
-        name: str,
-        contract: EnergyContract,
-        generation_by_date: dict[date, list[Generation]],
-    ) -> None:
-        """Validate a built-in contract's explicit MWh schedule against generation.
-
-        This applies only to :class:`EnergyContract` instances using
-        ``"custom_mwh_generation_schedule"``. Each requested date must map to exactly one
-        compiled generation event, and a non-negative event cannot be asked to provide more MWh
-        than it contains.
-
-        This does not validate arbitrary :class:`GenerationLinkedCashFlowPolicy` implementations.
-        They return cashflows, not MWh requests, so this compiler does not check that every
-        generated MWh is counted exactly once across custom policies, built-in contracts, and
-        remainder revenue.
-        """
-        if contract.quantity_mode != "custom_mwh_generation_schedule":
-            return
-        if contract.requested_generation is None:
-            raise ValueError("custom generation schedule contract is missing requested_generation")
-
-        available_dates = _format_generation_dates(generation_by_date)
-        for requested in contract.requested_generation:
-            matches = generation_by_date.get(requested.date, [])
-            if not matches:
-                raise ValueError(
-                    f"{name} custom MWh schedule requests "
-                    f"{_format_mwh(requested.amount_mwh)} MWh on "
-                    f"{requested.date.isoformat()}, but the project generation schedule has no "
-                    f"event on that date. Available project generation dates: {available_dates}. "
-                    "Each custom MWh schedule date must match exactly one project generation "
-                    "event; update requested_generation or the project's generation schedule."
-                )
-            if len(matches) > 1:
-                matching_amounts = ", ".join(
-                    f"{_format_mwh(entry.amount_mwh)} MWh" for entry in matches
-                )
-                raise ValueError(
-                    f"{name} custom MWh schedule requests "
-                    f"{_format_mwh(requested.amount_mwh)} MWh on "
-                    f"{requested.date.isoformat()}, but that date matches {len(matches)} project "
-                    f"generation events ({matching_amounts}). Each custom MWh schedule date must "
-                    "match exactly one project generation event; consolidate the project generation "
-                    "events for that date or revise requested_generation."
-                )
-
-            available_mwh = matches[0].amount_mwh
-            if available_mwh < 0.0:
-                continue
-            if _request_exceeds_available(requested.amount_mwh, available_mwh):
-                raise ValueError(
-                    f"{name} custom MWh schedule requests "
-                    f"{_format_mwh(requested.amount_mwh)} MWh on "
-                    f"{requested.date.isoformat()}, but the matched project generation event "
-                    f"provides only {_format_mwh(available_mwh)} MWh. Reduce the requested amount "
-                    "or increase project generation on that date."
-                )
-
     @staticmethod
     def _validate_price_schedule_alignment(
         *,
         name: str,
         price: GenerationPrice,
-        generation: GenerationStream,
+        settlement_dates: set[date],
     ) -> None:
-        """Require each exact scheduled-price date to exist in project generation."""
+        """Require each scheduled-price date to correspond to a component settlement."""
         if price.mode != "schedule":
             return
 
-        generation_dates = {entry.date for entry in generation.entries}
-        available_dates = _format_generation_dates(generation_dates)
+        available_dates = _format_generation_dates(settlement_dates)
         for scheduled_date, _price in price.price_schedule:
-            if scheduled_date not in generation_dates:
+            if scheduled_date not in settlement_dates:
                 raise ValueError(
                     f"{name} price schedule contains {scheduled_date.isoformat()}, but the project "
-                    "generation schedule has no event on that date. Available project generation "
-                    f"dates: {available_dates}. Scheduled price dates must correspond to project "
-                    "generation dates; remove the price entry or update the project's generation "
-                    "schedule."
+                    "component has no settlement on that date. Available component settlement "
+                    f"dates: {available_dates}. Remove the price entry or update the schedule."
                 )
-
-    def _contract_generation_requests(
-        self,
-        generation: GenerationStream,
-        registrations: tuple[GenerationLinkedPolicyConfig, ...],
-    ) -> tuple[tuple[ContractGenerationRequest, ...], tuple[float, ...]]:
-        requests: list[ContractGenerationRequest] = []
-        requested_by_entry = [0.0 for _entry in generation.entries]
-
-        for registration in registrations:
-            if not isinstance(registration, GenerationRevenueContractConfig):
-                continue
-            for entry_index, entry in enumerate(generation.entries):
-                requested_mwh = registration.contract.requested_mwh_for(entry)
-                if isclose(requested_mwh, 0.0, rel_tol=0.0, abs_tol=1e-12):
-                    continue
-                available_mwh = entry.amount_mwh
-                if _request_exceeds_available(requested_mwh, available_mwh):
-                    raise ValueError(
-                        f"{registration.name} requested {_format_mwh(requested_mwh)} MWh "
-                        f"on {entry.date.isoformat()}, but only "
-                        f"{_format_mwh(available_mwh)} MWh is available"
-                    )
-                requests.append(
-                    ContractGenerationRequest(
-                        name=registration.name,
-                        contract=registration.contract,
-                        entry_index=entry_index,
-                        requested_mwh=requested_mwh,
-                    )
-                )
-                requested_by_entry[entry_index] += requested_mwh
-
-        for entry_index, requested_mwh in enumerate(requested_by_entry):
-            available_mwh = generation.entries[entry_index].amount_mwh
-            if _request_exceeds_available(requested_mwh, available_mwh):
-                raise ValueError(
-                    "generation-linked contracts request "
-                    f"{_format_mwh(requested_mwh)} MWh on "
-                    f"{generation.entries[entry_index].date.isoformat()}, but only "
-                    f"{_format_mwh(available_mwh)} MWh is available"
-                )
-
-        return tuple(requests), tuple(requested_by_entry)
-
-    def _contract_revenue_stream(
-        self,
-        *,
-        generation: GenerationStream,
-        registration: GenerationRevenueContractConfig,
-        requests: tuple[ContractGenerationRequest, ...],
-    ) -> CashFlowStream:
-        entries: list[CashFlow] = []
-        category, tax_treatment = normalize_cashflow_classification(
-            registration.contract.pro_forma_category,
-            registration.contract.tax_treatment,
-        )
-        for request in requests:
-            if request.name != registration.name:
-                continue
-            entry = generation.entries[request.entry_index]
-            event = _settlement_event(
-                component_name=registration.name,
-                entry=entry,
-                requested_mwh=request.requested_mwh,
-                delivered_mwh=request.requested_mwh,
-            )
-            price = registration.contract.price.resolve(event)
-            entries.append(
-                CashFlow(
-                    amount=event.delivered_mwh * price,
-                    date=entry.date,
-                    label=registration.contract.label,
-                    is_cash=True,
-                    pro_forma_category=category,
-                    tax_treatment=tax_treatment,
-                )
-            )
-        return CashFlowStream(entries)
-
-    def _remainder_revenue_stream(
-        self,
-        *,
-        generation: GenerationStream,
-        registration: GenerationRevenueRemainderConfig,
-        requested_by_entry: tuple[float, ...],
-    ) -> CashFlowStream:
-        entries: list[CashFlow] = []
-        category, tax_treatment = normalize_cashflow_classification(
-            registration.pro_forma_category,
-            registration.tax_treatment,
-        )
-        for entry_index, entry in enumerate(generation.entries):
-            delivered_mwh = entry.amount_mwh - requested_by_entry[entry_index]
-            if isclose(delivered_mwh, 0.0, rel_tol=0.0, abs_tol=1e-12):
-                continue
-            event = _settlement_event(
-                component_name=registration.name,
-                entry=entry,
-                requested_mwh=delivered_mwh,
-                delivered_mwh=delivered_mwh,
-            )
-            price = registration.price.resolve(event)
-            entries.append(
-                CashFlow(
-                    amount=event.delivered_mwh * price,
-                    date=entry.date,
-                    label=registration.label,
-                    is_cash=True,
-                    pro_forma_category=category,
-                    tax_treatment=tax_treatment,
-                )
-            )
-        return CashFlowStream(entries)
 
     def _revenue_cashflows_from_generation(
         self,
         *,
         name: str,
-        generation: GenerationStream,
+        settlements: Sequence[_GenerationSettlement],
         price: float | GenerationPrice,
         price_escalation: EscalationPolicy | None,
         label: str,
         pro_forma_category: ProFormaCategory | str | None,
         tax_treatment: TaxTreatment | str,
     ) -> CashFlowStream:
+        if isinstance(price, GenerationPrice):
+            self._validate_price_schedule_alignment(
+                name=name,
+                price=price,
+                settlement_dates={entry.date for entry in settlements},
+            )
         entries: list[CashFlow] = []
         category, resolved_tax_treatment = normalize_cashflow_classification(
             pro_forma_category,
             tax_treatment,
         )
-        for entry in generation.entries:
-            event = _settlement_event(
-                component_name=name,
-                entry=entry,
-                requested_mwh=entry.amount_mwh,
-                delivered_mwh=entry.amount_mwh,
-            )
+        for entry in settlements:
+            event = settlement_event(name, entry)
             escalation_factor = (
                 1.0 if price_escalation is None else price_escalation.factor(entry.date)
             )
@@ -989,6 +796,9 @@ class ProjectCompiler:
                 rate_per_mwh=variable.rate_per_unit,
                 label=variable.label,
                 escalation_policy=escalation.policy,
+                frequency=self.config.timeline.frequency,
+                timing=self.config.timeline.timing,
+                day_count_convention=self.config.day_count_convention,
             )
         return generation.to_cost(
             rate_per_mwh=variable.rate_per_unit,
@@ -997,6 +807,8 @@ class ProjectCompiler:
             escalation_period=escalation.escalation_period,
             amount_reference_date=escalation.amount_reference_date,
             day_count_convention=self.config.day_count_convention,
+            frequency=self.config.timeline.frequency,
+            timing=self.config.timeline.timing,
         )
 
     def build_construction(self) -> ConstructionCashFlows:
@@ -1135,6 +947,8 @@ class ProjectCompiler:
                 label=ptc_config.label,
                 escalation_policy=escalation.policy,
                 day_count_convention=self.config.day_count_convention,
+                frequency=self.config.timeline.frequency,
+                timing=self.config.timeline.timing,
             )
         return ptc(
             generation_stream=generation,
@@ -1145,6 +959,8 @@ class ProjectCompiler:
             escalation_period=escalation.escalation_period,
             amount_reference_date=escalation.amount_reference_date,
             day_count_convention=self.config.day_count_convention,
+            frequency=self.config.timeline.frequency,
+            timing=self.config.timeline.timing,
         )
 
     def remap_event_dates(
@@ -1594,41 +1410,8 @@ def recurring_policy(
     )
 
 
-def _settlement_event(
-    *,
-    component_name: str,
-    entry: Generation,
-    requested_mwh: float,
-    delivered_mwh: float,
-) -> GenerationSettlementEvent:
-    available_mwh = entry.amount_mwh
-    shortfall_mwh = requested_mwh - delivered_mwh
-    allocated_generation_share = 0.0
-    if not isclose(available_mwh, 0.0, rel_tol=0.0, abs_tol=1e-12):
-        allocated_generation_share = delivered_mwh / available_mwh
-    return GenerationSettlementEvent(
-        date=entry.date,
-        available_mwh=available_mwh,
-        requested_mwh=requested_mwh,
-        delivered_mwh=delivered_mwh,
-        shortfall_mwh=shortfall_mwh,
-        allocated_generation_share=allocated_generation_share,
-        component_name=component_name,
-    )
-
-
-def _format_mwh(value: float) -> str:
-    return f"{value:.1f}"
-
-
 def _format_generation_dates(generation_dates: Iterable[date]) -> str:
     dates = sorted(generation_dates)
     if not dates:
         return "none"
     return ", ".join(event_date.isoformat() for event_date in dates)
-
-
-def _request_exceeds_available(requested_mwh: float, available_mwh: float) -> bool:
-    if available_mwh < 0.0:
-        return requested_mwh > 0.0 or requested_mwh < available_mwh - 1e-9
-    return requested_mwh - available_mwh > 1e-9
