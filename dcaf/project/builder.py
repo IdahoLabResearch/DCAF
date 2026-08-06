@@ -362,7 +362,9 @@ class EnergyProject:
         The outage is represented internally as ordinary negative
         ``Generation``. It is therefore included in :attr:`ProjectAnalysis.generation`
         and naturally affects generation-derived revenue, variable costs, PTC,
-        total generation, discounted generation, and LCOE.
+        total generation, discounted generation, and LCOE. It is considered a
+        separate source for contract allocation: contracts draw only from
+        positive generation, while the outage flows to remainder revenue.
 
         Parameters
         ----------
@@ -619,6 +621,9 @@ class EnergyProject:
         tax_treatment: TaxTreatment | str = TaxTreatment.TAXABLE,
     ) -> Self:
         """Register a named revenue policy for generation not allocated to contracts.
+
+        Remainder generation includes negative outage entries, which remain
+        separate from positive generation allocated to contracts.
 
         Parameters
         ----------

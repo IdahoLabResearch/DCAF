@@ -1111,7 +1111,7 @@ def test_custom_mwh_generation_schedule_matches_capacity_based_generation():
 def test_custom_mwh_generation_schedule_rejects_date_missing_from_project_generation():
     with pytest.raises(
         ValueError,
-        match="revenue:scheduled_ppa custom MWh period.*found 0",
+        match=r"generation-linked contracts request 100\.0 MWh in .*but only 0\.0 MWh",
     ):
         _analyze_scheduled_contract(
             generation=GenerationStream([Generation(1_000.0, date(2026, 1, 1))]),
@@ -1470,20 +1470,13 @@ def test_contract_term_uses_inclusive_start_and_exclusive_end_entry_date_rule():
             start=date(2026, 1, 1),
             end=date(2027, 1, 1),
         ),
-        EnergyContract.custom_mwh_generation_schedule(
-            requested_generation=GenerationStream(
-                [
-                    Generation(50.0, date(2026, 1, 1)),
-                    Generation(10.0, date(2026, 5, 11)),
-                ]
-            ),
-            price=GenerationPrice.fixed(1.0),
-        ),
     ],
-    ids=["fraction", "fixed_mwh", "custom_schedule"],
+    ids=["fraction", "fixed_mwh"],
 )
-def test_generation_contracts_ignore_negative_generation_events(contract: EnergyContract):
-    """Contracts settle only nonnegative delivered generation; outages remain in the remainder."""
+def test_non_custom_generation_contracts_ignore_negative_generation_events(
+    contract: EnergyContract,
+):
+    """Implicit contract quantities ignore outages, which remain in the remainder."""
     analysis = (
         EnergyProject()
         .generation_stream(
@@ -1510,6 +1503,51 @@ def test_generation_contracts_ignore_negative_generation_events(contract: Energy
     assert [flow.amount for flow in ppa] == pytest.approx([50.0])
     assert [flow.date for flow in ppa] == [date(2026, 1, 1)]
     assert merchant.sum() == pytest.approx(30.0)
+
+
+def test_custom_contract_ignores_overlapping_outage_and_preserves_it_in_remainder():
+    generation = GenerationStream(
+        [
+            Generation(
+                50.0,
+                period_start=date(2026, 1, 1),
+                period_end=date(2027, 1, 1),
+            ),
+            Generation(
+                -50.0,
+                period_start=date(2026, 1, 1),
+                period_end=date(2027, 1, 1),
+            ),
+        ]
+    )
+    contract = EnergyContract.custom_mwh_generation_schedule(
+        requested_generation=GenerationStream(
+            [
+                Generation(
+                    20.0,
+                    period_start=date(2026, 1, 1),
+                    period_end=date(2027, 1, 1),
+                )
+            ]
+        ),
+        price=GenerationPrice.fixed(1.0),
+    )
+    analysis = (
+        EnergyProject()
+        .generation_stream(stream=generation)
+        .generation_revenue_contract(name="revenue:ppa", contract=contract)
+        .generation_revenue_remainder(
+            name="revenue:merchant",
+            price=GenerationPrice.fixed(1.0),
+        )
+        .analyze()
+    )
+
+    ppa = analysis.cashflow_components["revenue:ppa"]
+    merchant = analysis.cashflow_components["revenue:merchant"]
+    assert [flow.amount for flow in ppa] == pytest.approx([20.0])
+    assert [flow.amount for flow in merchant] == pytest.approx([30.0, -50.0])
+    assert ppa.sum() + merchant.sum() == pytest.approx(generation.sum())
 
 
 def test_overlapping_contracts_validate_against_gross_generation_not_registration_order():
@@ -1573,6 +1611,87 @@ def test_fixed_quantity_shortfall_error_identifies_contract_date_requested_and_a
             )
             .analyze()
         )
+
+
+def test_fixed_quantity_shortfall_errors_for_calendar_period_without_generation():
+    generation = GenerationStream(
+        [
+            Generation(
+                100.0,
+                period_start=date(2025, 1, 1),
+                period_end=date(2026, 1, 1),
+            ),
+            Generation(
+                100.0,
+                period_start=date(2027, 1, 1),
+                period_end=date(2028, 1, 1),
+            ),
+        ]
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"generation-linked contracts request 50\.0 MWh in "
+            r"\[2026-01-01, 2027-01-01\), but only 0\.0 MWh is available"
+        ),
+    ):
+        (
+            EnergyProject()
+            .generation_stream(stream=generation)
+            .generation_revenue_contract(
+                name="revenue:ppa",
+                contract=EnergyContract.fixed_mwh_per_generation_event(
+                    amount_mwh=50.0,
+                    price=GenerationPrice.fixed(1.0),
+                    start=date(2025, 1, 1),
+                    end=date(2028, 1, 1),
+                ),
+            )
+            .generation_revenue_remainder(
+                name="revenue:merchant",
+                price=GenerationPrice.fixed(1.0),
+            )
+            .analyze()
+        )
+
+
+def test_custom_quantity_shortfall_errors_without_positive_generation():
+    generation = GenerationStream(
+        [
+            Generation(
+                0.0,
+                period_start=date(2026, 1, 1),
+                period_end=date(2027, 1, 1),
+            ),
+            Generation(
+                -100.0,
+                period_start=date(2026, 1, 1),
+                period_end=date(2027, 1, 1),
+            ),
+        ]
+    )
+    contract = EnergyContract.custom_mwh_generation_schedule(
+        requested_generation=GenerationStream(
+            [
+                Generation(
+                    50.0,
+                    period_start=date(2026, 1, 1),
+                    period_end=date(2027, 1, 1),
+                )
+            ]
+        ),
+        price=GenerationPrice.fixed(1.0),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"generation-linked contracts request 50\.0 MWh in "
+            r"\[2026-01-01, 2027-01-01\), but only 0\.0 MWh is available"
+        ),
+    ):
+        _analyze_scheduled_contract(generation=generation, contract=contract)
 
 
 def test_fixed_quantity_validates_prorated_available_generation_period():

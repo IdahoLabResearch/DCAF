@@ -143,7 +143,6 @@ def _contract_settlements(
             assert contract.requested_generation is not None
             settlements = _custom_contract_settlements(
                 generation,
-                name,
                 contract,
                 frequency,
                 timing,
@@ -156,7 +155,6 @@ def _contract_settlements(
 
 def _custom_contract_settlements(
     generation: GenerationStream,
-    name: str,
     contract: EnergyContract,
     frequency: Period,
     timing: TimingConvention,
@@ -184,17 +182,6 @@ def _custom_contract_settlements(
                 timing,
                 day_count_convention,
             )
-            has_source = any(
-                entry.period_end > requested_settlement.period_start
-                and entry.period_start < requested_settlement.period_end
-                for entry in generation.entries
-            )
-            if requested_settlement.amount_mwh > 0.0 and not allocated and not has_source:
-                raise ValueError(
-                    f"{name} custom MWh period "
-                    f"[{requested_settlement.period_start}, {requested_settlement.period_end}) "
-                    "overlaps no positive project generation sources; found 0"
-                )
             settlements.extend(allocated)
     return settlements
 
@@ -270,6 +257,12 @@ def _allocate_contract_quantity(
         if settlement.amount_mwh > 0.0
     ]
     if not available:
+        if amount_mwh > 0.0:
+            raise ValueError(
+                "generation-linked contracts request "
+                f"{_format_mwh(amount_mwh)} MWh in [{start}, {end}), but only "
+                "0.0 MWh is available"
+            )
         return []
 
     total_available = fsum(settlement.amount_mwh for settlement in available)

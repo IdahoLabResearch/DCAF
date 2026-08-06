@@ -135,10 +135,10 @@ def construction_outage(
       ``lost_mwh`` is computed from capacity, capacity factor, capacity
       reduction, and convention-aware elapsed outage hours. Sign is negative
       (a cost).
-    - **Fixed cost** of ``-abs(fixed_cost)`` at the booked outage date,
-      omitted when ``fixed_cost == 0``.
-    - **Daily cost** of ``-abs(cost_per_day) * (end - start).days`` at the
-      booked outage date, omitted when ``cost_per_day == 0``.
+    - **Fixed cost** of ``-abs(fixed_cost)``, allocated using the selected
+      day-count convention and omitted when ``fixed_cost == 0``.
+    - **Daily cost** of ``-abs(cost_per_day) * (end - start).days``, allocated
+      by actual calendar days and omitted when ``cost_per_day == 0``.
 
     Parameters
     ----------
@@ -185,7 +185,9 @@ def construction_outage(
         Date at which ``sell_price_per_unit`` is known. Defaults to the booked
         outage date.
     day_count_convention : DayCountConvention, optional
-        Day-count convention used for lost-generation hours and annual price escalation.
+        Day-count convention used for lost-generation hours, fixed-cost
+        allocation, and annual price escalation. Daily costs always use actual
+        calendar days.
     escalation_policy : EscalationPolicy, optional
         Advanced escalation override. When provided it must not be combined
         with ``escalation``, ``escalation_period``, or ``amount_reference_date``.
@@ -243,6 +245,7 @@ def construction_outage(
             escalation_policy=escalation_policy,
             frequency=frequency,
             timing=timing,
+            day_count_convention=day_count_convention,
         )
     else:
         lost_revenue = outage_generation.to_revenue(
@@ -274,11 +277,15 @@ def construction_outage(
             tax_treatment=tax_treatment,
             frequency=frequency,
             timing=timing,
-            day_count_convention=day_count_convention,
+            day_count_convention=allocation_convention,
         )
-        for amount, label in (
-            (abs(fixed_cost), fixed_cost_label),
-            (abs(cost_per_day) * (end - start).days, daily_cost_label),
+        for amount, label, allocation_convention in (
+            (abs(fixed_cost), fixed_cost_label, day_count_convention),
+            (
+                abs(cost_per_day) * (end - start).days,
+                daily_cost_label,
+                "actual/365-fixed",
+            ),
         )
         if amount != 0.0
     ]

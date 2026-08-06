@@ -52,7 +52,8 @@ class Generation:
     Attributes
     ----------
     amount_mwh : float
-        Energy produced in MWh.
+        Signed energy quantity in MWh. Negative values represent separate
+        generation reductions, such as outages.
     date : date, optional
         Legacy point date. When supplied without period bounds, it is normalized
         to the one-day half-open period ``[date, date + 1 day)``. Project analysis
@@ -504,7 +505,10 @@ class GenerationStream(BaseStream[Generation]):
         ``Generation`` entry with negative MWh. It is intended for delta-style
         modeling where lost production can be passed through existing
         generation-to-cashflow methods such as :meth:`to_revenue` and
-        :meth:`to_cost`.
+        :meth:`to_cost`. The outage remains separate from positive generation:
+        contracts allocate only from positive sources and leave the outage in
+        remainder generation. Aggregate generation and financial totals may
+        still net the signed entries.
 
         Parameters
         ----------

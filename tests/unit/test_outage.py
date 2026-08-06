@@ -110,6 +110,43 @@ def test_construction_outage_splits_all_cashflow_types_by_calendar_frequency():
     )
 
 
+def test_construction_outage_escalation_policy_uses_requested_day_count_convention():
+    stream = construction_outage(
+        capacity_mw=1.0,
+        capacity_factor=1.0,
+        start=date(2024, 2, 1),
+        end=date(2024, 4, 1),
+        sell_price_per_unit=1.0,
+        frequency="month",
+        day_count_convention="actual/365-no-leap",
+        escalation_policy=ConstantRateEscalation(
+            rate=0.0,
+            reference_date=date(2024, 2, 1),
+        ),
+    )
+
+    lost_revenue = [flow for flow in stream if flow.label == "Outage Lost Revenue"]
+    assert [flow.date for flow in lost_revenue] == [date(2024, 2, 29), date(2024, 3, 31)]
+    assert [flow.amount for flow in lost_revenue] == pytest.approx([-28.0 * 24.0, -31.0 * 24.0])
+
+
+def test_construction_outage_daily_cost_uses_actual_calendar_days():
+    stream = construction_outage(
+        capacity_mw=1.0,
+        capacity_factor=1.0,
+        start=date(2024, 2, 1),
+        end=date(2024, 4, 1),
+        sell_price_per_unit=1.0,
+        cost_per_day=1.0,
+        frequency="month",
+        day_count_convention="actual/365-no-leap",
+    )
+
+    daily_costs = [flow for flow in stream if flow.label == "Outage Replacement Power"]
+    assert [flow.date for flow in daily_costs] == [date(2024, 2, 29), date(2024, 3, 31)]
+    assert [flow.amount for flow in daily_costs] == pytest.approx([-29.0, -31.0])
+
+
 def test_construction_outage_uses_annual_frequency_by_default():
     stream = construction_outage(
         capacity_mw=1.0,

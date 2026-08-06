@@ -270,6 +270,12 @@ class EnergyContract:
         Presentation category for generated cashflows.
     tax_treatment : TaxTreatment or str
         Tax classification for generated cashflows.
+
+    Notes
+    -----
+    Contracts allocate only from positive project generation. Negative outage
+    entries do not reduce a positive source's availability and remain available
+    to the remainder revenue policy.
     """
 
     quantity_mode: ContractQuantityMode
