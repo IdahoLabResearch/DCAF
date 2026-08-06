@@ -17,10 +17,9 @@ from dcaf.shared.types import (
     ProFormaCategory,
     TaxTreatment,
     TimingConvention,
-    normalize_cashflow_classification,
 )
-from dcaf.streams.cashflows import CashFlow, CashFlowStream
-from dcaf.streams.generation import GenerationStream, _outage_event_date
+from dcaf.streams.cashflows import CashFlowStream
+from dcaf.streams.generation import Generation, GenerationStream
 
 
 def generator_outage(
@@ -30,7 +29,6 @@ def generator_outage(
     start: date,
     end: date,
     capacity_reduction: float = 1.0,
-    timing: TimingConvention = "end",
     label: str = "Generator Outage",
     day_count_convention: DayCountConvention = "actual/actual",
 ) -> GenerationStream:
@@ -57,8 +55,6 @@ def generator_outage(
         Fraction of the affected capacity unavailable during the outage.
         ``1.0`` means fully offline and ``0.5`` means half output lost.
         Default is ``1.0``.
-    timing : {"begin", "middle", "end"}, optional
-        Date assigned to the negative generation entry. Default is ``"end"``.
     label : str, optional
         Label for the negative generation entry. Default is ``"Generator Outage"``.
     day_count_convention : DayCountConvention, optional
@@ -94,7 +90,6 @@ def generator_outage(
         start=start,
         end=end,
         capacity_reduction=capacity_reduction,
-        timing=timing,
         label=label,
         day_count_convention=day_count_convention,
     )
@@ -110,6 +105,7 @@ def construction_outage(
     capacity_reduction: float = 1.0,
     fixed_cost: float = 0.0,
     cost_per_day: float = 0.0,
+    frequency: Period = "year",
     timing: TimingConvention = "end",
     lost_revenue_label: str = "Outage Lost Revenue",
     fixed_cost_label: str = "Outage Fixed Cost",
@@ -131,17 +127,18 @@ def construction_outage(
     revenue cashflow, and replacement-power and fixed costs are added as
     distinct line items so they appear separately in pro-forma output.
 
-    The returned stream contains up to three cashflows, all carrying the
-    same ``pro_forma_category`` and ``tax_treatment``:
+    The returned stream contains up to three cashflow series, all carrying the
+    same ``pro_forma_category`` and ``tax_treatment``. Each series is allocated
+    across the calendar periods intersecting the outage:
 
     - **Lost revenue** at ``sell_price_per_unit * lost_mwh``, where
       ``lost_mwh`` is computed from capacity, capacity factor, capacity
       reduction, and convention-aware elapsed outage hours. Sign is negative
       (a cost).
-    - **Fixed cost** of ``-abs(fixed_cost)`` at the booked outage date,
-      omitted when ``fixed_cost == 0``.
-    - **Daily cost** of ``-abs(cost_per_day) * (end - start).days`` at the
-      booked outage date, omitted when ``cost_per_day == 0``.
+    - **Fixed cost** of ``-abs(fixed_cost)``, allocated using the selected
+      day-count convention and omitted when ``fixed_cost == 0``.
+    - **Daily cost** of ``-abs(cost_per_day) * (end - start).days``, allocated
+      by actual calendar days and omitted when ``cost_per_day == 0``.
 
     Parameters
     ----------
@@ -162,6 +159,8 @@ def construction_outage(
         One-time outage cost. Sign is ignored. Default is ``0.0``.
     cost_per_day : float, optional
         Outage cost per calendar day. Sign is ignored. Default is ``0.0``.
+    frequency : Period, optional
+        Calendar frequency used to split outage cashflows. Default is ``"year"``.
     timing : {"begin", "middle", "end"}, optional
         Booking-date convention for all generated cashflows. Default is
         ``"end"``.
@@ -186,7 +185,9 @@ def construction_outage(
         Date at which ``sell_price_per_unit`` is known. Defaults to the booked
         outage date.
     day_count_convention : DayCountConvention, optional
-        Day-count convention used for lost-generation hours and annual price escalation.
+        Day-count convention used for lost-generation hours, fixed-cost
+        allocation, and annual price escalation. Daily costs always use actual
+        calendar days.
     escalation_policy : EscalationPolicy, optional
         Advanced escalation override. When provided it must not be combined
         with ``escalation``, ``escalation_period``, or ``amount_reference_date``.
@@ -194,7 +195,7 @@ def construction_outage(
     Returns
     -------
     CashFlowStream
-        Stream of one to three cashflows representing the outage economics.
+        Stream containing up to three outage-economics cashflow series.
 
     Raises
     ------
@@ -227,7 +228,6 @@ def construction_outage(
         start=start,
         end=end,
         capacity_reduction=capacity_reduction,
-        timing=timing,
         label=lost_revenue_label,
         day_count_convention=day_count_convention,
     )
@@ -243,6 +243,9 @@ def construction_outage(
             pro_forma_category=pro_forma_category,
             tax_treatment=tax_treatment,
             escalation_policy=escalation_policy,
+            frequency=frequency,
+            timing=timing,
+            day_count_convention=day_count_convention,
         )
     else:
         lost_revenue = outage_generation.to_revenue(
@@ -254,60 +257,36 @@ def construction_outage(
             escalation_period=escalation_period,
             amount_reference_date=amount_reference_date,
             day_count_convention=day_count_convention,
+            frequency=frequency,
+            timing=timing,
         )
 
-    booking_date = _outage_event_date(start=start, end=end, timing=timing)
-    extras = _replacement_cost_flows(
-        fixed_cost=fixed_cost,
-        cost_per_day=cost_per_day,
-        days=(end - start).days,
-        booking_date=booking_date,
-        fixed_cost_label=fixed_cost_label,
-        daily_cost_label=daily_cost_label,
-        pro_forma_category=pro_forma_category,
-        tax_treatment=tax_treatment,
-    )
-    if not extras:
-        return lost_revenue
-    return CashFlowStream.from_streams(lost_revenue, *extras)
-
-
-def _replacement_cost_flows(
-    *,
-    fixed_cost: float,
-    cost_per_day: float,
-    days: int,
-    booking_date: date,
-    fixed_cost_label: str,
-    daily_cost_label: str,
-    pro_forma_category: ProFormaCategory | str | None,
-    tax_treatment: TaxTreatment | str,
-) -> list[CashFlow]:
-    """Return distinct fixed and per-day replacement-cost cashflows."""
-    resolved_category, resolved_tax = normalize_cashflow_classification(
-        pro_forma_category, tax_treatment
-    )
-    flows: list[CashFlow] = []
-    if fixed_cost != 0.0:
-        flows.append(
-            CashFlow(
-                amount=-abs(fixed_cost),
-                date=booking_date,
-                label=fixed_cost_label,
-                is_cash=True,
-                pro_forma_category=resolved_category,
-                tax_treatment=resolved_tax,
-            )
+    extra_streams = [
+        GenerationStream(
+            [
+                Generation(
+                    amount_mwh=amount,
+                    period_start=start,
+                    period_end=end,
+                )
+            ]
+        ).to_cost(
+            rate_per_mwh=1.0,
+            label=label,
+            pro_forma_category=pro_forma_category,
+            tax_treatment=tax_treatment,
+            frequency=frequency,
+            timing=timing,
+            day_count_convention=allocation_convention,
         )
-    if cost_per_day != 0.0:
-        flows.append(
-            CashFlow(
-                amount=-abs(cost_per_day) * days,
-                date=booking_date,
-                label=daily_cost_label,
-                is_cash=True,
-                pro_forma_category=resolved_category,
-                tax_treatment=resolved_tax,
-            )
+        for amount, label, allocation_convention in (
+            (abs(fixed_cost), fixed_cost_label, day_count_convention),
+            (
+                abs(cost_per_day) * (end - start).days,
+                daily_cost_label,
+                "actual/365-fixed",
+            ),
         )
-    return flows
+        if amount != 0.0
+    ]
+    return CashFlowStream.from_streams(lost_revenue, *extra_streams).sort()

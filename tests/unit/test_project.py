@@ -707,7 +707,7 @@ def test_project_day_count_convention_affects_construction_interest():
                 capacity_mw=0.0,
                 capacity_factor=0.0,
                 operations_start=date(2024, 4, 1),
-                operations_end=date(2025, 1, 1),
+                operations_end=date(2025, 4, 1),
             )
             .construction(
                 overnight_cost=1200.0,
@@ -998,12 +998,10 @@ def test_energy_project_prorates_partial_operating_periods_from_generation_dates
     expected_opex = -120.0 * (1.0 + expected_fractional_year)
 
     assert analysis.timeline.operating_years == pytest.approx(expected_operating_years)
-    assert analysis.generation.count() == 2
+    assert analysis.generation.count() == 1
     assert analysis.generation.sum() == pytest.approx(expected_generation)
     assert analysis.generation.entries[0].period_start == date(2026, 6, 1)
-    assert analysis.generation.entries[0].period_end == date(2027, 6, 1)
-    assert analysis.generation.entries[1].period_start == date(2027, 6, 1)
-    assert analysis.generation.entries[1].period_end == exclusive_end
+    assert analysis.generation.entries[0].period_end == exclusive_end
     assert analysis.cashflow_components["fixed_opex"].sum() == pytest.approx(expected_opex)
 
 
@@ -1016,7 +1014,6 @@ def test_energy_project_explicit_fractional_periods_use_complete_day_truncation(
             operations_start=date(2026, 1, 1),
             start=date(2026, 1, 1),
             periods=1.5,
-            frequency="year",
         )
         .fixed_opex(
             amount=365.0,
@@ -1031,7 +1028,7 @@ def test_energy_project_explicit_fractional_periods_use_complete_day_truncation(
 
     assert len(caught) == 2
     assert all("last included date is 2027-07-01" in str(item.message) for item in caught)
-    assert analysis.generation.count() == 2
+    assert analysis.generation.count() == 1
     assert analysis.generation.sum() == pytest.approx((365 + 182) * 24)
     assert analysis.cashflow_components["fixed_opex"].sum() == pytest.approx(-547.0)
 

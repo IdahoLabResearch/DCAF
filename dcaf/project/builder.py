@@ -270,9 +270,7 @@ class EnergyProject:
         operations_end: date | None = None,
         start: date | None = None,
         periods: int | float | None = None,
-        frequency: Period | None = None,
         label: str | None = None,
-        timing: TimingConvention | None = None,
     ) -> Self:
         """Configure capacity-based generation for the project.
 
@@ -305,9 +303,6 @@ class EnergyProject:
             complete days that fit in the requested period count. If the
             requested end falls within a day, the incomplete day is omitted and
             a warning is raised. Inferred from ``operations_end`` when omitted.
-        frequency : Period, optional
-            Generation period frequency. Defaults to the project-wide frequency
-            set at construction time.
         label : str, optional
             Label applied to every generation entry. Default is ``"Generation"``.
 
@@ -323,9 +318,7 @@ class EnergyProject:
             operations_end=operations_end,
             start=start,
             periods=periods,
-            frequency=frequency,
             label="Generation" if label is None else label,
-            timing=timing,
         )
         return self._with(generation=updated_generation)
 
@@ -336,8 +329,10 @@ class EnergyProject:
     ) -> Self:
         """Configure a pre-built generation stream for the project.
 
-        Operations-period dates are inferred from the minimum and maximum dates
-        in the provided stream.
+        Operations-period dates are inferred from the minimum physical period
+        start and maximum physical period end in the provided stream. Legacy
+        point-dated generation is normalized to a one-day physical period by
+        :class:`Generation` before project setup uses it.
 
         Parameters
         ----------
@@ -360,7 +355,6 @@ class EnergyProject:
         capacity_mw: float | None = None,
         capacity_factor: float | None = None,
         capacity_reduction: float = 1.0,
-        timing: TimingConvention | None = None,
         label: str | None = None,
     ) -> Self:
         """Configure an outage that reduces modeled project generation.
@@ -368,7 +362,9 @@ class EnergyProject:
         The outage is represented internally as ordinary negative
         ``Generation``. It is therefore included in :attr:`ProjectAnalysis.generation`
         and naturally affects generation-derived revenue, variable costs, PTC,
-        total generation, discounted generation, and LCOE.
+        total generation, discounted generation, and LCOE. It is considered a
+        separate source for contract allocation: contracts draw only from
+        positive generation, while the outage flows to remainder revenue.
 
         Parameters
         ----------
@@ -386,9 +382,6 @@ class EnergyProject:
             configured capacity-based generation capacity factor when available.
         capacity_reduction : float, optional
             Fraction of affected capacity unavailable during the outage.
-        timing : TimingConvention, optional
-            Booking date convention for the negative generation entry. Defaults
-            to the outage generation timing or project timing.
         label : str, optional
             Label for the negative generation entry.
 
@@ -404,7 +397,6 @@ class EnergyProject:
             capacity_mw=capacity_mw,
             capacity_factor=capacity_factor,
             capacity_reduction=capacity_reduction,
-            timing=timing,
             label="Generation Outage" if label is None else label,
         )
         return self._with(generation_outages=(*self._config.generation_outages, outage))
@@ -441,8 +433,10 @@ class EnergyProject:
         compiled analysis generation stream is not changed.
 
         Lost revenue, fixed cost, and per-day cost appear as **distinct
-        cashflows** in the resulting component, so each shows up as a separate
-        line item in pro-forma output.
+        cashflow series** in the resulting component, so each shows up as a
+        separate line item in pro-forma output. Every series is split at the
+        project's calendar frequency. Cashflow dates use the explicit outage
+        ``timing`` when supplied, otherwise the project timing convention.
 
         Parameters
         ----------
@@ -457,7 +451,9 @@ class EnergyProject:
         capacity_reduction : float, optional
             Fraction of affected capacity unavailable during the outage.
         timing : TimingConvention, optional
-            Booking-date convention for generated cashflows.
+            Booking-date convention for generated cashflows. When omitted, the
+            project timing is used. This explicit outage rule is not replaced
+            by the project default.
         sell_price_per_unit : float, optional
             Explicit outage price per MWh. When omitted, a scalar ``price``
             configured with :meth:`generation_revenue` is used with the same
@@ -626,6 +622,9 @@ class EnergyProject:
     ) -> Self:
         """Register a named revenue policy for generation not allocated to contracts.
 
+        Remainder generation includes negative outage entries, which remain
+        separate from positive generation allocated to contracts.
+
         Parameters
         ----------
         name : str
@@ -760,6 +759,9 @@ class EnergyProject:
             Fully configured escalation policy. Overrides simple-rate inputs.
         label : str, optional
             Label applied to every fixed-cost cashflow. Default is ``"Fixed OPEX"``.
+        timing : {"begin", "middle", "end"}, optional
+            Booking-date convention for fixed-OPEX cashflows. When omitted,
+            defaults to the project-level timing convention.
 
         Returns
         -------
@@ -849,6 +851,7 @@ class EnergyProject:
         construction_start: date | None = None,
         construction_end: date | None = None,
         period: Period = "month",
+        timing: TimingConvention | None = None,
         escalation: float | None = None,
         escalation_period: Period | None = None,
         amount_reference_date: date | None = None,
@@ -876,9 +879,16 @@ class EnergyProject:
             Construction start date. Required when ``spend_profile`` is provided.
         construction_end : date, optional
             Construction end date (exclusive). Defaults to ``cod_date`` (or
-            ``operations_start``) when omitted.
+            ``operations_start``) when omitted. With end timing, the final
+            spend is booked on the preceding, last included construction day.
         period : Period, optional
-            Construction sub-period frequency. Default is ``"month"``.
+            Calendar period used to aggregate construction spend. Default is
+            ``"month"``.
+        timing : {"begin", "middle", "end"}, optional
+            Booking convention for distributed construction spend. Defaults to
+            the project timing convention. This does not affect a construction
+            cost booked as a single cashflow at COD when ``spend_profile`` is
+            omitted.
         escalation : float, optional
             Annual cost escalation rate during construction. When omitted, falls
             back to the project-wide rate set by :meth:`default_escalation`.
@@ -904,6 +914,7 @@ class EnergyProject:
             construction_start=construction_start,
             construction_end=construction_end,
             period=period,
+            timing=timing,
             escalation=updated_escalation(
                 EscalationSettings(),
                 escalation=escalation,
@@ -971,9 +982,13 @@ class EnergyProject:
         servicing_period : Period, optional
             Period frequency for construction-period interest accrual.
         amortization_frequency : Period, optional
-            Payment frequency for permanent debt. Default is ``"year"``.
+            Calendar frequency used to book permanent-debt payments. Nominal
+            amortization amounts are allocated pro rata when the first or last
+            calendar period is partial. Default is ``"year"``.
         amortization_start : date, optional
-            First amortization payment date. Defaults to ``operations_start``.
+            Start of the first nominal amortization period. Defaults to
+            ``operations_start``. The first cashflow date is determined by the
+            project timing convention.
 
         Returns
         -------

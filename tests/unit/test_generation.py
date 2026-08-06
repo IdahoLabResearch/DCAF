@@ -24,8 +24,8 @@ def test_generation_defaults():
     g = Generation(amount_mwh=100.0, date=date(2030, 1, 1))
     assert g.amount_mwh == 100.0
     assert g.label == ""
-    assert g.period_start is None
-    assert g.period_end is None
+    assert g.period_start == date(2030, 1, 1)
+    assert g.period_end == date(2030, 1, 2)
 
 
 @pytest.mark.parametrize(
@@ -41,9 +41,18 @@ def test_generation_rejects_invalid_period_bounds(period_start, period_end):
     with pytest.raises(ValueError, match="period"):
         Generation(
             amount_mwh=100.0,
-            date=date(2030, 1, 1),
             period_start=period_start,
             period_end=period_end,
+        )
+
+
+def test_generation_rejects_date_with_period_bounds():
+    with pytest.raises(ValueError, match="date cannot be provided together"):
+        Generation(
+            amount_mwh=100.0,
+            date=date(2030, 1, 1),
+            period_start=date(2030, 1, 1),
+            period_end=date(2030, 1, 2),
         )
 
 
@@ -58,7 +67,6 @@ def test_generation_replace():
     """replace method replaces the specified parameters."""
     old_g = Generation(
         amount_mwh=100.0,
-        date=date(2026, 1, 1),
         label="old_gen",
         period_start=date(2026, 1, 1),
         period_end=date(2026, 1, 2),
@@ -70,12 +78,41 @@ def test_generation_replace():
     assert new_g.label == "new_gen"
 
     # Check that other parameters are untouched
-    assert new_g.date == date(2026, 1, 1)
+    assert new_g.date is None
     assert new_g.period_start == old_g.period_start
     assert new_g.period_end == old_g.period_end
 
     # Check that original stream is unmodified
     assert old_g.amount_mwh == 100.0
+
+
+def test_generation_replace_date_renormalizes_period_and_warns():
+    generation = Generation(
+        amount_mwh=100.0,
+        period_start=date(2026, 1, 1),
+        period_end=date(2027, 1, 1),
+    )
+
+    with pytest.warns(UserWarning, match="overwrites period_start and period_end"):
+        replaced = generation.replace(date=date(2028, 2, 29))
+
+    assert replaced.date == date(2028, 2, 29)
+    assert replaced.period_start == date(2028, 2, 29)
+    assert replaced.period_end == date(2028, 3, 1)
+
+
+def test_generation_replace_bounds_ignores_legacy_date_and_warns():
+    generation = Generation(amount_mwh=100.0, date=date(2026, 1, 1))
+
+    with pytest.warns(UserWarning, match="legacy date to be ignored"):
+        replaced = generation.replace(
+            period_start=date(2027, 1, 1),
+            period_end=date(2028, 1, 1),
+        )
+
+    assert replaced.date is None
+    assert replaced.period_start == date(2027, 1, 1)
+    assert replaced.period_end == date(2028, 1, 1)
 
 
 # === GenerationStream.from_capacity ===
@@ -92,11 +129,11 @@ def test_from_capacity_annual():
     assert gs.count() == 3
     expected_mwh = 100 * 0.92 * 8760
     assert abs(gs.entries[0].amount_mwh - expected_mwh) < 1e-6
-    assert gs.entries[0].date == date(2030, 12, 31)
+    assert gs.entries[0].date is None
     assert gs.entries[0].period_start == date(2030, 1, 1)
     assert gs.entries[0].period_end == date(2031, 1, 1)
-    assert gs.entries[1].date == date(2031, 12, 31)
-    assert gs.entries[2].date == date(2032, 12, 31)
+    assert gs.entries[1].period_start == date(2031, 1, 1)
+    assert gs.entries[2].period_end == date(2033, 1, 1)
 
 
 def test_from_capacity_monthly():
@@ -111,7 +148,9 @@ def test_from_capacity_monthly():
     assert gs.count() == 3
     expected_mwh = 100 * 1.0 * 31 * 24
     assert abs(gs.entries[0].amount_mwh - expected_mwh) < 1e-6
-    assert gs.entries[1].date == date(2030, 2, 28)
+    assert gs.entries[1].date is None
+    assert gs.entries[1].period_start == date(2030, 2, 1)
+    assert gs.entries[1].period_end == date(2030, 3, 1)
 
 
 def test_from_capacity_quarterly():
@@ -168,7 +207,8 @@ def test_from_capacity_fractional_period_uses_complete_days_and_warns():
         )
 
     assert stream.count() == 1
-    assert stream.entries[0].date == date(2030, 1, 15)
+    assert stream.entries[0].date is None
+    assert stream.entries[0].period_end == date(2030, 1, 16)
     assert stream.entries[0].amount_mwh == pytest.approx(15 * 24)
 
 
@@ -215,10 +255,12 @@ def test_from_capacity_rejects_capacity_factor_outside_unit_interval(capacity_fa
         )
 
 
-def test_from_capacity_supports_timing_conventions():
-    begin = GenerationStream.from_capacity(1.0, 1.0, date(2030, 1, 1), 1, timing="begin")
-    middle = GenerationStream.from_capacity(1.0, 1.0, date(2030, 1, 1), 1, timing="middle")
-    end = GenerationStream.from_capacity(1.0, 1.0, date(2030, 1, 1), 1)
+def test_generation_cashflows_support_timing_conventions():
+    generation = GenerationStream.from_capacity(1.0, 1.0, date(2030, 1, 1), 1)
+
+    begin = generation.to_revenue(1.0, timing="begin")
+    middle = generation.to_revenue(1.0, timing="middle")
+    end = generation.to_revenue(1.0, timing="end")
 
     assert begin.entries[0].date == date(2030, 1, 1)
     assert middle.entries[0].date == date(2030, 7, 2)
@@ -237,25 +279,26 @@ def test_from_outage_creates_negative_generation():
 
     assert outage.count() == 1
     assert outage.entries[0].amount_mwh == pytest.approx(-(1000.0 * 0.92 * 24.0 * 10.0))
-    assert outage.entries[0].date == date(2030, 5, 10)
+    assert outage.entries[0].date is None
     assert outage.entries[0].label == "Refueling extension"
     assert outage.entries[0].period_start == date(2030, 5, 1)
     assert outage.entries[0].period_end == date(2030, 5, 11)
 
 
-def test_from_outage_supports_partial_reduction_and_timing():
-    """Outage helper supports partial reductions and booking-date timing."""
+def test_from_outage_supports_partial_reduction():
+    """Outage helper supports partial reductions without assigning a booking date."""
     outage = GenerationStream.from_outage(
         capacity_mw=100.0,
         capacity_factor=0.5,
         capacity_reduction=0.25,
         start=date(2030, 1, 1),
         end=date(2030, 1, 5),
-        timing="middle",
     )
 
     assert outage.entries[0].amount_mwh == pytest.approx(-(100.0 * 0.5 * 0.25 * 24.0 * 4.0))
-    assert outage.entries[0].date == date(2030, 1, 2)
+    assert outage.entries[0].date is None
+    assert outage.entries[0].period_start == date(2030, 1, 1)
+    assert outage.entries[0].period_end == date(2030, 1, 5)
 
 
 def test_from_outage_actual_365_excludes_feb_29():
@@ -370,7 +413,7 @@ def test_extend_rejects_other_stream_types():
 def test_filter_generic():
     """Generic filter with a custom predicate."""
     gs = GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 5)
-    recent = gs.filter(lambda g: g.date.year >= 2033)
+    recent = gs.filter(lambda g: g.period_start.year >= 2033)
     assert recent.count() == 2
 
 
@@ -407,7 +450,7 @@ def test_apply_streamwise_generation_stream():
     result = gs.apply_streamwise(lambda stream: stream[1:])
     assert isinstance(result, GenerationStream)
     assert result.count() == 2
-    assert [entry.date.year for entry in result] == [2031, 2032]
+    assert [entry.period_start.year for entry in result] == [2031, 2032]
 
 
 def test_filter_apply_generation_stream():
@@ -430,7 +473,79 @@ def test_date_range_generation_stream():
     gs = GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 4)
     result = gs.date_range(start=date(2031, 1, 1), end=date(2033, 1, 1))
     assert result.count() == 2
-    assert [entry.date for entry in result] == [date(2031, 12, 31), date(2032, 12, 31)]
+    assert [entry.period_start for entry in result] == [date(2031, 1, 1), date(2032, 1, 1)]
+
+
+def test_revenue_calendar_split_prorates_partial_first_and_final_years():
+    """A known one-MWh-per-day source is independently checkable by calendar days."""
+    generation = GenerationStream(
+        [
+            Generation(
+                amount_mwh=731.0,
+                period_start=date(2030, 7, 1),
+                period_end=date(2032, 7, 1),
+            )
+        ]
+    )
+
+    revenue = generation.to_revenue(price_per_mwh=1.0, frequency="year", timing="end")
+
+    assert [flow.date for flow in revenue] == [
+        date(2030, 12, 31),
+        date(2031, 12, 31),
+        date(2032, 6, 30),
+    ]
+    assert [flow.amount for flow in revenue] == pytest.approx([184.0, 365.0, 182.0])
+    assert revenue.sum() == pytest.approx(generation.sum())
+
+
+def test_revenue_calendar_split_keeps_distinct_generation_sources_separate():
+    generation = GenerationStream(
+        [
+            Generation(
+                amount_mwh=365.0,
+                label="source A",
+                period_start=date(2030, 1, 1),
+                period_end=date(2031, 1, 1),
+            ),
+            Generation(
+                amount_mwh=730.0,
+                label="source B",
+                period_start=date(2030, 1, 1),
+                period_end=date(2031, 1, 1),
+            ),
+        ]
+    )
+
+    revenue = generation.to_revenue(price_per_mwh=1.0, frequency="month", timing="end")
+
+    assert revenue.count() == 24
+    assert [flow.date for flow in revenue[:2]] == [date(2030, 1, 31), date(2030, 1, 31)]
+    assert [flow.amount for flow in revenue[:2]] == pytest.approx([31.0, 62.0])
+    assert revenue.sum() == pytest.approx(1_095.0)
+
+
+def test_revenue_monthly_split_respects_no_leap_day_count():
+    generation = GenerationStream(
+        [
+            Generation(
+                amount_mwh=365.0,
+                period_start=date(2024, 1, 1),
+                period_end=date(2025, 1, 1),
+            )
+        ]
+    )
+
+    revenue = generation.to_revenue(
+        price_per_mwh=1.0,
+        frequency="month",
+        day_count_convention="actual/365-no-leap",
+    )
+
+    assert revenue.entries[1].date == date(2024, 2, 29)
+    assert revenue.entries[1].amount == pytest.approx(28.0)
+    assert revenue.entries[2].amount == pytest.approx(31.0)
+    assert revenue.sum() == pytest.approx(365.0)
 
 
 # === grouping ===
@@ -462,7 +577,7 @@ def test_group_by_period():
 
 
 def test_sort_generation_stream_default():
-    """sort() defaults to date ascending."""
+    """sort() defaults to physical period order and respects descending."""
     gs = GenerationStream(
         [
             Generation(100.0, date(2032, 1, 1)),
@@ -476,6 +591,34 @@ def test_sort_generation_stream_default():
         date(2031, 1, 1),
         date(2032, 1, 1),
     ]
+    assert [entry.date for entry in gs.sort(descending=True)] == [
+        date(2032, 1, 1),
+        date(2031, 1, 1),
+        date(2030, 1, 1),
+    ]
+
+
+def test_sort_generation_stream_date_attr_uses_complete_period_bounds():
+    gs = GenerationStream(
+        [
+            Generation(
+                200.0,
+                label="long",
+                period_start=date(2030, 1, 1),
+                period_end=date(2030, 3, 1),
+            ),
+            Generation(
+                100.0,
+                label="short",
+                period_start=date(2030, 1, 1),
+                period_end=date(2030, 2, 1),
+            ),
+            Generation(50.0, date(2030, 4, 1), label="dated"),
+        ]
+    )
+
+    assert [entry.label for entry in gs.sort()] == ["short", "long", "dated"]
+    assert [entry.label for entry in gs.sort(attr="date")] == ["short", "long", "dated"]
 
 
 def test_sort_generation_stream_by_attr():

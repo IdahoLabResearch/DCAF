@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import date
@@ -11,11 +12,12 @@ from math import isfinite
 from typing import Literal, Self
 
 from dcaf.shared.types import (
+    Period,
     ProFormaCategory,
     TaxTreatment,
     normalize_cashflow_classification,
 )
-from dcaf.streams.generation import Generation, GenerationStream
+from dcaf.streams.generation import GenerationStream
 
 GenerationPriceMode = Literal["fixed", "schedule", "callable"]
 ContractQuantityMode = Literal[
@@ -33,7 +35,11 @@ class GenerationSettlementEvent:
     Attributes
     ----------
     date : date
-        Date of the generation event being settled.
+        Financial settlement date derived from the configured timing convention.
+    period_start : date
+        Inclusive start of the settled generation period.
+    period_end : date
+        Exclusive end of the settled generation period.
     available_mwh : float
         Gross generation available before allocation.
     requested_mwh : float
@@ -49,6 +55,8 @@ class GenerationSettlementEvent:
     """
 
     date: date
+    period_start: dt.date
+    period_end: dt.date
     available_mwh: float
     requested_mwh: float
     delivered_mwh: float
@@ -250,15 +258,24 @@ class EnergyContract:
         Gross generation fraction requested when ``quantity_mode`` is
         ``"fraction_of_generation"``.
     amount_mwh : float, optional
-        Fixed MWh requested per generation event when ``quantity_mode`` is
-        ``"fixed_mwh_per_generation_event"``.
+        Total fixed MWh requested per applicable contract calendar period when
+        ``quantity_mode`` is ``"fixed_mwh_per_generation_event"``.
+    quantity_frequency : Period, optional
+        Calendar period over which fixed MWh is specified.
     requested_generation : GenerationStream, optional
-        Explicit requested MWh by unique date when ``quantity_mode`` is
+        Explicit requested MWh by unique physical period, allocated across
+        overlapping project generation sources when ``quantity_mode`` is
         ``"custom_mwh_generation_schedule"``.
     pro_forma_category : ProFormaCategory or str or None
         Presentation category for generated cashflows.
     tax_treatment : TaxTreatment or str
         Tax classification for generated cashflows.
+
+    Notes
+    -----
+    Contracts allocate only from positive project generation. Negative outage
+    entries do not reduce a positive source's availability and remain available
+    to the remainder revenue policy.
     """
 
     quantity_mode: ContractQuantityMode
@@ -269,6 +286,7 @@ class EnergyContract:
     shortfall: ContractShortfallMode = "error"
     generation_share: float | None = None
     amount_mwh: float | None = None
+    quantity_frequency: Period | None = None
     requested_generation: GenerationStream | None = None
     pro_forma_category: ProFormaCategory | str | None = ProFormaCategory.REVENUE
     tax_treatment: TaxTreatment | str = TaxTreatment.TAXABLE
@@ -346,25 +364,32 @@ class EnergyContract:
         *,
         amount_mwh: float,
         price: GenerationPrice,
-        start: date | None = None,
-        end: date | None = None,
+        start: date,
+        end: date,
+        frequency: Period = "year",
         label: str = "Contract Revenue",
         shortfall: ContractShortfallMode = "error",
         pro_forma_category: ProFormaCategory | str | None = ProFormaCategory.REVENUE,
         tax_treatment: TaxTreatment | str = TaxTreatment.TAXABLE,
     ) -> Self:
-        """Create a contract that requests fixed MWh per eligible generation event.
+        """Create a contract that requests fixed MWh per contract calendar period.
 
         Parameters
         ----------
         amount_mwh : float
-            Fixed generation quantity requested from each eligible generation event.
+            Total generation quantity requested in each applicable calendar
+            period. A partial first or final period caused by the contract's
+            ``start`` or ``end`` is prorated under the project day-count
+            convention. A period shortened only by generation availability
+            still requests the full contract quantity.
         price : GenerationPrice
             Per-MWh settlement price policy.
-        start : date, optional
+        start : date
             Inclusive contract start date.
-        end : date, optional
+        end : date
             Exclusive contract end date.
+        frequency : Period, optional
+            Calendar period over which ``amount_mwh`` applies. Default is ``"year"``.
         label : str, optional
             Label applied to generated revenue cashflows. Default is
             ``"Contract Revenue"``.
@@ -378,7 +403,16 @@ class EnergyContract:
         Returns
         -------
         EnergyContract
-            Contract configured with fixed-MWh-per-generation-event quantity terms.
+            Contract configured with fixed-MWh-per-calendar-period quantity terms.
+
+        Notes
+        -----
+        Contract boundaries determine the quantity owed for a calendar period;
+        generation boundaries determine only where that quantity can be
+        delivered. The resulting quantity is spread over portions of the period
+        with positive generation. When multiple physical generation sources
+        overlap, the quantity is allocated pro rata by available MWh and each
+        source retains a distinct settlement cashflow.
         """
         return cls(
             quantity_mode="fixed_mwh_per_generation_event",
@@ -388,6 +422,7 @@ class EnergyContract:
             label=label,
             shortfall=shortfall,
             amount_mwh=float(amount_mwh),
+            quantity_frequency=frequency,
             pro_forma_category=pro_forma_category,
             tax_treatment=tax_treatment,
         )
@@ -405,14 +440,16 @@ class EnergyContract:
         pro_forma_category: ProFormaCategory | str | None = ProFormaCategory.REVENUE,
         tax_treatment: TaxTreatment | str = TaxTreatment.TAXABLE,
     ) -> Self:
-        """Create a contract that requests explicit per-date generation amounts.
+        """Create a contract that requests explicit generation-period amounts.
 
         Parameters
         ----------
         requested_generation : GenerationStream
-            Requested contract quantity by generation event date. During analysis,
-            each date must match exactly one compiled project generation event and
-            its requested MWh must not exceed that event's available generation.
+            Requested contract quantity by physical generation period. During
+            analysis, each requested amount is allocated pro rata over the
+            positive project generation available within its period. A requested
+            period may span adjacent or overlapping project generation sources,
+            but its MWh must not exceed their combined prorated availability.
         price : GenerationPrice
             Per-MWh settlement price policy.
         start : date, optional
@@ -437,7 +474,13 @@ class EnergyContract:
         Raises
         ------
         ValueError
-            If requested generation contains duplicate dates.
+            If requested generation contains duplicate periods.
+
+        Notes
+        -----
+        Project generation is prorated to each requested period under the
+        project's day-count convention. Overlapping physical sources remain
+        distinct settlements after allocation.
         """
         return cls(
             quantity_mode="custom_mwh_generation_schedule",
@@ -450,70 +493,6 @@ class EnergyContract:
             pro_forma_category=pro_forma_category,
             tax_treatment=tax_treatment,
         )
-
-    def requested_mwh_for(self, generation: Generation) -> float:
-        """Return requested MWh for one available generation event.
-
-        Parameters
-        ----------
-        generation : Generation
-            Available generation event.
-
-        Returns
-        -------
-        float
-            Requested MWh for the event, or ``0.0`` when the event is outside
-            the contract term or otherwise ineligible.
-
-        Raises
-        ------
-        ValueError
-            If the contract quantity configuration is incomplete.
-        """
-        if not self.includes(generation.date):
-            return 0.0
-        if generation.amount_mwh < 0.0:
-            return 0.0
-        match self.quantity_mode:
-            case "fraction_of_generation":
-                if self.generation_share is None:
-                    raise ValueError("fraction-of-generation contract is missing generation_share")
-                return generation.amount_mwh * self.generation_share
-            case "fixed_mwh_per_generation_event":
-                if self.amount_mwh is None:
-                    raise ValueError("fixed-MWh contract is missing amount_mwh")
-                return self.amount_mwh
-            case "custom_mwh_generation_schedule":
-                if self.requested_generation is None:
-                    raise ValueError(
-                        "custom generation schedule contract is missing requested_generation"
-                    )
-                requested_by_date: dict[date, float] = {}
-                for entry in self.requested_generation:
-                    requested_by_date[entry.date] = requested_by_date.get(entry.date, 0.0) + (
-                        entry.amount_mwh
-                    )
-                return requested_by_date.get(generation.date, 0.0)
-
-    def includes(self, event_date: date) -> bool:
-        """Return whether an event date is eligible under the contract term.
-
-        Parameters
-        ----------
-        event_date : date
-            Generation event date.
-
-        Returns
-        -------
-        bool
-            ``True`` when ``event_date`` is within the inclusive-start,
-            exclusive-end contract term.
-        """
-        if self.start is not None and event_date < self.start:
-            return False
-        if self.end is not None and event_date >= self.end:
-            return False
-        return True
 
     def _validate_quantity(self) -> None:
         if self.quantity_mode not in {
@@ -528,10 +507,14 @@ class EnergyContract:
 
         match self.quantity_mode:
             case "fraction_of_generation":
-                if self.amount_mwh is not None or self.requested_generation is not None:
+                if (
+                    self.amount_mwh is not None
+                    or self.quantity_frequency is not None
+                    or self.requested_generation is not None
+                ):
                     raise ValueError(
-                        "fraction-of-generation contract cannot include amount_mwh or "
-                        "requested_generation"
+                        "fraction-of-generation contract cannot include amount_mwh, "
+                        "quantity_frequency, or requested_generation"
                     )
                 if self.generation_share is None:
                     raise ValueError("generation_share is required")
@@ -544,22 +527,31 @@ class EnergyContract:
                     )
                 if self.amount_mwh is None:
                     raise ValueError("amount_mwh is required")
+                if self.start is None or self.end is None:
+                    raise ValueError("fixed-MWh contracts require start and end")
+                if self.quantity_frequency is None:
+                    raise ValueError("fixed-MWh contracts require quantity_frequency")
                 _validate_finite(self.amount_mwh, "amount_mwh")
                 if self.amount_mwh < 0.0:
                     raise ValueError("amount_mwh must be non-negative")
             case "custom_mwh_generation_schedule":
-                if self.generation_share is not None or self.amount_mwh is not None:
+                if (
+                    self.generation_share is not None
+                    or self.amount_mwh is not None
+                    or self.quantity_frequency is not None
+                ):
                     raise ValueError(
-                        "custom generation schedule contract cannot include generation_share or "
-                        "amount_mwh"
+                        "custom generation schedule contract cannot include generation_share, "
+                        "amount_mwh, or quantity_frequency"
                     )
                 if self.requested_generation is None:
                     raise ValueError("requested_generation is required")
-                requested_dates: set[date] = set()
+                requested_periods: set[tuple[date, date]] = set()
                 for entry in self.requested_generation:
-                    if entry.date in requested_dates:
-                        raise ValueError("requested_generation dates must be unique")
-                    requested_dates.add(entry.date)
+                    period = (entry.period_start, entry.period_end)
+                    if period in requested_periods:
+                        raise ValueError("requested_generation periods must be unique")
+                    requested_periods.add(period)
                     _validate_finite(entry.amount_mwh, "requested_generation amounts")
                     if entry.amount_mwh < 0.0:
                         raise ValueError("requested_generation amounts must be non-negative")

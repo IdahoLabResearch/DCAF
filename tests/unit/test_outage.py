@@ -80,6 +80,95 @@ def test_construction_outage_includes_distinct_fixed_and_daily_costs():
     assert {cf.tax_treatment for cf in stream.entries} == {TaxTreatment.DEDUCTIBLE}
 
 
+def test_construction_outage_splits_all_cashflow_types_by_calendar_frequency():
+    stream = construction_outage(
+        capacity_mw=1.0,
+        capacity_factor=1.0,
+        start=date(2030, 1, 15),
+        end=date(2030, 3, 15),
+        sell_price_per_unit=1.0,
+        fixed_cost=590.0,
+        cost_per_day=10.0,
+        frequency="month",
+        timing="end",
+    )
+
+    assert stream.count() == 9
+    assert sorted({flow.date for flow in stream}) == [
+        date(2030, 1, 31),
+        date(2030, 2, 28),
+        date(2030, 3, 14),
+    ]
+    assert sum(flow.amount for flow in stream if flow.label == "Outage Lost Revenue") == (
+        pytest.approx(-59.0 * 24.0)
+    )
+    assert sum(flow.amount for flow in stream if flow.label == "Outage Fixed Cost") == (
+        pytest.approx(-590.0)
+    )
+    assert sum(flow.amount for flow in stream if flow.label == "Outage Replacement Power") == (
+        pytest.approx(-590.0)
+    )
+
+
+def test_construction_outage_escalation_policy_uses_requested_day_count_convention():
+    stream = construction_outage(
+        capacity_mw=1.0,
+        capacity_factor=1.0,
+        start=date(2024, 2, 1),
+        end=date(2024, 4, 1),
+        sell_price_per_unit=1.0,
+        frequency="month",
+        day_count_convention="actual/365-no-leap",
+        escalation_policy=ConstantRateEscalation(
+            rate=0.0,
+            reference_date=date(2024, 2, 1),
+        ),
+    )
+
+    lost_revenue = [flow for flow in stream if flow.label == "Outage Lost Revenue"]
+    assert [flow.date for flow in lost_revenue] == [date(2024, 2, 29), date(2024, 3, 31)]
+    assert [flow.amount for flow in lost_revenue] == pytest.approx([-28.0 * 24.0, -31.0 * 24.0])
+
+
+def test_construction_outage_daily_cost_uses_actual_calendar_days():
+    stream = construction_outage(
+        capacity_mw=1.0,
+        capacity_factor=1.0,
+        start=date(2024, 2, 1),
+        end=date(2024, 4, 1),
+        sell_price_per_unit=1.0,
+        cost_per_day=1.0,
+        frequency="month",
+        day_count_convention="actual/365-no-leap",
+    )
+
+    daily_costs = [flow for flow in stream if flow.label == "Outage Replacement Power"]
+    assert [flow.date for flow in daily_costs] == [date(2024, 2, 29), date(2024, 3, 31)]
+    assert [flow.amount for flow in daily_costs] == pytest.approx([-29.0, -31.0])
+
+
+def test_construction_outage_uses_annual_frequency_by_default():
+    stream = construction_outage(
+        capacity_mw=1.0,
+        capacity_factor=1.0,
+        start=date(2030, 7, 1),
+        end=date(2031, 7, 1),
+        sell_price_per_unit=1.0,
+        fixed_cost=365.0,
+        cost_per_day=1.0,
+    )
+
+    assert stream.count() == 6
+    for label, expected_amounts in (
+        ("Outage Lost Revenue", [-184.0 * 24.0, -181.0 * 24.0]),
+        ("Outage Fixed Cost", [-184.0, -181.0]),
+        ("Outage Replacement Power", [-184.0, -181.0]),
+    ):
+        flows = [flow for flow in stream if flow.label == label]
+        assert [flow.date for flow in flows] == [date(2030, 12, 31), date(2031, 6, 30)]
+        assert [flow.amount for flow in flows] == pytest.approx(expected_amounts)
+
+
 def test_construction_outage_sign_of_inputs_ignored():
     """Positive or negative ``fixed_cost`` / ``cost_per_day`` produce identical cost magnitudes."""
     positive = construction_outage(
@@ -250,6 +339,34 @@ def test_construction_outage_equivalence_with_builder_method():
     builder_labels = sorted(cf.label for cf in builder_stream)
     helper_labels = sorted(cf.label for cf in helper_stream)
     assert builder_labels == helper_labels
+
+
+def test_project_construction_outage_uses_project_frequency_and_explicit_timing():
+    analysis = (
+        EnergyProject(frequency="month", timing="begin")
+        .generation(
+            capacity_mw=1.0,
+            capacity_factor=1.0,
+            operations_start=date(2031, 1, 1),
+            operations_end=date(2032, 1, 1),
+        )
+        .construction_outage(
+            capacity_mw=1.0,
+            capacity_factor=1.0,
+            start=date(2030, 1, 15),
+            end=date(2030, 3, 15),
+            sell_price_per_unit=1.0,
+            timing="end",
+        )
+        .analyze()
+    )
+
+    outage = analysis.cashflow_components["construction_outage"]
+    assert [flow.date for flow in outage] == [
+        date(2030, 1, 31),
+        date(2030, 2, 28),
+        date(2030, 3, 14),
+    ]
 
 
 def test_construction_outage_market_price_lookup_via_builder():

@@ -40,7 +40,7 @@ high-level ``EnergyProject`` interface does not:
       lost-revenue, fixed-cost, and per-day-cost line items.
 """
 
-from datetime import date
+from datetime import date, timedelta
 
 from dcaf.finance.amortization import AmortizationSchedule
 from dcaf.finance.construction import ConstructionSpendBuilder
@@ -204,8 +204,8 @@ generation_credit = CashFlowStream(
     [
         CashFlow(
             amount=gen.amount_mwh * HYBRID_PTC_RATE_PER_MWH,
-            date=gen.date,
-            label=f"Hybrid PTC Credit {gen.date.year}",
+            date=gen.period_end - timedelta(days=1),
+            label=f"Hybrid PTC Credit {gen.period_start.year}",
             pro_forma_category=ProFormaCategory.TAX_CREDIT,
             tax_treatment=TaxTreatment.NONE,
         )

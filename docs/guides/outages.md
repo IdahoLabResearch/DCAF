@@ -45,6 +45,10 @@ For outages during the operating period, `.generation_outage(start=, end=, ...)`
 reduces the project's generation over the window, which flows through to revenue and
 any per-MWh credits.
 
+The outage is retained as a separate negative generation source. Built-in contracts
+still allocate from overlapping positive generation, while the outage flows to
+remainder revenue. Aggregate generation and financial totals may net the signed entries.
+
 ## Advanced: physical vs. financial views
 
 At the stream level, {py:func}`dcaf.finance.outage.generator_outage` produces the
