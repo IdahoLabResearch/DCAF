@@ -2,7 +2,7 @@
 # ALL RIGHTS RESERVED
 """Tests for dcaf.metrics standalone functions."""
 
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
@@ -66,6 +66,35 @@ class TestNpv:
         with pytest.raises(ValueError, match="rate must be finite"):
             npv(values, rate=rate, valuation_date=date(2026, 1, 1))
 
+    def test_with_zero_rate_equals_sum(self):
+        """NPV with a zero discount rate equals total cash sum."""
+        values = [(-50.0, date(2026, 1, 1)), (100.0, date(2028, 6, 1))]
+
+        expected = sum(v[0] for v in values)
+        actual = npv(values, rate=0.0, valuation_date=date(2027, 1, 1))
+
+        assert actual == pytest.approx(expected, abs=1e-8)
+
+    def test_npv_linearity(self):
+        """NPV is a linear operation."""
+        a = (13.0, date(2026, 6, 9))
+        b = (8.0, date(2027, 10, 31))
+        val_date = date(2026, 2, 3)
+        rate = 0.11
+
+        # NPV(A + B) == NPV(A) + NPV(B)
+        npv_a = npv([a], rate=rate, valuation_date=val_date)
+        npv_b = npv([b], rate=rate, valuation_date=val_date)
+        npv_a_and_b = npv([a, b], rate=rate, valuation_date=val_date)
+        assert npv_a + npv_b == pytest.approx(npv_a_and_b, abs=1e-8)
+
+        # NPV(kA) == k * NPV(A)
+        k = 1.4
+        ka = (k * a[0], a[1])
+
+        npv_ka = npv([ka], rate=rate, valuation_date=val_date)
+        assert k * npv_a == pytest.approx(npv_ka, abs=1e-8)
+
     def test_compounding_past_values(self):
         """Values before valuation_date are compounded forward."""
         # 2025 is not a leap year: 2024-01-01 → 2025-01-01 = 366 days (2024 is leap)
@@ -122,6 +151,39 @@ class TestIrr:
         )
         result = irr(stream)
         assert result == pytest.approx(0.12321245982864881, abs=1e-8)
+
+    def test_matches_constructed_multi_period_target_rate(self):
+        """IRR matches target rate in constructed case."""
+        target = 0.125
+        inflows = (5_000.0, 7_000.0, 9_000.0)
+        start = date(2025, 1, 1)
+        # Artificially construct initial flow using target IRR
+        initial = -sum(cf / (1 + target) ** year for year, cf in enumerate(inflows, start=1))
+
+        stream = CashFlowStream(
+            [
+                CashFlow(initial, start),
+                CashFlow(inflows[0], start + timedelta(days=365)),
+                CashFlow(inflows[1], start + timedelta(days=365 * 2)),
+                CashFlow(inflows[2], start + timedelta(days=365 * 3)),
+            ]
+        )
+
+        assert irr(stream, convention="actual/365-fixed") == pytest.approx(target, abs=1e-8)
+
+    @pytest.mark.parametrize("factor", [1e-6, 1e9, -1.0])
+    def test_scale_and_sign_invariant(self, factor):
+        """Scaling every cashflow, including reversing all signs, leaves IRR unchanged."""
+        stream = CashFlowStream(
+            [
+                CashFlow(-10_000.0, date(2025, 1, 1)),
+                CashFlow(5_000.0, date(2026, 1, 1)),
+                CashFlow(7_000.0, date(2027, 1, 1)),
+            ]
+        )
+        transformed = stream.scale(factor)
+
+        assert irr(transformed) == pytest.approx(irr(stream), abs=1e-8)
 
     def test_npv_is_zero_at_irr(self):
         """NPV at the IRR should be approximately zero."""
@@ -382,6 +444,69 @@ class TestLcoe:
             discount_rate=0.0,
             valuation_date=flow_date,
         ) == pytest.approx(expected_lcoe)
+
+    def test_lcoe_basis_scaling_has_reciprocal_price(self):
+        """Scaling the unit-revenue basis by k scales LCOE by 1/k."""
+        valuation_date = date(2025, 1, 1)
+        discount_rate = 0.08
+        scale_factor = 4.0
+
+        basis = CashFlowStream(
+            [
+                CashFlow(500.0, date(2026, 1, 1), tax_treatment=TaxTreatment.TAXABLE),
+                CashFlow(750.0, date(2027, 1, 1), tax_treatment=TaxTreatment.TAXABLE),
+                CashFlow(1_000.0, date(2028, 1, 1), tax_treatment=TaxTreatment.TAXABLE),
+            ]
+        )
+
+        components = CashFlowGroup(
+            {
+                "capex": CashFlowStream(
+                    [
+                        CashFlow(
+                            -2_000.0,
+                            valuation_date,
+                            pro_forma_category=ProFormaCategory.CAPITAL_COST,
+                        )
+                    ]
+                ),
+                "opex": CashFlowStream(
+                    [
+                        CashFlow(
+                            -250.0,
+                            date(2026, 1, 1),
+                            pro_forma_category=ProFormaCategory.OPERATING_COST,
+                            tax_treatment=TaxTreatment.DEDUCTIBLE,
+                        ),
+                        CashFlow(
+                            -300.0,
+                            date(2027, 1, 1),
+                            pro_forma_category=ProFormaCategory.OPERATING_COST,
+                            tax_treatment=TaxTreatment.DEDUCTIBLE,
+                        ),
+                    ]
+                ),
+            }
+        )
+
+        original_lcoe = lcoe(
+            basis_stream=basis,
+            component_streams=components,
+            tax_rate=0.21,
+            discount_rate=discount_rate,
+            valuation_date=valuation_date,
+        )
+        scaled_lcoe = lcoe(
+            basis_stream=basis.scale(scale_factor),
+            component_streams=components,
+            tax_rate=0.21,
+            discount_rate=discount_rate,
+            valuation_date=valuation_date,
+        )
+
+        assert original_lcoe is not None
+        assert scaled_lcoe is not None
+        assert scaled_lcoe == pytest.approx(original_lcoe / scale_factor, abs=1e-8)
 
     def test_lcoe_assumes_symmetric_tax_refunds_for_negative_taxable_income(self):
         """LCOE intentionally assumes ``allow_refund=True`` when taxable income is negative."""
