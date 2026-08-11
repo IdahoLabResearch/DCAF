@@ -84,15 +84,22 @@ class GenerationPrice:
         are not carried forward between entries.
     price_callable : Callable, optional
         Callback used when ``mode`` is ``"callable"``.
+    apply_escalation : bool, optional
+        Whether the project escalation policy should be applied on top of the
+        provided price value. Defaults to False.
     """
 
     mode: GenerationPriceMode
     fixed_price: float | None = None
     price_schedule: tuple[tuple[date, float], ...] = ()
     price_callable: Callable[[GenerationSettlementEvent], float] | None = None
+    apply_escalation: bool = False
 
     def __post_init__(self) -> None:
         """Validate and canonicalize the one active price-resolution strategy."""
+        if not isinstance(self.apply_escalation, bool):
+            raise TypeError("apply_escalation must be a bool")
+
         if self.mode not in {"fixed", "schedule", "callable"}:
             raise ValueError("mode must be 'fixed', 'schedule', or 'callable'")
 
@@ -131,13 +138,16 @@ class GenerationPrice:
             raise ValueError("callable generation price requires a callable callback")
 
     @classmethod
-    def fixed(cls, price: float) -> Self:
+    def fixed(cls, price: float, apply_escalation: bool = False) -> Self:
         """Return a fixed per-MWh generation price.
 
         Parameters
         ----------
         price : float
             Constant settlement price per delivered MWh.
+        apply_escalation : bool, optional
+            Whether the project escalation policy should be applied on top of the
+            provided price value. Defaults to False.
 
         Returns
         -------
@@ -149,10 +159,10 @@ class GenerationPrice:
         ValueError
             If ``price`` is not finite.
         """
-        return cls(mode="fixed", fixed_price=price)
+        return cls(mode="fixed", fixed_price=price, apply_escalation=apply_escalation)
 
     @classmethod
-    def schedule(cls, price_schedule: Mapping[date, float]) -> Self:
+    def schedule(cls, price_schedule: Mapping[date, float], apply_escalation: bool = False) -> Self:
         """Return an exact-date per-MWh generation price schedule.
 
         Parameters
@@ -164,6 +174,9 @@ class GenerationPrice:
             During analysis, every scheduled date must exist in the compiled
             project generation stream, and every priced settlement event must
             have a corresponding schedule entry.
+        apply_escalation : bool, optional
+            Whether the project escalation policy should be applied on top of
+            each value in the provided price schedule. Defaults to False.
 
         Returns
         -------
@@ -176,23 +189,38 @@ class GenerationPrice:
             If the schedule is empty, contains a non-finite price, or does not
             contain the exact date of a settlement event being resolved.
         """
-        return cls(mode="schedule", price_schedule=tuple(price_schedule.items()))
+        return cls(
+            mode="schedule",
+            price_schedule=tuple(price_schedule.items()),
+            apply_escalation=apply_escalation,
+        )
 
     @classmethod
-    def callable(cls, price_callable: Callable[[GenerationSettlementEvent], float]) -> Self:
+    def callable(
+        cls,
+        price_callable: Callable[[GenerationSettlementEvent], float],
+        apply_escalation: bool = False,
+    ) -> Self:
         """Return a per-MWh generation price resolved from a settlement callback.
 
         Parameters
         ----------
         price_callable : Callable[[GenerationSettlementEvent], float]
             Callback invoked for each settlement event.
+        apply_escalation : bool, optional
+            Whether the project escalation policy should be applied on top of the
+            callable's returned price value. Defaults to False.
 
         Returns
         -------
         GenerationPrice
             Price policy that delegates price resolution to ``price_callable``.
         """
-        return cls(mode="callable", price_callable=price_callable)
+        return cls(
+            mode="callable",
+            price_callable=price_callable,
+            apply_escalation=apply_escalation,
+        )
 
     def resolve(self, event: GenerationSettlementEvent) -> float:
         """Resolve the per-MWh price for an event.
@@ -205,7 +233,7 @@ class GenerationPrice:
         Returns
         -------
         float
-            Per-MWh settlement price.
+            Per-MWh settlement price without escalation.
 
         Raises
         ------
