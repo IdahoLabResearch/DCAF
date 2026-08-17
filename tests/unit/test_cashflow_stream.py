@@ -330,6 +330,13 @@ def test_apply_with_condition(_create_cf_stream):
     assert cf_stream_old[0].amount == -500  # Verifies that the original object was not modified
 
 
+def test_apply_preserves_output_ordering(_create_cf_stream):
+    """apply() is one-to-one and preserves input order in its output."""
+    cf_stream, flows = _create_cf_stream
+    result = cf_stream.apply(lambda cf: cf.replace(amount=cf.amount * 2))
+    assert [flow.date for flow in result.entries] == [flow.date for flow in flows]
+
+
 def test_apply_streamwise(_create_cf_stream):
     """Tests the CashFlowStream.apply_streamwise method."""
 
@@ -388,6 +395,43 @@ def test_group_by(_create_cf_stream):
     assert len(cf_group.groups) == 2
     assert cf_group[False].entries == [flows[0], flows[1], flows[2]]
     assert cf_group[True].entries == [flows[3]]
+
+
+def test_group_by_no_selector_raises(_create_cf_stream):
+    """group_by() with neither a callable nor a period raises ValueError."""
+    cf_stream = _create_cf_stream[0]
+    with pytest.raises(ValueError, match="Provide exactly one of 'fn' or 'period'"):
+        cf_stream.group_by()
+
+
+def test_group_by_both_selectors_raises(_create_cf_stream):
+    """group_by() with both a callable and a period raises ValueError."""
+    cf_stream = _create_cf_stream[0]
+    with pytest.raises(ValueError, match="Provide exactly one of 'fn' or 'period'"):
+        cf_stream.group_by(lambda cf: cf.date.month, period="month")
+
+
+def test_group_by_period_matches_group_by_period_kwarg(_create_cf_stream):
+    """group_by_period(period) produces the same groups as group_by(period=period)."""
+    cf_stream = _create_cf_stream[0]
+    via_helper = cf_stream.group_by_period("month")
+    via_kwarg = cf_stream.group_by(period="month")
+    assert via_helper.groups.keys() == via_kwarg.groups.keys()
+    for key in via_helper.groups:
+        assert via_helper[key].entries == via_kwarg[key].entries
+
+
+def test_group_by_preserves_total_count_and_duplicates(_create_cf_stream):
+    """Grouping preserves the total entry count and all duplicate entries."""
+    _, flows = _create_cf_stream
+    duplicate = flows[0]
+    stream = CashFlowStream([flows[0], duplicate, flows[1], flows[2], flows[3]])
+
+    cf_group = stream.group_by(lambda cf: cf.pro_forma_category)
+
+    grouped_entries = [entry for entries in cf_group.groups.values() for entry in entries.entries]
+    assert len(grouped_entries) == len(stream.entries)
+    assert grouped_entries.count(duplicate) == 2
 
 
 def test_group_by_pro_forma_category(_create_cf_stream):
@@ -480,6 +524,47 @@ def test_sort(_create_cf_stream):
     assert cf_stream_old.entries == flows
 
 
+def test_sort_stable_for_equal_keys():
+    """Sorting is stable: entries with equal keys keep their relative order."""
+    cf_a = CashFlow(amount=100.0, date=date(2026, 1, 1), label="a")
+    cf_b = CashFlow(amount=200.0, date=date(2026, 1, 1), label="b")
+    cf_c = CashFlow(amount=300.0, date=date(2026, 1, 1), label="c")
+    stream = CashFlowStream([cf_b, cf_a, cf_c])
+
+    result = stream.sort(lambda cf: cf.date)
+
+    assert result.entries == [cf_b, cf_a, cf_c]
+
+
+def test_scale_changes_only_amount(_create_cf_stream):
+    """scale() changes only amount and preserves all other fields."""
+    cf_stream, flows = _create_cf_stream
+    scaled = cf_stream.scale(1.5)
+    for original, scaled_flow in zip(flows, scaled.entries):
+        assert scaled_flow.amount == pytest.approx(original.amount * 1.5)
+        assert scaled_flow.date == original.date
+        assert scaled_flow.label == original.label
+        assert scaled_flow.is_cash == original.is_cash
+        assert scaled_flow.pro_forma_category == original.pro_forma_category
+        assert scaled_flow.tax_treatment == original.tax_treatment
+
+
+@pytest.mark.parametrize(
+    ("factor", "expected_multiplier"),
+    [
+        (1, 1),
+        (0, 0),
+        (-2, -2),
+    ],
+)
+def test_scale_identity_zero_and_sign_reversal(_create_cf_stream, factor, expected_multiplier):
+    """Scaling by 1, 0, and a negative factor covers identity, zero, and sign reversal."""
+    cf_stream, flows = _create_cf_stream
+    result = cf_stream.scale(factor)
+    for original, scaled_flow in zip(flows, result.entries):
+        assert scaled_flow.amount == pytest.approx(original.amount * expected_multiplier)
+
+
 def test_scale(_create_cf_stream):
     """Tests the CashFlowStream.scale method."""
     cf_stream, flows = _create_cf_stream
@@ -534,6 +619,29 @@ def test_getitem_slice_dunder(_create_cf_stream):
     result = cf_stream[1:3]
     assert isinstance(result, CashFlowStream)
     assert result.entries == [flows[1], flows[2]]
+
+
+def test_getitem_negative_index_matches_list(_create_cf_stream):
+    """Negative indices match ordinary Python list indexing."""
+    cf_stream, flows = _create_cf_stream
+    assert cf_stream[-1] == flows[-1]
+    assert cf_stream[-2] == flows[-2]
+
+
+def test_getitem_stepped_slice_matches_list(_create_cf_stream):
+    """Stepped slices match ordinary Python list slicing."""
+    cf_stream, flows = _create_cf_stream
+    result = cf_stream[::2]
+    assert isinstance(result, CashFlowStream)
+    assert result.entries == flows[::2]
+
+
+def test_getitem_reversed_slice_matches_list(_create_cf_stream):
+    """Reversed slices match ordinary Python list slicing."""
+    cf_stream, flows = _create_cf_stream
+    result = cf_stream[::-1]
+    assert isinstance(result, CashFlowStream)
+    assert result.entries == flows[::-1]
 
 
 def test_truthiness_follows_length(_create_cf_stream):
@@ -679,6 +787,140 @@ def test_filter_by_pro_forma_category_empty_stream():
     assert result.entries == []
 
 
+def test_filter_no_predicate_or_kwargs_raises(_create_cf_stream):
+    """filter() with neither a callable predicate nor keyword criteria raises ValueError."""
+    cf_stream = _create_cf_stream[0]
+    with pytest.raises(ValueError, match="Provide either a callable predicate or keyword"):
+        cf_stream.filter()
+
+
+def test_filter_predicate_and_kwargs_raises(_create_cf_stream):
+    """filter() with both a callable predicate and keyword criteria raises ValueError."""
+    cf_stream = _create_cf_stream[0]
+    with pytest.raises(ValueError, match="Cannot combine a callable predicate"):
+        cf_stream.filter(lambda cf: True, is_cash=True)
+
+
+def test_filter_multiple_keywords_use_and_semantics():
+    """Multiple keyword criteria are combined with AND, not OR."""
+    matches_both = CashFlow(
+        amount=100.0,
+        date=date(2026, 1, 1),
+        pro_forma_category=ProFormaCategory.OPERATING_COST,
+        is_cash=True,
+    )
+    matches_category_only = CashFlow(
+        amount=200.0,
+        date=date(2026, 2, 1),
+        pro_forma_category=ProFormaCategory.OPERATING_COST,
+        is_cash=False,
+    )
+    matches_is_cash_only = CashFlow(
+        amount=300.0,
+        date=date(2026, 3, 1),
+        pro_forma_category=ProFormaCategory.REVENUE,
+        is_cash=True,
+    )
+    stream = CashFlowStream([matches_both, matches_category_only, matches_is_cash_only])
+
+    result = stream.filter(pro_forma_category=ProFormaCategory.OPERATING_COST, is_cash=True)
+
+    # If AND were accidentally changed to OR, all three entries would match.
+    assert result.entries == [matches_both]
+
+
+def test_filter_is_cash_false_selects_non_cash_entries():
+    """is_cash=False must select non-cash entries, not be treated as an omitted argument."""
+    cash_flow = CashFlow(amount=100.0, date=date(2026, 1, 1), is_cash=True)
+    non_cash_flow = CashFlow(amount=200.0, date=date(2026, 2, 1), is_cash=False)
+    stream = CashFlowStream([cash_flow, non_cash_flow])
+
+    result = stream.filter(is_cash=False)
+
+    # A bug that treats `False` as "not provided" would return both entries.
+    assert result.entries == [non_cash_flow]
+
+
+def test_filter_pro_forma_category_none_selects_uncategorized():
+    """pro_forma_category=None selects only entries with no pro-forma category."""
+    categorized = CashFlow(
+        amount=100.0,
+        date=date(2026, 1, 1),
+        pro_forma_category=ProFormaCategory.REVENUE,
+    )
+    uncategorized = CashFlow(amount=200.0, date=date(2026, 2, 1), pro_forma_category=None)
+    stream = CashFlowStream([categorized, uncategorized])
+
+    result = stream.filter(pro_forma_category=None)
+
+    assert result.entries == [uncategorized]
+
+
+def test_filter_string_classification_normalized_consistently():
+    """String pro_forma_category/tax_treatment inputs are normalized like enum inputs."""
+    flow = CashFlow(
+        amount=100.0,
+        date=date(2026, 1, 1),
+        pro_forma_category=ProFormaCategory.OPERATING_COST,
+        tax_treatment=TaxTreatment.DEDUCTIBLE,
+    )
+    other_flow = CashFlow(
+        amount=200.0,
+        date=date(2026, 2, 1),
+        pro_forma_category=ProFormaCategory.REVENUE,
+        tax_treatment=TaxTreatment.TAXABLE,
+    )
+    stream = CashFlowStream([flow, other_flow])
+
+    enum_result = stream.filter(
+        pro_forma_category=ProFormaCategory.OPERATING_COST,
+        tax_treatment=TaxTreatment.DEDUCTIBLE,
+    )
+    string_result = stream.filter(
+        pro_forma_category="Operating Cost",
+        tax_treatment="DEDUCTIBLE",
+    )
+
+    assert string_result.entries == enum_result.entries == [flow]
+
+
+# ---- non-mutation sweep ----
+
+
+@pytest.mark.parametrize(
+    ("name", "op"),
+    [
+        ("filter_predicate", lambda s: s.filter(lambda cf: cf.amount > 0)),
+        ("filter_kwargs", lambda s: s.filter(is_cash=True)),
+        ("group_by", lambda s: s.group_by(lambda cf: cf.label)),
+        ("group_by_period", lambda s: s.group_by(period="month")),
+        ("group_by_pro_forma_category", lambda s: s.group_by_pro_forma_category()),
+        ("group_by_tax_treatment", lambda s: s.group_by_tax_treatment()),
+        ("sort", lambda s: s.sort(lambda cf: cf.amount)),
+        ("scale", lambda s: s.scale(2.0)),
+        ("apply", lambda s: s.apply(lambda cf: cf.replace(amount=cf.amount * 2))),
+        ("flat_apply", lambda s: s.flat_apply(lambda cf: [cf, cf])),
+        ("filter_apply", lambda s: s.filter_apply(lambda cf: cf if cf.amount > 0 else None)),
+        ("date_range", lambda s: s.date_range(start=date(2026, 2, 1))),
+        ("inflows", lambda s: s.inflows()),
+        ("outflows", lambda s: s.outflows()),
+        ("cash_only", lambda s: s.cash_only()),
+        ("append", lambda s: s.append(CashFlow(999.0, date(2026, 12, 31)))),
+        ("extend", lambda s: s.extend([CashFlow(999.0, date(2026, 12, 31))])),
+        ("getitem_slice", lambda s: s[1:3]),
+    ],
+)
+def test_non_mutating_methods_leave_original_unchanged(_create_cf_stream, name, op):
+    """Every non-mutating method leaves the original entry sequence unchanged."""
+    cf_stream, flows = _create_cf_stream
+    original_entries = list(cf_stream.entries)
+
+    op(cf_stream)
+
+    assert cf_stream.entries == original_entries
+    assert cf_stream.entries == flows
+
+
 # ---- append tests ----
 
 
@@ -769,6 +1011,22 @@ def test_flat_apply_empty_stream():
     assert result.entries == []
 
 
+def test_flat_apply_preserves_output_ordering():
+    """flat_apply() emits entries in order: per-input in order, each input's outputs in order."""
+    cf1 = CashFlow(100.0, date(2026, 1, 1), label="a")
+    cf2 = CashFlow(200.0, date(2026, 2, 1), label="b")
+    stream = CashFlowStream([cf1, cf2])
+
+    def _split(cf):
+        return [
+            cf.replace(label=f"{cf.label}_1"),
+            cf.replace(label=f"{cf.label}_2"),
+        ]
+
+    result = stream.flat_apply(_split)
+    assert [flow.label for flow in result.entries] == ["a_1", "a_2", "b_1", "b_2"]
+
+
 # ---- filter_apply tests ----
 
 
@@ -792,6 +1050,18 @@ def test_filter_apply_all_none():
     stream = CashFlowStream([CashFlow(100.0, date(2026, 1, 1))])
     result = stream.filter_apply(lambda cf: None)
     assert result.entries == []
+
+
+def test_filter_apply_preserves_output_ordering():
+    """filter_apply() preserves the relative order of surviving entries."""
+    cf1 = CashFlow(100.0, date(2026, 1, 1), label="a")
+    cf2 = CashFlow(-50.0, date(2026, 2, 1), label="b")
+    cf3 = CashFlow(300.0, date(2026, 3, 1), label="c")
+    stream = CashFlowStream([cf1, cf2, cf3])
+
+    result = stream.filter_apply(lambda cf: cf if cf.amount > 0 else None)
+
+    assert [flow.label for flow in result.entries] == ["a", "c"]
 
 
 def test_filter_apply_empty_stream():
@@ -823,6 +1093,17 @@ def test_cash_only(_create_cf_stream):
     result = cf_stream.cash_only()
     # cf3 has is_cash=False, rest are True
     assert result.entries == [flows[0], flows[1], flows[3]]
+
+
+def test_inflows_and_outflows_exclude_zero_amount():
+    """A zero-valued cashflow is in neither inflows() nor outflows()."""
+    positive = CashFlow(amount=100.0, date=date(2026, 1, 1))
+    zero = CashFlow(amount=0.0, date=date(2026, 2, 1))
+    negative = CashFlow(amount=-100.0, date=date(2026, 3, 1))
+    stream = CashFlowStream([positive, zero, negative])
+
+    assert stream.inflows().entries == [positive]
+    assert stream.outflows().entries == [negative]
 
 
 # ---- date_range tests ----
@@ -860,6 +1141,24 @@ def test_date_range_empty_result(_create_cf_stream):
     """Tests date_range that matches nothing."""
     cf_stream = _create_cf_stream[0]
     result = cf_stream.date_range(start=date(2030, 1, 1))
+    assert result.entries == []
+
+
+def test_date_range_includes_start_excludes_end():
+    """date_range(start, end) includes an entry exactly on start and excludes one exactly on end."""
+    on_start = CashFlow(amount=100.0, date=date(2026, 1, 1))
+    on_end = CashFlow(amount=200.0, date=date(2026, 2, 1))
+    stream = CashFlowStream([on_start, on_end])
+
+    result = stream.date_range(start=date(2026, 1, 1), end=date(2026, 2, 1))
+
+    assert result.entries == [on_start]
+
+
+def test_date_range_same_start_and_end_is_empty(_create_cf_stream):
+    """date_range(start, start) returns an empty stream."""
+    cf_stream = _create_cf_stream[0]
+    result = cf_stream.date_range(start=date(2026, 1, 1), end=date(2026, 1, 1))
     assert result.entries == []
 
 
