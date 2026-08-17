@@ -385,6 +385,33 @@ def test_generation_contract_and_remainder_prices_without_escalation_flag_ignore
     )
 
 
+def test_generation_contract_and_remainder_prices_with_escalation_flag_use_project_default_escalation():
+    analysis = (
+        EnergyProject()
+        .default_escalation(rate=0.10)
+        .generation_stream(stream=_two_year_generation())
+        .generation_revenue_contract(
+            name="revenue:ppa",
+            contract=EnergyContract.fraction_of_generation(
+                generation_share=0.50,
+                price=GenerationPrice.fixed(50.0, apply_escalation=True),
+            ),
+        )
+        .generation_revenue_remainder(
+            name="revenue:merchant",
+            price=GenerationPrice.fixed(40.0, apply_escalation=True),
+        )
+        .analyze()
+    )
+
+    assert [flow.amount for flow in analysis.cashflow_components["revenue:ppa"]] == (
+        pytest.approx([2_500.0, 2_750.0])
+    )
+    assert [flow.amount for flow in analysis.cashflow_components["revenue:merchant"]] == (
+        pytest.approx([2_000.0, 2_200.0])
+    )
+
+
 def test_generation_revenue_fixed_price_policy_can_use_project_default_escalation():
     analysis = (
         EnergyProject()
