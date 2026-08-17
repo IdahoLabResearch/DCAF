@@ -505,16 +505,20 @@ class ProjectCompiler:
                     "scheduled and callable generation_revenue prices are not supported "
                     "for construction outages"
                 )
+            settlements = self._project_generation_settlements(generation.entries)
             if isinstance(market.price, GenerationPrice):
                 assert market.price.fixed_price is not None
                 price_per_mwh = market.price.fixed_price
-                escalation = EscalationSettings(explicit=True)
+                policy = self._resolve_price_escalation(settlements, market.price)
+                escalation = (
+                    EscalationSettings(policy=policy, explicit=True)
+                    if policy is not None
+                    else EscalationSettings(explicit=True)
+                )
             else:
                 price_per_mwh = market.price
                 escalation = EscalationSettings(
-                    policy=self._generation_revenue_price_escalation(
-                        self._project_generation_settlements(generation.entries)
-                    ),
+                    policy=self._generation_revenue_price_escalation(settlements),
                     explicit=True,
                 )
         else:
@@ -556,9 +560,7 @@ class ProjectCompiler:
         if market is None:
             return CashFlowStream()
         settlements = self._project_generation_settlements(generation.entries)
-        price_escalation: EscalationPolicy | None = None
-        if isinstance(market.price, float):
-            price_escalation = self._generation_revenue_price_escalation(settlements)
+        price_escalation = self._resolve_price_escalation(settlements, market.price)
         return self._revenue_cashflows_from_generation(
             name="revenue",
             settlements=settlements,
@@ -588,6 +590,23 @@ class ProjectCompiler:
             period=escalation.escalation_period,
             day_count_convention=self.config.day_count_convention,
         )
+
+    def _resolve_price_escalation(
+        self,
+        settlements: list[_GenerationSettlement],
+        price: float | GenerationPrice,
+    ) -> EscalationPolicy | None:
+        """Resolve the escalation policy for a scalar or generation price.
+
+        Scalar prices inherit the project default escalation. GenerationPrice
+        instances inherit the project default only when ``apply_escalation`` is
+        True.
+        """
+        if isinstance(price, float):
+            return self._generation_revenue_price_escalation(settlements)
+        if isinstance(price, GenerationPrice) and price.apply_escalation:
+            return self._generation_revenue_price_escalation(settlements)
+        return None
 
     def _project_generation_settlements(
         self,
@@ -643,21 +662,29 @@ class ProjectCompiler:
         streams: list[tuple[str, CashFlowStream]] = []
         for registration in self.config.generation_linked_policies:
             if isinstance(registration, GenerationRevenueContractConfig):
+                price_escalation = self._resolve_price_escalation(
+                    list(settlements_by_contract[registration.name]),
+                    registration.contract.price,
+                )
                 stream = self._revenue_cashflows_from_generation(
                     name=registration.name,
                     settlements=settlements_by_contract[registration.name],
                     price=registration.contract.price,
-                    price_escalation=None,
+                    price_escalation=price_escalation,
                     label=registration.contract.label,
                     pro_forma_category=registration.contract.pro_forma_category,
                     tax_treatment=registration.contract.tax_treatment,
                 )
             elif isinstance(registration, GenerationRevenueRemainderConfig):
+                price_escalation = self._resolve_price_escalation(
+                    list(remainder_settlements),
+                    registration.price,
+                )
                 stream = self._revenue_cashflows_from_generation(
                     name=registration.name,
                     settlements=remainder_settlements,
                     price=registration.price,
-                    price_escalation=None,
+                    price_escalation=price_escalation,
                     label=registration.label,
                     pro_forma_category=registration.pro_forma_category,
                     tax_treatment=registration.tax_treatment,

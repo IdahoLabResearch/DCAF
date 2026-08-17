@@ -324,7 +324,7 @@ def test_generation_revenue_float_price_uses_default_escalation_reference_date()
     ],
     ids=["fixed", "schedule", "callable"],
 )
-def test_explicit_generation_price_ignores_project_default_escalation(
+def test_explicit_generation_price_without_escalation_flag_ignores_project_default_escalation(
     price: GenerationPrice,
 ):
     analysis = (
@@ -358,7 +358,7 @@ def test_generation_revenue_requires_exactly_one_price_source():
         )
 
 
-def test_generation_contract_and_remainder_prices_ignore_project_default_escalation():
+def test_generation_contract_and_remainder_prices_without_escalation_flag_ignore_project_default_escalation():
     analysis = (
         EnergyProject()
         .default_escalation(rate=0.10)
@@ -383,6 +383,77 @@ def test_generation_contract_and_remainder_prices_ignore_project_default_escalat
     assert [flow.amount for flow in analysis.cashflow_components["revenue:merchant"]] == (
         pytest.approx([2_000.0, 2_000.0])
     )
+
+
+def test_generation_contract_and_remainder_prices_with_escalation_flag_use_project_default_escalation():
+    analysis = (
+        EnergyProject()
+        .default_escalation(rate=0.10)
+        .generation_stream(stream=_two_year_generation())
+        .generation_revenue_contract(
+            name="revenue:ppa",
+            contract=EnergyContract.fraction_of_generation(
+                generation_share=0.50,
+                price=GenerationPrice.fixed(50.0, apply_escalation=True),
+            ),
+        )
+        .generation_revenue_remainder(
+            name="revenue:merchant",
+            price=GenerationPrice.fixed(40.0, apply_escalation=True),
+        )
+        .analyze()
+    )
+
+    assert [flow.amount for flow in analysis.cashflow_components["revenue:ppa"]] == (
+        pytest.approx([2_500.0, 2_750.0])
+    )
+    assert [flow.amount for flow in analysis.cashflow_components["revenue:merchant"]] == (
+        pytest.approx([2_000.0, 2_200.0])
+    )
+
+
+def test_generation_revenue_fixed_price_policy_can_use_project_default_escalation():
+    analysis = (
+        EnergyProject()
+        .default_escalation(rate=0.10)
+        .generation_stream(stream=_two_year_generation())
+        .generation_revenue(price_policy=GenerationPrice.fixed(50.0, apply_escalation=True))
+        .analyze()
+    )
+
+    revenue = analysis.cashflow_components["revenue"]
+
+    assert [flow.amount for flow in revenue] == pytest.approx([5_000.0, 5_500.0])
+
+
+@pytest.mark.parametrize(
+    "price_policy",
+    [
+        GenerationPrice.schedule(
+            {
+                date(2026, 1, 1): 50.0,
+                date(2027, 1, 1): 50.0,
+            },
+            apply_escalation=True,
+        ),
+        GenerationPrice.callable(lambda _event: 50.0, apply_escalation=True),
+    ],
+    ids=["schedule", "callable"],
+)
+def test_generation_revenue_scheduled_and_callable_prices_can_use_project_default_escalation(
+    price_policy: GenerationPrice,
+):
+    analysis = (
+        EnergyProject()
+        .default_escalation(rate=0.10)
+        .generation_stream(stream=_two_year_generation())
+        .generation_revenue(price_policy=price_policy)
+        .analyze()
+    )
+
+    revenue = analysis.cashflow_components["revenue"]
+
+    assert [flow.amount for flow in revenue] == pytest.approx([5_000.0, 5_500.0])
 
 
 def test_generation_revenue_schedule_settles_each_event_at_its_exact_date_price():

@@ -419,6 +419,56 @@ def test_construction_outage_scalar_market_price_inherits_default_escalation():
     assert impact.sum() == pytest.approx(-(24.0 * 50.0 * 1.10))
 
 
+def test_construction_outage_generation_price_with_escalation_flag_uses_default_escalation():
+    project = (
+        EnergyProject()
+        .default_escalation(rate=0.10, amount_reference_date=date(2025, 1, 1))
+        .generation(
+            capacity_mw=10.0,
+            capacity_factor=1.0,
+            operations_start=date(2026, 1, 1),
+            operations_end=date(2027, 1, 1),
+        )
+        .generation_revenue(price_policy=GenerationPrice.fixed(50.0, apply_escalation=True))
+        .construction_outage(
+            start=date(2026, 1, 1),
+            end=date(2026, 1, 2),
+            capacity_mw=1.0,
+            capacity_factor=1.0,
+            timing="begin",
+        )
+    )
+
+    impact = project.analyze().cashflow_components["construction_outage"]
+
+    assert impact.sum() == pytest.approx(-(24.0 * 50.0 * 1.10))
+
+
+def test_construction_outage_generation_price_without_escalation_flag_ignores_default_escalation():
+    project = (
+        EnergyProject()
+        .default_escalation(rate=0.10, amount_reference_date=date(2025, 1, 1))
+        .generation(
+            capacity_mw=10.0,
+            capacity_factor=1.0,
+            operations_start=date(2026, 1, 1),
+            operations_end=date(2027, 1, 1),
+        )
+        .generation_revenue(price_policy=GenerationPrice.fixed(50.0))
+        .construction_outage(
+            start=date(2026, 1, 1),
+            end=date(2026, 1, 2),
+            capacity_mw=1.0,
+            capacity_factor=1.0,
+            timing="begin",
+        )
+    )
+
+    impact = project.analyze().cashflow_components["construction_outage"]
+
+    assert impact.sum() == pytest.approx(-(24.0 * 50.0))
+
+
 def test_construction_outage_scalar_market_price_uses_earliest_generation_reference():
     project = (
         EnergyProject()
