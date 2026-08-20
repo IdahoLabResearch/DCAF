@@ -10,8 +10,10 @@ from datetime import date
 from dcaf.finance.escalation import ConstantRateEscalation, EscalationPolicy
 from dcaf.project._builder_config import (
     CustomGenerationLinkedPolicyConfig,
+    EscalationSettings,
     GenerationRevenueContractConfig,
     GenerationRevenueRemainderConfig,
+    RevenueConfig,
 )
 from dcaf.project._compiler.context import AnalysisContext
 from dcaf.project._contract_settlements import settle_generation_contracts, settlement_event
@@ -122,6 +124,57 @@ def build_generation_linked_policy_streams(
             continue
         streams.append((registration.name, stream))
     return tuple(streams)
+
+
+def resolve_scalar_market_price(
+    context: AnalysisContext,
+    market: RevenueConfig,
+    generation: Iterable[Generation],
+) -> tuple[float, EscalationSettings]:
+    """Resolve a scalar price and its escalation for a fixed-price market config.
+
+    Requires ``market.price`` to be a bare float or a :class:`GenerationPrice`
+    in "fixed" mode; callers must validate this before calling.
+
+    Parameters
+    ----------
+    context : AnalysisContext
+        The compiling analysis context, used for timeline and escalation defaults.
+    market : RevenueConfig
+        The market revenue configuration whose price is being resolved.
+    generation : Iterable[Generation]
+        The generation entries to settle for escalation reference-date inference.
+
+    Returns
+    -------
+    tuple[float, EscalationSettings]
+        The resolved price per MWh and its escalation settings.
+
+    Raises
+    ------
+    ValueError
+        If ``market.price`` is a :class:`GenerationPrice` without ``fixed_price`` set.
+    """
+    settlements = _project_generation_settlements(context, list(generation))
+    if isinstance(market.price, GenerationPrice):
+        if market.price.fixed_price is None:
+            raise ValueError(
+                "market.price must be a GenerationPrice in fixed mode with fixed_price set"
+            )
+        price_per_mwh = market.price.fixed_price
+        policy = _resolve_price_escalation(context, settlements, market.price)
+        escalation = (
+            EscalationSettings(policy=policy, explicit=True)
+            if policy is not None
+            else EscalationSettings(explicit=True)
+        )
+    else:
+        price_per_mwh = market.price
+        escalation = EscalationSettings(
+            policy=_generation_revenue_price_escalation(context, settlements),
+            explicit=True,
+        )
+    return price_per_mwh, escalation
 
 
 def _generation_revenue_price_escalation(

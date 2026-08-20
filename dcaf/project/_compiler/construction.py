@@ -13,7 +13,6 @@ from dcaf.finance.outage import construction_outage as construction_outage_helpe
 from dcaf.project._builder_config import (
     ConstructionFinancingConfig,
     ConstructionOutageConfig,
-    EscalationSettings,
 )
 from dcaf.project._compiler import revenue
 from dcaf.project._compiler.context import AnalysisContext, ComponentAccumulator
@@ -144,22 +143,9 @@ def build_construction_outage(
                 "scheduled and callable generation_revenue prices are not supported "
                 "for construction outages"
             )
-        settlements = revenue._project_generation_settlements(context, generation.entries)
-        if isinstance(market.price, GenerationPrice):
-            assert market.price.fixed_price is not None
-            price_per_mwh = market.price.fixed_price
-            policy = revenue._resolve_price_escalation(context, settlements, market.price)
-            escalation = (
-                EscalationSettings(policy=policy, explicit=True)
-                if policy is not None
-                else EscalationSettings(explicit=True)
-            )
-        else:
-            price_per_mwh = market.price
-            escalation = EscalationSettings(
-                policy=revenue._generation_revenue_price_escalation(context, settlements),
-                explicit=True,
-            )
+        price_per_mwh, escalation = revenue.resolve_scalar_market_price(
+            context, market, generation.entries
+        )
     else:
         price_per_mwh = outage.sell_price_per_unit
         escalation = context.effective_escalation(outage.escalation)

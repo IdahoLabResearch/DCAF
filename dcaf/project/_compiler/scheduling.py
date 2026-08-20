@@ -22,6 +22,13 @@ from dcaf.shared.types import Period, TimingConvention
 from dcaf.streams.cashflows import CashFlowStream
 
 
+def _inclusive_phase_end(phase_end: date | None) -> date | None:
+    """Convert an exclusive phase-end boundary to the inclusive last-allowable date."""
+    if phase_end is None:
+        return None
+    return phase_end - relativedelta(days=1)
+
+
 @dataclass(frozen=True)
 class ScheduledPeriod:
     """One modeled operating period with an optional partial-period fraction.
@@ -96,7 +103,7 @@ def _schedule_from_period_count(
     if periods <= 0:
         raise ValueError(f"{section} periods must be positive")
 
-    phase_end_inclusive = phase_end - relativedelta(days=1) if phase_end is not None else None
+    phase_end_inclusive = _inclusive_phase_end(phase_end)
     windows = period_windows(
         start,
         periods,
@@ -163,7 +170,7 @@ def _schedule_from_operations_end(
     if exclusive_end <= start:
         raise ValueError(f"timeline.operations_end must be after the {section} start")
 
-    phase_end_inclusive = phase_end - relativedelta(days=1) if phase_end is not None else None
+    phase_end_inclusive = _inclusive_phase_end(phase_end)
     operations_end_inclusive = exclusive_end - relativedelta(days=1)
     effective_phase_end = (
         phase_end_inclusive if phase_end_inclusive is not None else operations_end_inclusive
@@ -210,13 +217,7 @@ def remap_event_dates(
     end are dropped with a warning.
     """
     timing = context.config.timeline.timing
-    phase_end_inclusive = (
-        None
-        if truncate_after_phase_end
-        else phase_end - relativedelta(days=1)
-        if phase_end is not None
-        else None
-    )
+    phase_end_inclusive = None if truncate_after_phase_end else _inclusive_phase_end(phase_end)
     remapped = stream.apply(
         lambda cf: dc_replace(
             cf,
