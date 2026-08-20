@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "dcaf-idaholab"
-version = "0.2.1"
+version = "0.2.2"
 description = "Discounted Cashflow Analysis Framework is a financial engineering library for nuclear energy projects."
 readme = "README.md"
 requires-python = ">=3.11"

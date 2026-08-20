@@ -10,7 +10,7 @@ from dcaf.finance import ConstantRateEscalation
 from dcaf.finance.amortization import AmortizationSchedule
 from dcaf.finance.construction import ConstructionCashFlows
 from dcaf.finance.opex import fixed_opex
-from dcaf.project._compiler import ProjectCompiler
+from dcaf.project._compiler import ProjectCompiler, debt
 from dcaf.project.timeline import ProjectTimeline
 from dcaf.shared.time import PeriodTruncationWarning, ScheduleTruncationWarning
 from dcaf.shared.types import (
@@ -457,7 +457,7 @@ def test_debt_proceeds_use_explicit_bases_instead_of_cash_classification():
         full_debt_basis=CashFlowStream([full_debt_flow]),
     )
 
-    proceeds = compiler.build_debt_proceeds(construction)
+    proceeds = debt.build_debt_proceeds(compiler.context, construction)
 
     assert [flow.amount for flow in proceeds] == pytest.approx([50.0, 20.0])
     assert [flow.is_cash for flow in proceeds] == [False, True]
