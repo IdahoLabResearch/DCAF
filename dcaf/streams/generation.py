@@ -37,7 +37,7 @@ from dcaf.shared.types import (
     TimingConvention,
     normalize_cashflow_classification,
 )
-from dcaf.shared.validation import validate_finite, validate_non_negative
+from dcaf.shared.validation import validate_date, validate_finite, validate_non_negative
 from dcaf.streams.base import BaseGroup, BaseStream
 from dcaf.metrics.npv import npv
 
@@ -71,8 +71,12 @@ class Generation:
     Raises
     ------
     ValueError
-        If neither a date nor complete period bounds are provided, if date and
-        period bounds are provided together, or if the period is empty or reversed.
+        If ``amount_mwh`` is NaN or infinite, if neither a date nor complete period
+        bounds are provided, if date and period bounds are provided together, or if
+        the period is empty or reversed.
+    TypeError
+        If ``date``, ``period_start``, or ``period_end`` is supplied but is not a plain
+        ``datetime.date`` (``datetime`` values are rejected).
 
     Notes
     -----
@@ -89,6 +93,10 @@ class Generation:
     period_end: dt.date = cast(dt.date, None)
 
     def __post_init__(self) -> None:
+        validate_finite(self.amount_mwh, "amount_mwh")
+        for name in ("date", "period_start", "period_end"):
+            if getattr(self, name) is not None:
+                validate_date(getattr(self, name), name)
         if self.date is not None and (self.period_start is not None or self.period_end is not None):
             raise ValueError("date cannot be provided together with period bounds")
         if self.date is not None:

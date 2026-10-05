@@ -38,6 +38,7 @@ from dcaf.shared.types import (
     parse_pro_forma_category,
     parse_tax_treatment,
 )
+from dcaf.shared.validation import validate_date, validate_finite
 from dcaf.metrics.npv import npv as _npv
 from dcaf.metrics.irr import irr as _irr
 
@@ -97,6 +98,13 @@ class CashFlow:
         Presentation category used for pro-forma grouping.
     tax_treatment : TaxTreatment
         Tax classification used for taxable-income assembly.
+
+    Raises
+    ------
+    ValueError
+        If ``amount`` is NaN or infinite.
+    TypeError
+        If ``date`` is not a plain ``datetime.date`` (``datetime`` values are rejected).
     """
 
     amount: float
@@ -107,6 +115,8 @@ class CashFlow:
     tax_treatment: TaxTreatment = TaxTreatment.NONE
 
     def __post_init__(self) -> None:
+        validate_finite(self.amount, "amount")
+        validate_date(self.date, "date")
         if self.pro_forma_category is not None:
             object.__setattr__(
                 self,
