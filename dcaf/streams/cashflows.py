@@ -615,13 +615,25 @@ class CashFlowStream(BaseStream[CashFlow]):
         CashFlowStream
             New stream containing only cashflows within the date range.
 
+        Raises
+        ------
+        ValueError
+            If both bounds are given and ``end`` is not after ``start``. An empty
+            interval is rejected rather than silently selecting nothing.
+
         Examples
         --------
         >>> from datetime import date
         >>> stream = CashFlowStream.from_recurring(date(2026, 1, 1), 12, 100.0, "month")
         >>> stream.date_range(date(2026, 3, 1), date(2026, 6, 1)).count()
         3
+        >>> stream.date_range(date(2026, 3, 1), date(2026, 3, 1))
+        Traceback (most recent call last):
+        ...
+        ValueError: date_range end must be after start
         """
+        if start is not None and end is not None and end <= start:
+            raise ValueError("date_range end must be after start")
         result = self.entries
         if start is not None:
             result = [flow for flow in result if flow.date >= start]

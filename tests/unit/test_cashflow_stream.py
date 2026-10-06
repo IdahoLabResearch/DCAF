@@ -1,1073 +1,792 @@
 # © 2026 Battelle Energy Alliance, LLC
 # ALL RIGHTS RESERVED
-from datetime import date
+"""Property tests for the CashFlowStream- and CashFlowGroup-specific behavior.
+
+Collection mechanics inherited from BaseStream and BaseGroup are covered by
+``test_stream_base.py``; these properties cover what CashFlowStream adds: construction, keyword
+filtering, date and sign selection, calendar grouping, default ordering, scaling, totals, and
+discounting. Edge cases of interest are pinned as explicit examples.
+"""
+
+import math
+import warnings
+from collections import Counter
+from datetime import date, timedelta
+from operator import attrgetter
+
 import pytest
+from hypothesis import assume, example, given
+from hypothesis import strategies as st
 
+from dcaf.finance.escalation import (
+    ConstantRateEscalation,
+    EscalationBuilder,
+    IndexSeriesEscalation,
+)
+from dcaf.shared.time import PeriodTruncationWarning
 from dcaf.shared.types import ProFormaCategory, TaxTreatment
-from dcaf.shared.time import PeriodTruncationWarning, elapsed_periods
-from dcaf.streams import CashFlow, CashFlowGroup, CashFlowStream, GenerationStream
-from dcaf.finance.escalation import ConstantRateEscalation, EscalationBuilder, IndexSeriesEscalation
+from dcaf.streams import CashFlow, CashFlowGroup, CashFlowStream, Generation, GenerationStream
+from strategies import (
+    DATES,
+    DAY_COUNT_CONVENTIONS,
+    FINITE_AMOUNTS,
+    FREQUENCIES,
+    LABELS,
+    NON_FINITE,
+    PERIOD_DAYS,
+    PRO_FORMA_CATEGORIES,
+    STREAM_AMOUNTS,
+    STREAM_DATES,
+    STREAM_LABELS,
+    TAX_TREATMENTS,
+    TIMINGS,
+    add_period,
+    calendar_period_key,
+    enum_spellings,
+    pooled_lists,
+    tail_days,
+    timing_point,
+    year_fraction,
+)
+
+stream_cashflows = st.builds(
+    CashFlow,
+    amount=STREAM_AMOUNTS,
+    date=STREAM_DATES,
+    label=STREAM_LABELS,
+    is_cash=st.booleans(),
+    pro_forma_category=PRO_FORMA_CATEGORIES,
+    tax_treatment=TAX_TREATMENTS,
+)
+cashflow_lists = pooled_lists(stream_cashflows)
+
+RATES = st.floats(min_value=-0.5, max_value=1.0)
+CASHFLOW_SORT_ATTRS = ["date", "amount", "label"]
+KEYS = st.functions(like=lambda cf: None, returns=st.integers(0, 2), pure=True)
 
 
-def _annual_factor(start: date, end: date, rate: float) -> float:
-    return (1.0 + rate) ** ((end - start).days / 365.0)
+def _close(actual: float, expected: float, scale: float) -> bool:
+    return math.isclose(actual, expected, rel_tol=1e-9, abs_tol=1e-9 * abs(scale) + 1e-9)
 
 
-@pytest.fixture()
-def _create_cf_stream():
-    """
-    Creates a CashFlowStream instance containing a diverse
-    set of cashflows on which tests can be executed.
-    """
-    cf1 = CashFlow(
-        amount=-500.0,
-        date=date(2026, 1, 1),
-        label="exp",
-        pro_forma_category=ProFormaCategory.OPERATING_COST,
-        tax_treatment=TaxTreatment.TAXABLE,
-    )
-    cf2 = CashFlow(
-        amount=2000.0,
-        date=date(2026, 1, 31),
-        label="rev",
-        pro_forma_category=ProFormaCategory.REVENUE,
-        tax_treatment=TaxTreatment.TAXABLE,
-    )
-    cf3 = CashFlow(
-        amount=-1000.0,
-        date=date(2026, 4, 1),
-        label="exp_2",
-        pro_forma_category=ProFormaCategory.OPERATING_COST,
+def _amount_scale(entries: list[CashFlow]) -> float:
+    return math.fsum(abs(cf.amount) for cf in entries)
+
+
+def _spellings(value):
+    """Draw an enum value as itself or as any user-facing spelling of it."""
+    return st.one_of(st.just(value), enum_spellings(value.value))
+
+
+# Cover each combination of category and cash basis, so keyword filters must AND their criteria.
+_CLASSIFIED = [
+    CashFlow(100.0, date(2028, 1, 1), pro_forma_category=ProFormaCategory.OPERATING_COST),
+    CashFlow(
+        200.0,
+        date(2028, 2, 1),
         is_cash=False,
-    )
-    cf4 = CashFlow(
-        amount=100.0,
-        date=date(2026, 6, 30),
-        label="rev_2",
-    )
-    cf_stream = CashFlowStream([cf1, cf2, cf3, cf4])
-    return (cf_stream, [cf1, cf2, cf3, cf4])
+        pro_forma_category=ProFormaCategory.OPERATING_COST,
+        tax_treatment=TaxTreatment.DEDUCTIBLE,
+    ),
+    CashFlow(300.0, date(2028, 3, 1), pro_forma_category=ProFormaCategory.REVENUE),
+    CashFlow(400.0, date(2028, 4, 1), is_cash=False, pro_forma_category=None),
+]
 
 
-def test_from_recurring_defaults():
-    """Tests the CashFlowStream.from_recurring method with defaults for all optional arguments."""
-    cf_stream = CashFlowStream.from_recurring(start=date(2026, 1, 1), periods=4, amount=1000.0)
-    assert len(cf_stream.entries) == 4
-    expected_dates = [
-        date(2026, 12, 31),
-        date(2027, 12, 31),
-        date(2028, 12, 31),
-        date(2029, 12, 31),
-    ]
-    for i, flow in enumerate(cf_stream.entries):
-        assert flow.date == expected_dates[i]  # Check that annual frequency is default
-        assert flow.amount == 1000.0  # Check that escalation is zero by default
-        assert len(flow.label) > 0  # Check that some default label is set
-        assert flow.is_cash is True  # Check that is_cash defaults to True
-        assert flow.pro_forma_category is ProFormaCategory.OTHER
-        assert flow.tax_treatment is TaxTreatment.NONE
+# === from_recurring ===
 
 
-def test_from_recurring_supports_timing_conventions():
+def _recurring_windows(start, periods, frequency, **arguments) -> list[tuple[date, date]]:
+    """Recover each generated period's ``[start, end)`` from its begin and end booking dates."""
     begin = CashFlowStream.from_recurring(
-        start=date(2026, 1, 1),
-        periods=1,
-        amount=1000.0,
-        timing="begin",
+        start, periods, 1.0, frequency, timing="begin", **arguments
     )
-    middle = CashFlowStream.from_recurring(
-        start=date(2026, 1, 1),
-        periods=1,
-        amount=1000.0,
-        timing="middle",
-    )
-    end = CashFlowStream.from_recurring(
-        start=date(2026, 1, 1),
-        periods=1,
-        amount=1000.0,
-    )
-
-    assert begin.entries[0].date == date(2026, 1, 1)
-    assert middle.entries[0].date == date(2026, 7, 2)
-    assert end.entries[0].date == date(2026, 12, 31)
-
-
-def test_from_recurring_bad_frequency():
-    """
-    Tests that the CashFlowSTream.from_recurring method
-    errors when an unacceptable frequency is provided.
-    """
-    with pytest.raises(AssertionError):
-        CashFlowStream.from_recurring(
-            start=date(2026, 1, 1),
-            periods=4,
-            amount=1000.0,
-            frequency="weekly",
-        )
-
-
-def test_from_recurring_fractional_period_prorates_complete_days_and_warns():
-    with pytest.warns(PeriodTruncationWarning, match="last included date is 2026-01-15"):
-        cf_stream = CashFlowStream.from_recurring(
-            start=date(2026, 1, 1),
-            periods=0.5,
-            amount=3100.0,
-            frequency="month",
-        )
-
-    assert cf_stream.count() == 1
-    assert cf_stream.entries[0].date == date(2026, 1, 15)
-    assert cf_stream.entries[0].amount == pytest.approx(1500.0)
-
-
-def test_from_recurring_annual_escalation_is_date_based():
-    """Annual escalation is evaluated against payment dates, not recurrence count."""
-    cf_stream = CashFlowStream.from_recurring(
-        start=date(2026, 3, 5),
-        periods=3,
-        amount=-200.0,
-        frequency="month",
-        escalation=0.1,
-        label="test recurring cf",
-        is_cash=False,
-        tax_treatment=TaxTreatment.TAXABLE,
-    )
-    expected_dates = [date(2026, 4, 4), date(2026, 5, 4), date(2026, 6, 4)]
-    expected_amounts = [
-        -200.0 * _annual_factor(date(2026, 3, 5), flow_date, 0.1) for flow_date in expected_dates
+    end = CashFlowStream.from_recurring(start, periods, 1.0, frequency, timing="end", **arguments)
+    return [
+        (first.date, last.date + timedelta(days=1)) for first, last in zip(begin, end, strict=True)
     ]
-    for i, flow in enumerate(cf_stream.entries):
-        assert flow.date == expected_dates[i]
-        assert flow.amount == pytest.approx(expected_amounts[i])
-        assert flow.label == "test recurring cf"
-        assert flow.is_cash is False
-        assert flow.pro_forma_category is ProFormaCategory.OTHER
-        assert flow.tax_treatment is TaxTreatment.TAXABLE
 
 
-def test_from_recurring_supports_explicit_nonannual_escalation_period():
-    """Non-annual escalation periods can be specified independently of frequency."""
-    cf_stream = CashFlowStream.from_recurring(
-        start=date(2030, 9, 4),
-        periods=3,
-        amount=10_000.0,
-        frequency="quarter",
-        escalation=0.2,
-        label="quarterly payment",
-        escalation_period="quarter",
-    )
-    expected_dates = [date(2030, 12, 3), date(2031, 3, 3), date(2031, 6, 3)]
-    expected_amounts = [
-        10_000.0 * (1.2 ** elapsed_periods(date(2030, 9, 4), flow_date, "quarter"))
-        for flow_date in expected_dates
-    ]
-    for i, flow in enumerate(cf_stream.entries):
-        assert flow.date == expected_dates[i]
-        assert flow.amount == pytest.approx(expected_amounts[i])
-        assert flow.label == "quarterly payment"
+@given(DATES, st.integers(0, 24), FINITE_AMOUNTS, FREQUENCIES, TIMINGS)
+@example(date(2026, 1, 1), 1, 1000.0, "year", "middle")  # books on July 2
+@example(date(2026, 1, 31), 4, 1.0, "month", "begin")  # month-end start clamps to the 28th
+@example(date(2028, 2, 29), 2, 1.0, "year", "end")  # leap-day start
+@example(date(2026, 1, 1), 0, 1.0, "year", "end")  # no periods
+def test_from_recurring_books_each_whole_period_at_its_timing_point(
+    start, periods, amount, frequency, timing
+):
+    """Whole periods tile ``[start, ...)`` without gaps, each one nominal period long, and each
+    books the unescalated amount on the period's timing point."""
+    stream = CashFlowStream.from_recurring(start, periods, amount, frequency, timing=timing)
+
+    windows = _recurring_windows(start, periods, frequency)
+    assert len(stream) == len(windows) == periods
+    assert [w_start for w_start, _ in windows] == ([start] + [end for _, end in windows])[:periods]
+    low, high = PERIOD_DAYS[frequency]
+    for (w_start, w_end), cf in zip(windows, stream, strict=True):
+        assert low <= (w_end - w_start).days <= high
+        assert cf.date == timing_point(w_start, w_end, timing)
+        assert cf.amount == amount
 
 
-def test_from_recurring_annual_escalation_supports_daily_frequency():
-    """Daily recurring streams still treat bare escalation as annual by default."""
-    start = date(2026, 1, 1)
-    cf_stream = CashFlowStream.from_recurring(
-        start=start,
-        periods=3,
-        amount=100.0,
-        frequency="day",
-        escalation=0.1,
-    )
-    expected_dates = [date(2026, 1, 1), date(2026, 1, 2), date(2026, 1, 3)]
-    expected_amounts = [
-        100.0 * _annual_factor(start, flow_date, 0.1) for flow_date in expected_dates
-    ]
-    for i, flow in enumerate(cf_stream.entries):
-        assert flow.date == expected_dates[i]
-        assert flow.amount == pytest.approx(expected_amounts[i])
+@given(DATES, st.integers(0, 4), st.floats(min_value=0.01, max_value=0.99), FREQUENCIES)
+@example(date(2026, 1, 1), 0, 0.5, "month")  # 15.5 days of January keeps 15 and warns
+@example(date(2026, 2, 1), 0, 0.5, "month")  # exactly 14 days of February does not warn
+@example(date(2026, 1, 1), 2, 0.5, "day")  # half a day is dropped entirely
+def test_from_recurring_fractional_tail_prorates_complete_days(start, whole, fraction, frequency):
+    """A fractional period count appends the complete days of the requested share of the next
+    period, at a strictly partial amount, warning exactly when a partial day is dropped."""
+    periods = whole + fraction
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        stream = CashFlowStream.from_recurring(start, periods, 1.0, frequency)
+        windows = _recurring_windows(start, periods, frequency)
+
+    tail_start = windows[whole - 1][1] if whole else start
+    days = tail_days(tail_start, periods - whole, frequency)
+    assert len(stream) == whole + (days > 0)
+    assert all(cf.amount == 1.0 for cf in stream[:whole])
+    if days:
+        assert windows[-1] == (tail_start, tail_start + timedelta(days=days))
+        assert 0.0 < stream[-1].amount < 1.0
+    requested = (periods - whole) * (add_period(tail_start, frequency) - tail_start).days
+    truncated = abs(requested - round(requested)) > 1e-12
+    assert any(issubclass(w.category, PeriodTruncationWarning) for w in caught) is truncated
 
 
-def test_from_recurring_supports_earlier_amount_reference_date():
-    """Recurring amounts can be escalated from an earlier known-value date."""
-    reference_date = date(2026, 1, 1)
-    cf_stream = CashFlowStream.from_recurring(
-        start=date(2026, 7, 1),
-        periods=2,
-        amount=100.0,
-        frequency="month",
-        escalation=0.12,
-        amount_reference_date=reference_date,
-    )
-    expected_dates = [date(2026, 7, 31), date(2026, 8, 31)]
-    expected_amounts = [
-        100.0 * _annual_factor(reference_date, flow_date, 0.12) for flow_date in expected_dates
-    ]
-    for i, flow in enumerate(cf_stream.entries):
-        assert flow.date == expected_dates[i]
-        assert flow.amount == pytest.approx(expected_amounts[i])
-
-
-def test_from_recurring_supports_escalation_policy_parity_with_constant_rate():
-    policy = ConstantRateEscalation(reference_date=date(2026, 1, 1), rate=0.12)
-    simple = CashFlowStream.from_recurring(
-        start=date(2026, 7, 1),
-        periods=2,
-        amount=100.0,
-        frequency="month",
-        escalation=0.12,
-        amount_reference_date=date(2026, 1, 1),
-    )
-    advanced = CashFlowStream.from_recurring(
-        start=date(2026, 7, 1),
-        periods=2,
-        amount=100.0,
-        frequency="month",
-        escalation_policy=policy,
-    )
-
-    assert [flow.date for flow in advanced.entries] == [flow.date for flow in simple.entries]
-    assert [flow.amount for flow in advanced.entries] == pytest.approx(
-        [flow.amount for flow in simple.entries]
-    )
-
-
-def test_from_recurring_supports_index_series_escalation_policy():
-    policy = IndexSeriesEscalation(
-        reference_date=date(2026, 1, 1),
-        points=(
-            (date(2026, 1, 1), 100.0),
-            (date(2026, 2, 1), 103.0),
-            (date(2026, 3, 1), 106.09),
+# Rates are bounded per compounding period so a decade of escalation stays finite.
+constant_rate_terms = st.sampled_from(
+    [("year", 0.2), ("quarter", 0.05), ("month", 0.02), ("day", 0.0005)]
+).flatmap(lambda term: st.tuples(st.just(term[0]), st.floats(-term[1], term[1])))
+recurring_policies = st.one_of(
+    st.builds(
+        lambda term, reference, dcc: ConstantRateEscalation(reference, term[1], term[0], dcc),
+        constant_rate_terms,
+        DATES,
+        DAY_COUNT_CONVENTIONS,
+    ),
+    # Index points start before any date drawn, so every booking date is evaluable.
+    st.builds(
+        lambda first, later, reference: IndexSeriesEscalation(
+            reference, ((date(1900, 1, 1), first), *sorted(later))
         ),
-    )
-    cf_stream = CashFlowStream.from_recurring(
-        start=date(2026, 1, 15),
-        periods=3,
-        amount=100.0,
-        frequency="month",
-        escalation_policy=policy,
-    )
-
-    assert [flow.amount for flow in cf_stream.entries] == pytest.approx([103.0, 106.09, 106.09])
-
-
-def test_from_recurring_rejects_mixed_simple_and_policy_inputs():
-    policy = ConstantRateEscalation(reference_date=date(2026, 1, 1), rate=0.02)
-
-    with pytest.raises(ValueError, match="cannot be combined"):
-        CashFlowStream.from_recurring(
-            start=date(2026, 1, 1),
-            periods=2,
-            amount=100.0,
-            escalation=0.02,
-            escalation_policy=policy,
-        )
-
-
-def test_from_recurring_rejects_escalation_builder_override():
-    builder = EscalationBuilder(reference_date=date(2026, 1, 1)).constant_rate(0.02)
-
-    with pytest.raises(TypeError, match="call \\.build\\(\\) first"):
-        CashFlowStream.from_recurring(
-            start=date(2026, 1, 1),
-            periods=2,
-            amount=100.0,
-            escalation_policy=builder,
-        )
-
-
-def test_from_streams_preserves_order_and_duplicates():
-    """from_streams concatenates mixed input forms without removing duplicates."""
-    first = CashFlow(100.0, date(2026, 1, 1), label="first")
-    duplicate = CashFlow(200.0, date(2026, 2, 1), label="duplicate")
-    last = CashFlow(300.0, date(2026, 3, 1), label="last")
-
-    result = CashFlowStream.from_streams(
-        [first, duplicate],
-        CashFlowStream([duplicate]),
-        last,
-    )
-
-    assert result.entries == [first, duplicate, duplicate, last]
-
-
-def test_from_streams_rejects_other_stream_types():
-    """from_streams rejects stream subclasses from other domains."""
-    generation_stream = GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 1)
-    with pytest.raises(TypeError, match="Cannot combine CashFlowStream with GenerationStream"):
-        CashFlowStream.from_streams(generation_stream)
-
-
-def test_filter(_create_cf_stream):
-    """Tests the CashFlowStream.filter method."""
-
-    def _predicate(cf):
-        return "exp" in cf.label
-
-    cf_stream_old = _create_cf_stream[0]
-    cf_stream_new = cf_stream_old.filter(_predicate)
-    # Check the amounts, not the labels, just to avoid anything weird
-    assert len(cf_stream_new.entries) == 2
-    assert cf_stream_new.entries[0].amount == -500
-    assert cf_stream_new.entries[1].amount == -1000
-
-    # Verify that the original cashflow stream was not modified
-    assert len(cf_stream_old.entries) == 4
-
-
-def test_group_by(_create_cf_stream):
-    """Tests the CashFlowStream.group_by method."""
-
-    def _grouping(cf):
-        return cf.date.month >= 6
-
-    cf_stream, flows = _create_cf_stream
-    cf_group = cf_stream.group_by(_grouping)
-    assert isinstance(cf_group, CashFlowGroup)
-    assert len(cf_group.groups) == 2
-    assert cf_group[False].entries == [flows[0], flows[1], flows[2]]
-    assert cf_group[True].entries == [flows[3]]
-
-
-def test_group_by_no_selector_raises(_create_cf_stream):
-    """group_by() with neither a callable nor a period raises ValueError."""
-    cf_stream = _create_cf_stream[0]
-    with pytest.raises(ValueError, match="Provide exactly one of 'fn' or 'period'"):
-        cf_stream.group_by()
-
-
-def test_group_by_both_selectors_raises(_create_cf_stream):
-    """group_by() with both a callable and a period raises ValueError."""
-    cf_stream = _create_cf_stream[0]
-    with pytest.raises(ValueError, match="Provide exactly one of 'fn' or 'period'"):
-        cf_stream.group_by(lambda cf: cf.date.month, period="month")
-
-
-def test_group_by_period_matches_group_by_period_kwarg(_create_cf_stream):
-    """group_by_period(period) produces the same groups as group_by(period=period)."""
-    cf_stream = _create_cf_stream[0]
-    via_helper = cf_stream.group_by_period("month")
-    via_kwarg = cf_stream.group_by(period="month")
-    assert via_helper.groups.keys() == via_kwarg.groups.keys()
-    for key in via_helper.groups:
-        assert via_helper[key].entries == via_kwarg[key].entries
-
-
-def test_group_by_preserves_total_count_and_duplicates(_create_cf_stream):
-    """Grouping preserves the total entry count and all duplicate entries."""
-    _, flows = _create_cf_stream
-    duplicate = flows[0]
-    stream = CashFlowStream([flows[0], duplicate, flows[1], flows[2], flows[3]])
-
-    cf_group = stream.group_by(lambda cf: cf.pro_forma_category)
-
-    grouped_entries = [entry for entries in cf_group.groups.values() for entry in entries.entries]
-    assert len(grouped_entries) == len(stream.entries)
-    assert grouped_entries.count(duplicate) == 2
-
-
-def test_group_by_pro_forma_category(_create_cf_stream):
-    """Tests grouping by pro-forma category."""
-    cf_stream, flows = _create_cf_stream
-    cf_group = cf_stream.group_by_pro_forma_category()
-    assert isinstance(cf_group, CashFlowGroup)
-    assert len(cf_group.groups) == 3
-    assert cf_group[ProFormaCategory.OPERATING_COST].entries == [flows[0], flows[2]]
-    assert cf_group[ProFormaCategory.REVENUE].entries == [flows[1]]
-    assert cf_group[ProFormaCategory.OTHER].entries == [flows[3]]
-
-
-def test_group_by_tax_treatment(_create_cf_stream):
-    """Tests grouping by tax treatment."""
-    cf_stream, flows = _create_cf_stream
-    cf_group = cf_stream.group_by_tax_treatment()
-    assert isinstance(cf_group, CashFlowGroup)
-    assert len(cf_group.groups) == 2
-    assert cf_group[TaxTreatment.TAXABLE].entries == [flows[0], flows[1]]
-    assert cf_group[TaxTreatment.NONE].entries == [flows[2], flows[3]]
-
-
-@pytest.mark.parametrize(
-    ("period, groups_by_cf_index"),
-    (
-        [
-            "day",
-            {
-                date(2026, 1, 1): [0],
-                date(2026, 1, 31): [1],
-                date(2026, 4, 1): [2],
-                date(2026, 6, 30): [3],
-            },
-        ],
-        [
-            "month",
-            {
-                date(2026, 1, 1): [0, 1],
-                date(2026, 4, 1): [2],
-                date(2026, 6, 1): [3],
-            },
-        ],
-        [
-            "quarter",
-            {
-                date(2026, 1, 1): [0, 1],
-                date(2026, 4, 1): [2, 3],
-            },
-        ],
-        [
-            "year",
-            {
-                date(2026, 1, 1): [0, 1, 2, 3],
-            },
-        ],
+        st.floats(min_value=0.5, max_value=2.0),
+        st.lists(
+            st.tuples(DATES, st.floats(min_value=0.5, max_value=2.0)),
+            max_size=4,
+            unique_by=lambda point: point[0],
+        ),
+        DATES,
     ),
 )
-def test_group_by_period(_create_cf_stream, period, groups_by_cf_index):
-    """
-    Tests the CashFlowStream.group_by(period=...) method with each allowed period.
-    Also implicitly tests the _period_start helper.
-    """
-    cf_stream, flows = _create_cf_stream
-    cf_group = cf_stream.group_by(period=period)
-    expected_groups = {}
-    for date_key, cf_indices in groups_by_cf_index.items():
-        expected_groups[date_key] = CashFlowStream([flows[cf_i] for cf_i in cf_indices])
-    assert cf_group.groups == expected_groups
 
 
-def test_group_by_period_bad_period(_create_cf_stream):
-    """
-    Tests that the CashFlowStream.group_by(period=...) method
-    errors when an unacceptable period is provided.
-    """
-    cf_stream = _create_cf_stream[0]
-    with pytest.raises(AssertionError):
-        cf_stream.group_by(period="week")
+@given(DATES, st.integers(1, 12), FINITE_AMOUNTS, FREQUENCIES, TIMINGS, recurring_policies)
+def test_from_recurring_escalates_to_each_booking_date(
+    start, periods, amount, frequency, timing, policy
+):
+    """Each amount is escalated to its own booking date, not to its period start or by
+    recurrence count, while booking dates are unaffected by escalation."""
+    flat = CashFlowStream.from_recurring(start, periods, amount, frequency, timing=timing)
+
+    escalated = CashFlowStream.from_recurring(
+        start, periods, amount, frequency, timing=timing, escalation_policy=policy
+    )
+
+    assert [cf.date for cf in escalated] == [cf.date for cf in flat]
+    for cf in escalated:
+        expected = amount * policy.factor(cf.date)
+        assert _close(cf.amount, expected, expected)
 
 
-def test_sort(_create_cf_stream):
-    """Tests the CashFlowStream.sort method."""
-    cf_stream_old, flows = _create_cf_stream
-    sorted_cf_stream = cf_stream_old.sort(lambda cf: abs(cf.amount))
-    assert isinstance(sorted_cf_stream, CashFlowStream)
-    assert sorted_cf_stream.entries == [flows[3], flows[0], flows[2], flows[1]]
-
-    # Verify that the original cashflow stream was not modified
-    assert cf_stream_old.entries == flows
-
-
-def test_sort_stable_for_equal_keys():
-    """Sorting is stable: entries with equal keys keep their relative order."""
-    cf_a = CashFlow(amount=100.0, date=date(2026, 1, 1), label="a")
-    cf_b = CashFlow(amount=200.0, date=date(2026, 1, 1), label="b")
-    cf_c = CashFlow(amount=300.0, date=date(2026, 1, 1), label="c")
-    stream = CashFlowStream([cf_b, cf_a, cf_c])
-
-    result = stream.sort(lambda cf: cf.date)
-
-    assert result.entries == [cf_b, cf_a, cf_c]
-
-
-def test_scale_changes_only_amount(_create_cf_stream):
-    """scale() changes only amount and preserves all other fields."""
-    cf_stream, flows = _create_cf_stream
-    scaled = cf_stream.scale(1.5)
-    for original, scaled_flow in zip(flows, scaled.entries):
-        assert scaled_flow.amount == pytest.approx(original.amount * 1.5)
-        assert scaled_flow.date == original.date
-        assert scaled_flow.label == original.label
-        assert scaled_flow.is_cash == original.is_cash
-        assert scaled_flow.pro_forma_category == original.pro_forma_category
-        assert scaled_flow.tax_treatment == original.tax_treatment
-
-
-@pytest.mark.parametrize(
-    ("factor", "expected_multiplier"),
-    [
-        (1, 1),
-        (0, 0),
-        (-2, -2),
-    ],
+@given(
+    DATES,
+    st.integers(1, 12),
+    FINITE_AMOUNTS,
+    FREQUENCIES,
+    constant_rate_terms,
+    st.none() | DATES,
+    DAY_COUNT_CONVENTIONS,
 )
-def test_scale_identity_zero_and_sign_reversal(_create_cf_stream, factor, expected_multiplier):
-    """Scaling by 1, 0, and a negative factor covers identity, zero, and sign reversal."""
-    cf_stream, flows = _create_cf_stream
-    result = cf_stream.scale(factor)
-    for original, scaled_flow in zip(flows, result.entries):
-        assert scaled_flow.amount == pytest.approx(original.amount * expected_multiplier)
+@example(date(2026, 7, 1), 2, 100.0, "month", ("year", 0.12), date(2026, 1, 1), "actual/actual")
+def test_from_recurring_escalation_keywords_match_constant_rate_policy(
+    start, periods, amount, frequency, term, reference, dcc
+):
+    """Escalation keywords build a constant-rate policy known on the reference date, which
+    defaults to ``start``."""
+    period, rate = term
+    policy = ConstantRateEscalation(start if reference is None else reference, rate, period, dcc)
 
-
-def test_scale(_create_cf_stream):
-    """Tests the CashFlowStream.scale method."""
-    cf_stream, flows = _create_cf_stream
-    scaled_cf_stream = cf_stream.scale(1.5)
-    assert abs(scaled_cf_stream.entries[0].amount - (-750)) < 1e-8
-    assert abs(scaled_cf_stream.entries[1].amount - 3000) < 1e-8
-
-    # Verify that the original cashflow stream was not modified
-    assert cf_stream.entries == flows
-
-
-def test_sum(_create_cf_stream):
-    """Tests the CashFlowStream.sum method."""
-    cf_stream = _create_cf_stream[0]
-    cf_sum = cf_stream.sum()
-    assert cf_sum == 600.0
-
-
-def test_min_default_key(_create_cf_stream):
-    """Tests the CashFlowStream.min method with the default key."""
-    cf_stream, flows = _create_cf_stream
-    min_cf = cf_stream.min()
-    assert min_cf == flows[2]
-
-
-def test_min_custom_key(_create_cf_stream):
-    """Tests the CashFlowStream.min method with a custom key."""
-    cf_stream, flows = _create_cf_stream
-    min_cf = cf_stream.min(lambda cf: cf.date)
-    assert min_cf == flows[0]
-
-
-def test_min_no_flows():
-    """Tests that the CashFlowStream.min method errors when the stream has no cashflows."""
-    cf_stream = CashFlowStream([])
-    with pytest.raises(ValueError):
-        cf_stream.min()
-
-
-def test_max(_create_cf_stream):
-    """Tests the CashFlowStream.max method with the default key."""
-    cf_stream, flows = _create_cf_stream
-    max_cf = cf_stream.max()
-    assert max_cf == flows[1]
-
-
-def test_max_custom_key(_create_cf_stream):
-    """Tests the CashFlowStream.max method with a custom key."""
-    cf_stream, flows = _create_cf_stream
-    max_cf = cf_stream.max(lambda cf: cf.date)
-    assert max_cf == flows[3]
-
-
-def test_max_no_flows():
-    """Tests that the CashFlowStream.max method errors when the stream has no cashflows."""
-    cf_stream = CashFlowStream([])
-    with pytest.raises(ValueError):
-        cf_stream.max()
-
-
-def test_npv_main(_create_cf_stream):
-    """Tests the CashFlowStream.npv method with a stream that has cashflows using a rate of 10%."""
-    cf_stream = _create_cf_stream[0]
-    npv = cf_stream.npv(0.1, date(2026, 1, 31))
-
-    tol = 1e-8
-    assert abs(npv - 1592.2266217233482) < tol
-
-    # cf1: -500 * (1 + 0.1)^(30 / 365) = -503.932238610309
-    # cf2: 2000 / (1 + 0.1)^0           = 2000
-    # cf3: is_cash is false, so         = 0
-    # cf4: 100 / (1 + 0.1)^(150 / 365)  = 96.158860333658
-    # ------------------------------------------------------------
-    # TOTAL                             = 1592.2266217233482
-
-
-def test_npv_default_convention(_create_cf_stream):
-    """Tests that the default day count convention is actual/actual."""
-    cf_stream = _create_cf_stream[0]
-    npv_default = cf_stream.npv(0.1, date(2026, 1, 31))
-    npv_explicit = cf_stream.npv(0.1, date(2026, 1, 31), convention="actual/actual")
-    assert npv_default == npv_explicit
-
-
-def test_npv_uses_constant_rate_escalation_for_discounting(_create_cf_stream):
-    """NPV matches evaluation through the shared constant-rate policy."""
-    cf_stream = _create_cf_stream[0]
-    valuation_date = date(2026, 1, 31)
-    policy = ConstantRateEscalation(
-        valuation_date,
-        rate=0.1,
-        day_count_convention="actual/actual",
+    by_keywords = CashFlowStream.from_recurring(
+        start,
+        periods,
+        amount,
+        frequency,
+        escalation=rate,
+        escalation_period=period,
+        amount_reference_date=reference,
+        day_count_convention=dcc,
     )
 
-    expected = sum(
-        flow.amount / policy.factor(flow.date) for flow in cf_stream.entries if flow.is_cash
+    assert (
+        by_keywords.entries
+        == CashFlowStream.from_recurring(
+            start, periods, amount, frequency, escalation_policy=policy, day_count_convention=dcc
+        ).entries
     )
 
-    assert cf_stream.npv(0.1, valuation_date) == pytest.approx(expected)
+
+@given(
+    DATES,
+    st.integers(0, 12),
+    FREQUENCIES,
+    LABELS,
+    st.booleans(),
+    PRO_FORMA_CATEGORIES,
+    TAX_TREATMENTS,
+    st.data(),
+)
+def test_from_recurring_applies_metadata_to_every_flow(
+    start, periods, frequency, label, is_cash, category, treatment, data
+):
+    """Every generated flow carries the requested label, cash basis, and classification, given as
+    enums or as any user-facing spelling."""
+    stream = CashFlowStream.from_recurring(
+        start,
+        periods,
+        1.0,
+        frequency,
+        label=label,
+        is_cash=is_cash,
+        pro_forma_category=None if category is None else data.draw(_spellings(category)),
+        tax_treatment=data.draw(_spellings(treatment)),
+    )
+
+    for cf in stream:
+        assert (cf.label, cf.is_cash, cf.pro_forma_category, cf.tax_treatment) == (
+            label,
+            is_cash,
+            category,
+            treatment,
+        )
 
 
-def test_npv_no_cashflows():
-    """Tests the CashFlowStream.npv method with a stream that has no cashflows."""
-    cf_stream = CashFlowStream([])
-    npv = cf_stream.npv(0.1, date(2100, 1, 1))
-    tol = 1e-8
-    assert abs(npv) < tol
+@given(DATES, st.integers(1, 12), FINITE_AMOUNTS)
+@example(date(2026, 1, 1), 4, 1000.0)
+def test_from_recurring_defaults_to_annual_cash_flows_at_period_end(start, periods, amount):
+    """By default, flows are annual, booked on each period's last day, unescalated, cash, and
+    classified as other with no tax treatment."""
+    stream = CashFlowStream.from_recurring(start, periods, amount)
+
+    assert stream.entries == [
+        CashFlow(
+            amount,
+            timing_point(w_start, w_end, "end"),
+            label="Recurring Payment",
+            pro_forma_category=ProFormaCategory.OTHER,
+            tax_treatment=TaxTreatment.NONE,
+        )
+        for w_start, w_end in _recurring_windows(start, periods, "year")
+    ]
 
 
-def test_npv_preserves_small_remainder_under_cancellation():
-    """At zero rate, exact offsetting amounts leave the original small cashflow."""
-    valuation_date = date(2026, 1, 1)
-    stream = CashFlowStream(
+invalid_recurring_inputs = st.one_of(
+    st.text()
+    .filter(lambda text: text not in {"day", "month", "quarter", "year"})
+    .map(lambda text: ({"frequency": text}, AssertionError)),
+    st.sampled_from(
         [
-            CashFlow(1_000_000_000_000.0, valuation_date),
-            CashFlow(0.01, valuation_date),
-            CashFlow(-1_000_000_000_000.0, valuation_date),
+            {"escalation": 0.02},
+            {"escalation_period": "month"},
+            {"amount_reference_date": date(2026, 1, 1)},
         ]
+    ).map(
+        lambda simple: (
+            simple | {"escalation_policy": ConstantRateEscalation(date(2026, 1, 1), 0.02)},
+            ValueError,
+        )
+    ),
+    st.floats(-0.2, 0.2).map(
+        lambda rate: (
+            {"escalation_policy": EscalationBuilder(date(2026, 1, 1)).constant_rate(rate)},
+            TypeError,
+        )
+    ),
+)
+
+
+@given(invalid_recurring_inputs)
+@example(({"frequency": "weekly"}, AssertionError))
+def test_from_recurring_rejects_invalid_schedules(invalid):
+    """Unknown frequencies, a policy combined with simple escalation keywords, and an unbuilt
+    escalation builder are rejected."""
+    arguments, error = invalid
+
+    with pytest.raises(error):
+        CashFlowStream.from_recurring(start=date(2026, 1, 1), periods=2, amount=100.0, **arguments)
+
+
+# === from_streams ===
+
+# A from_streams source paired with the entries it contributes, including a bare entry.
+cashflow_sources = st.one_of(
+    cashflow_lists.map(lambda entries: (CashFlowStream(entries), entries)),
+    cashflow_lists.map(lambda entries: (list(entries), entries)),
+    cashflow_lists.map(lambda entries: (iter(entries), entries)),
+    stream_cashflows.map(lambda entry: (entry, [entry])),
+)
+
+
+@given(st.lists(cashflow_sources, max_size=4))
+def test_from_streams_treats_a_bare_cashflow_as_one_entry(drawn):
+    """Bare CashFlow arguments join streams and iterables, contributing themselves once."""
+    combined = CashFlowStream.from_streams(*(source for source, _ in drawn))
+
+    assert type(combined) is CashFlowStream
+    assert combined.entries == [entry for _, entries in drawn for entry in entries]
+
+
+@given(cashflow_lists, st.lists(st.builds(Generation, STREAM_AMOUNTS, STREAM_DATES), max_size=3))
+def test_from_streams_rejects_generation_streams(entries, generation):
+    """A GenerationStream cannot be combined into a CashFlowStream, even when empty."""
+    with pytest.raises(TypeError, match="Cannot combine CashFlowStream with GenerationStream"):
+        CashFlowStream.from_streams(CashFlowStream(entries), GenerationStream(generation))
+
+
+# === filtering ===
+
+
+@st.composite
+def filter_keywords(draw: st.DrawFn) -> tuple[dict, dict]:
+    """Draw keyword filter arguments, in any spelling, with the field values they select."""
+    chosen = draw(
+        st.sets(st.sampled_from(["pro_forma_category", "tax_treatment", "is_cash"]), min_size=1)
     )
-
-    assert stream.npv(rate=0.0, valuation_date=valuation_date) == 0.01
-
-
-def test_npv_rejects_rate_at_minus_one():
-    """The stream wrapper enforces the shared real-valued rate domain."""
-    valuation_date = date(2026, 1, 1)
-    stream = CashFlowStream([CashFlow(100.0, date(2026, 7, 1))])
-
-    with pytest.raises(ValueError, match="rate must be greater than -1.0"):
-        stream.npv(rate=-1.0, valuation_date=valuation_date)
-
-
-# ---- filter by classification / is_cash keyword tests ----
+    arguments, selected = {}, {}
+    if "pro_forma_category" in chosen:
+        category = draw(PRO_FORMA_CATEGORIES)
+        selected["pro_forma_category"] = category
+        arguments["pro_forma_category"] = None if category is None else draw(_spellings(category))
+    if "tax_treatment" in chosen:
+        treatment = draw(TAX_TREATMENTS)
+        selected["tax_treatment"] = treatment
+        arguments["tax_treatment"] = draw(_spellings(treatment))
+    if "is_cash" in chosen:
+        selected["is_cash"] = arguments["is_cash"] = draw(st.booleans())
+    return arguments, selected
 
 
-def test_filter_by_pro_forma_category(_create_cf_stream):
-    """Tests filter(pro_forma_category=...) keyword argument."""
-    cf_stream, flows = _create_cf_stream
-    result = cf_stream.filter(pro_forma_category=ProFormaCategory.OPERATING_COST)
-    assert result.entries == [flows[0], flows[2]]
+@given(cashflow_lists, filter_keywords())
+@example(_CLASSIFIED, ({"is_cash": False}, {"is_cash": False}))  # False is not "omitted"
+@example(_CLASSIFIED, ({"pro_forma_category": None}, {"pro_forma_category": None}))
+@example(  # criteria AND together
+    _CLASSIFIED,
+    (
+        {"pro_forma_category": "Operating Cost", "is_cash": True},
+        {"pro_forma_category": ProFormaCategory.OPERATING_COST, "is_cash": True},
+    ),
+)
+def test_keyword_filter_keeps_flows_matching_every_criterion(entries, keywords):
+    """Keyword criteria, given as enums or any user-facing spelling, keep in order exactly the
+    flows matching all of them; a category of None selects uncategorized flows."""
+    arguments, selected = keywords
+
+    kept = CashFlowStream(entries).filter(**arguments)
+
+    assert kept.entries == [
+        cf for cf in entries if all(getattr(cf, name) == value for name, value in selected.items())
+    ]
 
 
-def test_filter_by_pro_forma_category_no_match(_create_cf_stream):
-    """Tests category filtering when no flows match."""
-    cf_stream = _create_cf_stream[0]
-    result = cf_stream.filter(pro_forma_category=ProFormaCategory.DEPRECIATION)
-    assert result.entries == []
+@given(cashflow_lists, st.functions(like=lambda cf: True, returns=st.booleans(), pure=True))
+def test_predicate_filter_keeps_matching_flows_in_order(entries, predicate):
+    """A predicate keeps exactly the flows it accepts, in order."""
+    assert CashFlowStream(entries).filter(predicate).entries == [
+        cf for cf in entries if predicate(cf)
+    ]
 
 
-def test_filter_by_pro_forma_category_empty_stream():
-    """Tests category filtering on an empty stream."""
-    result = CashFlowStream([]).filter(pro_forma_category=ProFormaCategory.REVENUE)
-    assert result.entries == []
+@given(cashflow_lists, filter_keywords())
+def test_filter_requires_exactly_one_of_predicate_or_keywords(entries, keywords):
+    """A predicate cannot be combined with keywords, and one of them is required; is_cash=None
+    counts as omitted."""
+    stream = CashFlowStream(entries)
 
-
-def test_filter_no_predicate_or_kwargs_raises(_create_cf_stream):
-    """filter() with neither a callable predicate nor keyword criteria raises ValueError."""
-    cf_stream = _create_cf_stream[0]
-    with pytest.raises(ValueError, match="Provide either a callable predicate or keyword"):
-        cf_stream.filter()
-
-
-def test_filter_predicate_and_kwargs_raises(_create_cf_stream):
-    """filter() with both a callable predicate and keyword criteria raises ValueError."""
-    cf_stream = _create_cf_stream[0]
     with pytest.raises(ValueError, match="Cannot combine a callable predicate"):
-        cf_stream.filter(lambda cf: True, is_cash=True)
-
-
-def test_filter_multiple_keywords_use_and_semantics():
-    """Multiple keyword criteria are combined with AND, not OR."""
-    matches_both = CashFlow(
-        amount=100.0,
-        date=date(2026, 1, 1),
-        pro_forma_category=ProFormaCategory.OPERATING_COST,
-        is_cash=True,
-    )
-    matches_category_only = CashFlow(
-        amount=200.0,
-        date=date(2026, 2, 1),
-        pro_forma_category=ProFormaCategory.OPERATING_COST,
-        is_cash=False,
-    )
-    matches_is_cash_only = CashFlow(
-        amount=300.0,
-        date=date(2026, 3, 1),
-        pro_forma_category=ProFormaCategory.REVENUE,
-        is_cash=True,
-    )
-    stream = CashFlowStream([matches_both, matches_category_only, matches_is_cash_only])
-
-    result = stream.filter(pro_forma_category=ProFormaCategory.OPERATING_COST, is_cash=True)
-
-    # If AND were accidentally changed to OR, all three entries would match.
-    assert result.entries == [matches_both]
-
-
-def test_filter_is_cash_false_selects_non_cash_entries():
-    """is_cash=False must select non-cash entries, not be treated as an omitted argument."""
-    cash_flow = CashFlow(amount=100.0, date=date(2026, 1, 1), is_cash=True)
-    non_cash_flow = CashFlow(amount=200.0, date=date(2026, 2, 1), is_cash=False)
-    stream = CashFlowStream([cash_flow, non_cash_flow])
-
-    result = stream.filter(is_cash=False)
-
-    # A bug that treats `False` as "not provided" would return both entries.
-    assert result.entries == [non_cash_flow]
-
-
-def test_filter_pro_forma_category_none_selects_uncategorized():
-    """pro_forma_category=None selects only entries with no pro-forma category."""
-    categorized = CashFlow(
-        amount=100.0,
-        date=date(2026, 1, 1),
-        pro_forma_category=ProFormaCategory.REVENUE,
-    )
-    uncategorized = CashFlow(amount=200.0, date=date(2026, 2, 1), pro_forma_category=None)
-    stream = CashFlowStream([categorized, uncategorized])
-
-    result = stream.filter(pro_forma_category=None)
-
-    assert result.entries == [uncategorized]
-
-
-def test_filter_string_classification_normalized_consistently():
-    """String pro_forma_category/tax_treatment inputs are normalized like enum inputs."""
-    flow = CashFlow(
-        amount=100.0,
-        date=date(2026, 1, 1),
-        pro_forma_category=ProFormaCategory.OPERATING_COST,
-        tax_treatment=TaxTreatment.DEDUCTIBLE,
-    )
-    other_flow = CashFlow(
-        amount=200.0,
-        date=date(2026, 2, 1),
-        pro_forma_category=ProFormaCategory.REVENUE,
-        tax_treatment=TaxTreatment.TAXABLE,
-    )
-    stream = CashFlowStream([flow, other_flow])
-
-    enum_result = stream.filter(
-        pro_forma_category=ProFormaCategory.OPERATING_COST,
-        tax_treatment=TaxTreatment.DEDUCTIBLE,
-    )
-    string_result = stream.filter(
-        pro_forma_category="Operating Cost",
-        tax_treatment="DEDUCTIBLE",
-    )
-
-    assert string_result.entries == enum_result.entries == [flow]
-
-
-# ---- non-mutation sweep ----
-
-
-@pytest.mark.parametrize(
-    ("name", "op"),
-    [
-        ("filter_predicate", lambda s: s.filter(lambda cf: cf.amount > 0)),
-        ("filter_kwargs", lambda s: s.filter(is_cash=True)),
-        ("group_by", lambda s: s.group_by(lambda cf: cf.label)),
-        ("group_by_period", lambda s: s.group_by(period="month")),
-        ("group_by_pro_forma_category", lambda s: s.group_by_pro_forma_category()),
-        ("group_by_tax_treatment", lambda s: s.group_by_tax_treatment()),
-        ("sort", lambda s: s.sort(lambda cf: cf.amount)),
-        ("scale", lambda s: s.scale(2.0)),
-        ("date_range", lambda s: s.date_range(start=date(2026, 2, 1))),
-        ("inflows", lambda s: s.inflows()),
-        ("outflows", lambda s: s.outflows()),
-        ("cash_only", lambda s: s.cash_only()),
-    ],
-)
-def test_non_mutating_methods_leave_original_unchanged(_create_cf_stream, name, op):
-    """Every non-mutating method leaves the original entry sequence unchanged.
+        stream.filter(lambda cf: True, **keywords[0])
+    with pytest.raises(ValueError, match="Provide either a callable predicate or keyword"):
+        stream.filter()
+    with pytest.raises(ValueError, match="Provide either a callable predicate or keyword"):
+        stream.filter(is_cash=None)
+
+
+@given(cashflow_lists)
+@example([CashFlow(0.0, date(2028, 1, 1)), CashFlow(-0.0, date(2028, 1, 2))])
+def test_sign_and_cash_selections_partition_by_field(entries):
+    """inflows and outflows keep strictly positive and strictly negative amounts, so signed zeros
+    are in neither; cash_only keeps the cash-basis flows."""
+    stream = CashFlowStream(entries)
+
+    assert stream.inflows().entries == [cf for cf in entries if cf.amount > 0]
+    assert stream.outflows().entries == [cf for cf in entries if cf.amount < 0]
+    assert stream.cash_only().entries == [cf for cf in entries if cf.is_cash]
+    assert stream.cash_only().entries == stream.filter(is_cash=True).entries
+
+
+BOUNDS = st.none() | STREAM_DATES
+_ON_BOUNDS = [CashFlow(1.0, date(2028, 1, 1)), CashFlow(2.0, date(2028, 2, 1))]
+
+
+@given(cashflow_lists, BOUNDS, BOUNDS)
+@example(_ON_BOUNDS, date(2028, 1, 1), date(2028, 2, 1))  # start included, end excluded
+@example(_ON_BOUNDS, date(2028, 1, 1), date(2028, 1, 2))  # a one-day interval
+def test_date_range_keeps_flows_in_the_half_open_interval(entries, start, end):
+    """date_range keeps, in order, the flows dated in ``[start, end)``, either bound optional;
+    splitting at any date puts every flow on exactly one side."""
+    assume(start is None or end is None or start < end)
+    stream = CashFlowStream(entries)
+
+    assert stream.date_range(start, end).entries == [
+        cf
+        for cf in entries
+        if (start is None or start <= cf.date) and (end is None or cf.date < end)
+    ]
+    if start is not None:
+        before, after = stream.date_range(end=start), stream.date_range(start=start)
+        assert Counter(before.entries + after.entries) == Counter(entries)
+
+
+@given(cashflow_lists, STREAM_DATES, st.integers(0, 400))
+@example(_ON_BOUNDS, date(2028, 1, 1), 0)  # an empty interval on a flow's date
+@example([], date(2028, 1, 1), 0)
+def test_date_range_rejects_empty_or_reversed_interval(entries, end, days_after_end):
+    """Two bounds must form a non-empty interval, whatever the stream holds."""
+    start = end + timedelta(days=days_after_end)
+
+    with pytest.raises(ValueError, match="end must be after start"):
+        CashFlowStream(entries).date_range(start, end)
+
+
+# === grouping ===
+
+
+@given(cashflow_lists, FREQUENCIES)
+@example([CashFlow(1.0, date(2028, 12, 31)), CashFlow(2.0, date(2029, 1, 1))], "year")
+@example([CashFlow(1.0, date(2028, 2, 29)), CashFlow(2.0, date(2028, 3, 1))], "month")
+@example([CashFlow(1.0, date(2028, 3, 31)), CashFlow(2.0, date(2028, 4, 1))], "quarter")
+def test_group_by_period_keys_flows_by_calendar_period(entries, frequency):
+    """Grouping by period keys each flow by the first day of its calendar period, keeping input
+    order within groups and first-appearance order across them; group_by_period is the same."""
+    expected: dict[date, list[CashFlow]] = {}
+    for cf in entries:
+        expected.setdefault(calendar_period_key(cf.date, frequency), []).append(cf)
+    stream = CashFlowStream(entries)
+
+    for grouped in (stream.group_by(period=frequency), stream.group_by_period(frequency)):
+        assert type(grouped) is CashFlowGroup
+        assert {key: group.entries for key, group in grouped.items()} == expected
+        assert list(grouped) == list(expected)
+
+
+@given(cashflow_lists)
+@example(_CLASSIFIED)  # includes an uncategorized flow
+def test_classification_grouping_keys_flows_by_field(entries):
+    """Grouping by pro-forma category or tax treatment keys each flow by that field, with
+    uncategorized flows under None rather than dropped."""
+    stream = CashFlowStream(entries)
+
+    for grouped, field in [
+        (stream.group_by_pro_forma_category(), "pro_forma_category"),
+        (stream.group_by_tax_treatment(), "tax_treatment"),
+    ]:
+        assert type(grouped) is CashFlowGroup
+        by_key = stream.group_by(attrgetter(field))
+        assert {key: group.entries for key, group in grouped.items()} == {
+            key: group.entries for key, group in by_key.items()
+        }
+
+
+@given(cashflow_lists, FREQUENCIES, st.text())
+@example([], "month", "week")
+def test_group_by_rejects_invalid_selectors(entries, frequency, unknown):
+    """Exactly one of a key function or a period is required, and the period must be known."""
+    assume(unknown not in {"day", "month", "quarter", "year"})
+    stream = CashFlowStream(entries)
+
+    with pytest.raises(ValueError, match="Provide exactly one of 'fn' or 'period'"):
+        stream.group_by()
+    with pytest.raises(ValueError, match="Provide exactly one of 'fn' or 'period'"):
+        stream.group_by(lambda cf: cf.label, period=frequency)
+    if entries:
+        with pytest.raises(AssertionError):
+            stream.group_by(period=unknown)
 
-    Methods inherited unchanged from BaseStream are covered by ``test_stream_base.py``.
-    """
-    cf_stream, flows = _create_cf_stream
-    original_entries = list(cf_stream.entries)
 
-    op(cf_stream)
+# === sorting, scaling, and totals ===
 
-    assert cf_stream.entries == original_entries
-    assert cf_stream.entries == flows
 
+@given(cashflow_lists, st.booleans())
+def test_default_sort_orders_by_date(entries, descending):
+    """sort() orders stably by date, so same-day flows keep their input order either way."""
+    expected = sorted(entries, key=attrgetter("date"), reverse=descending)
 
-# ---- inflows / outflows / cash_only tests ----
+    assert CashFlowStream(entries).sort(descending=descending).entries == expected
 
 
-def test_inflows(_create_cf_stream):
-    """Tests the inflows convenience method."""
-    cf_stream, flows = _create_cf_stream
-    result = cf_stream.inflows()
-    assert result.entries == [flows[1], flows[3]]
+@given(cashflow_lists, st.sampled_from(CASHFLOW_SORT_ATTRS), st.booleans())
+def test_sort_by_named_attribute(entries, attr, descending):
+    """sort(attr=...) orders stably by each allowed CashFlow attribute."""
+    expected = sorted(entries, key=attrgetter(attr), reverse=descending)
 
+    assert CashFlowStream(entries).sort(attr=attr, descending=descending).entries == expected
 
-def test_outflows(_create_cf_stream):
-    """Tests the outflows convenience method."""
-    cf_stream, flows = _create_cf_stream
-    result = cf_stream.outflows()
-    assert result.entries == [flows[0], flows[2]]
 
+@given(cashflow_lists, st.text())
+@example([], "amount_mwh")  # a Generation attribute name
+@example([], "is_cash")
+def test_sort_rejects_other_attributes(entries, attr):
+    """Attribute names outside the allowed set are rejected, as is combining one with a key."""
+    assume(attr not in CASHFLOW_SORT_ATTRS)
+    stream = CashFlowStream(entries)
 
-def test_cash_only(_create_cf_stream):
-    """Tests the cash_only convenience method."""
-    cf_stream, flows = _create_cf_stream
-    result = cf_stream.cash_only()
-    # cf3 has is_cash=False, rest are True
-    assert result.entries == [flows[0], flows[1], flows[3]]
-
-
-def test_inflows_and_outflows_exclude_zero_amount():
-    """A zero-valued cashflow is in neither inflows() nor outflows()."""
-    positive = CashFlow(amount=100.0, date=date(2026, 1, 1))
-    zero = CashFlow(amount=0.0, date=date(2026, 2, 1))
-    negative = CashFlow(amount=-100.0, date=date(2026, 3, 1))
-    stream = CashFlowStream([positive, zero, negative])
-
-    assert stream.inflows().entries == [positive]
-    assert stream.outflows().entries == [negative]
-
-
-# ---- date_range tests ----
-
-
-def test_date_range_both_bounds(_create_cf_stream):
-    """Tests date_range with both start (inclusive) and end (exclusive)."""
-    cf_stream, flows = _create_cf_stream
-    result = cf_stream.date_range(start=date(2026, 1, 31), end=date(2026, 4, 2))
-    assert result.entries == [flows[1], flows[2]]
-
-
-def test_date_range_start_only(_create_cf_stream):
-    """Tests date_range with only start bound."""
-    cf_stream, flows = _create_cf_stream
-    result = cf_stream.date_range(start=date(2026, 4, 1))
-    assert result.entries == [flows[2], flows[3]]
-
-
-def test_date_range_end_only(_create_cf_stream):
-    """Tests date_range with only end bound (exclusive)."""
-    cf_stream, flows = _create_cf_stream
-    result = cf_stream.date_range(end=date(2026, 2, 1))
-    assert result.entries == [flows[0], flows[1]]
-
-
-def test_date_range_no_bounds(_create_cf_stream):
-    """Tests date_range with no bounds returns all flows."""
-    cf_stream, flows = _create_cf_stream
-    result = cf_stream.date_range()
-    assert result.entries == list(flows)
-
-
-def test_date_range_empty_result(_create_cf_stream):
-    """Tests date_range that matches nothing."""
-    cf_stream = _create_cf_stream[0]
-    result = cf_stream.date_range(start=date(2030, 1, 1))
-    assert result.entries == []
-
-
-def test_date_range_includes_start_excludes_end():
-    """date_range(start, end) includes an entry exactly on start and excludes one exactly on end."""
-    on_start = CashFlow(amount=100.0, date=date(2026, 1, 1))
-    on_end = CashFlow(amount=200.0, date=date(2026, 2, 1))
-    stream = CashFlowStream([on_start, on_end])
-
-    result = stream.date_range(start=date(2026, 1, 1), end=date(2026, 2, 1))
-
-    assert result.entries == [on_start]
-
-
-def test_date_range_same_start_and_end_is_empty(_create_cf_stream):
-    """date_range(start, start) returns an empty stream."""
-    cf_stream = _create_cf_stream[0]
-    result = cf_stream.date_range(start=date(2026, 1, 1), end=date(2026, 1, 1))
-    assert result.entries == []
-
-
-def test_sort_attr_amount_ascending(_create_cf_stream):
-    """sort(attr='amount') sorts by amount ascending."""
-    cf_stream, flows = _create_cf_stream
-    result = cf_stream.sort(attr="amount")
-    assert result.entries == [flows[2], flows[0], flows[3], flows[1]]
-
-
-def test_sort_attr_label(_create_cf_stream):
-    """sort(attr='label') sorts by label ascending."""
-    cf_stream, flows = _create_cf_stream
-    result = cf_stream.sort(attr="label")
-    assert result.entries == [flows[0], flows[2], flows[1], flows[3]]
-
-
-def test_sort_immutability(_create_cf_stream):
-    """sort() does not modify the original stream."""
-    cf_stream, flows = _create_cf_stream
-    _ = cf_stream.sort(attr="amount")
-    assert cf_stream.entries == list(flows)
-
-
-def test_sort_empty_stream():
-    """sort() on an empty stream returns an empty stream."""
-    result = CashFlowStream([]).sort()
-    assert result.entries == []
-
-
-def test_sort_bad_attr(_create_cf_stream):
-    """sort(attr=...) raises on an invalid attribute."""
-    cf_stream = _create_cf_stream[0]
-    with pytest.raises(AssertionError):
-        cf_stream.sort(attr="nonexistent")
-
-
-# ---- unified sort tests ----
-
-
-def test_sort_bare_call_sorts_by_date(_create_cf_stream):
-    """sort() with no arguments sorts by date ascending."""
-    cf_stream, flows = _create_cf_stream
-    result = cf_stream.sort()
-    assert result.entries == [flows[0], flows[1], flows[2], flows[3]]
-
-
-def test_sort_default_attribute_descending(_create_cf_stream):
-    """sort(descending=True) sorts by the default date attribute descending."""
-    cf_stream, flows = _create_cf_stream
-    result = cf_stream.sort(descending=True)
-    assert result.entries == [flows[3], flows[2], flows[1], flows[0]]
-
-
-def test_sort_attr_amount_descending(_create_cf_stream):
-    """sort(attr='amount', descending=True) sorts by amount descending."""
-    cf_stream, flows = _create_cf_stream
-    result = cf_stream.sort(attr="amount", descending=True)
-    assert result.entries == [flows[1], flows[3], flows[0], flows[2]]
-
-
-def test_sort_callable_descending(_create_cf_stream):
-    """sort(fn, descending=True) uses the callable key in descending order."""
-    cf_stream, flows = _create_cf_stream
-    result = cf_stream.sort(lambda cf: cf.date, descending=True)
-    assert result.entries == [flows[3], flows[2], flows[1], flows[0]]
-
-
-def test_sort_fn_and_attr_raises(_create_cf_stream):
-    """sort(fn, attr=...) raises ValueError."""
-    cf_stream = _create_cf_stream[0]
+    with pytest.raises(AssertionError, match="Unexpected sort attribute"):
+        stream.sort(attr=attr)
     with pytest.raises(ValueError, match="Cannot pass both"):
-        cf_stream.sort(lambda cf: cf.date, attr="date")
+        stream.sort(lambda cf: cf.date, attr="date")
 
 
-# ---- irr tests ----
+@given(cashflow_lists, st.floats(min_value=-1e3, max_value=1e3))
+@example(_CLASSIFIED, 0.0)
+@example(_CLASSIFIED, -1.0)
+def test_scale_multiplies_only_amounts(entries, factor):
+    """scale multiplies every amount by the factor and leaves every other field unchanged."""
+    scaled = CashFlowStream(entries).scale(factor)
+
+    assert type(scaled) is CashFlowStream
+    assert scaled.entries == [cf.replace(amount=cf.amount * factor) for cf in entries]
 
 
-def test_irr_main():
-    """IRR of invest $1000, receive $1100 after exactly one non-leap year equals 10%.
+@given(cashflow_lists, KEYS)
+@example([], lambda cf: 0)
+@example(  # a small remainder under cancellation
+    [
+        CashFlow(1e12, date(2028, 1, 1)),
+        CashFlow(0.01, date(2028, 1, 1)),
+        CashFlow(-1e12, date(2028, 1, 1)),
+    ],
+    lambda cf: 0,
+)
+def test_sum_totals_amounts_and_group_sums_partition_it(entries, key):
+    """sum totals cash and non-cash amounts, is exactly 0.0 when empty, and group sums are each
+    group's total, adding back up to the stream's."""
+    stream = CashFlowStream(entries)
+    grouped = stream.group_by(key)
 
-    2025 is not a leap year: 2025-01-01 → 2026-01-01 = 365 days → t = 365/365 = 1.0 exactly.
-    NPV = -1000 + 1100/(1+r) = 0 → r = 0.1 exactly.
-    """
-    stream = CashFlowStream(
-        [
-            CashFlow(-1000.0, date(2025, 1, 1)),
-            CashFlow(1100.0, date(2026, 1, 1)),
-        ]
+    assert _close(stream.sum(), math.fsum(cf.amount for cf in entries), _amount_scale(entries))
+    if not entries:
+        assert stream.sum() == 0.0
+    assert grouped.sum() == {k: group.sum() for k, group in grouped.items()}
+    assert _close(math.fsum(grouped.sum().values()), stream.sum(), _amount_scale(entries))
+
+
+@given(cashflow_lists, st.none() | KEYS)
+@example([CashFlow(0.0, date(2028, 1, 1)), CashFlow(-0.0, date(2028, 1, 2))], None)  # tie
+def test_min_and_max_return_the_first_extreme_flow(entries, key):
+    """min and max return the first flow with the extreme key, by amount unless a key is given,
+    and reject an empty stream."""
+    stream = CashFlowStream(entries)
+    by = attrgetter("amount") if key is None else key
+
+    if not entries:
+        with pytest.raises(ValueError, match="empty CashFlowStream"):
+            stream.min(key)
+        with pytest.raises(ValueError, match="empty CashFlowStream"):
+            stream.max(key)
+        return
+    keys = [by(cf) for cf in entries]
+    assert stream.min(key) is entries[keys.index(min(keys))]
+    assert stream.max(key) is entries[keys.index(max(keys))]
+
+
+# === discounting ===
+
+
+@given(cashflow_lists, RATES, STREAM_DATES, DAY_COUNT_CONVENTIONS)
+@example(
+    [CashFlow(100.0, date(2028, 2, 28)), CashFlow(100.0, date(2028, 3, 1))],
+    0.1,
+    date(2028, 1, 1),
+    "actual/365-no-leap",
+)
+@example([CashFlow(100.0, date(2029, 1, 1))], 0.1, date(2028, 12, 1), "actual/actual")
+def test_npv_discounts_each_cash_flow_by_its_year_fraction(entries, rate, valuation, dcc):
+    """NPV is the sum over cash flows of amount / (1 + rate) ** years from the valuation date,
+    signed so earlier flows compound forward; non-cash flows are ignored."""
+    stream = CashFlowStream(entries)
+    terms = [
+        cf.amount / (1 + rate) ** year_fraction(valuation, cf.date, dcc)
+        for cf in entries
+        if cf.is_cash
+    ]
+
+    assert _close(stream.npv(rate, valuation, dcc), math.fsum(terms), math.fsum(map(abs, terms)))
+    assert stream.npv(rate, valuation) == stream.npv(rate, valuation, "actual/actual")
+
+
+@given(cashflow_lists, cashflow_lists, RATES, STREAM_DATES, DAY_COUNT_CONVENTIONS)
+def test_npv_is_additive_and_ignores_order_and_non_cash_flows(first, second, rate, valuation, dcc):
+    """The NPV of combined streams is the sum of their NPVs, whatever the entry order, and adding
+    or removing non-cash flows changes nothing."""
+    npv = lambda entries: CashFlowStream(entries).npv(rate, valuation, dcc)  # noqa: E731
+    scale = (_amount_scale(first) + _amount_scale(second)) * 4.0
+
+    assert _close(npv(first + second), npv(first) + npv(second), scale)
+    assert _close(npv((first + second)[::-1]), npv(first + second), scale)
+    assert npv(first) == CashFlowStream(first).cash_only().npv(rate, valuation, dcc)
+
+
+@given(cashflow_lists, STREAM_DATES, DAY_COUNT_CONVENTIONS)
+@example(  # a small remainder under cancellation survives exactly
+    [
+        CashFlow(1e12, date(2028, 1, 1)),
+        CashFlow(0.01, date(2028, 1, 1)),
+        CashFlow(-1e12, date(2028, 1, 1)),
+    ],
+    date(2028, 1, 1),
+    "actual/actual",
+)
+@example([], date(2028, 1, 1), "actual/actual")
+def test_npv_at_zero_rate_is_the_exact_cash_total(entries, valuation, dcc):
+    """At a zero rate nothing is discounted, so NPV is the correctly rounded cash total."""
+    assert CashFlowStream(entries).npv(0.0, valuation, dcc) == math.fsum(
+        cf.amount for cf in entries if cf.is_cash
     )
-    assert stream.irr() == pytest.approx(0.1, abs=1e-8)
 
 
-def test_irr_multi_cashflow():
-    """IRR of a 3-cashflow project: NPV must be zero at the computed rate.
-
-    Uses two back-to-back non-leap years so time fractions are 1.0 and 2.0 exactly,
-    making the polynomial root analytically verifiable via the quadratic formula.
-    """
-    # 2025 and 2026 are both non-leap years: t₂=1.0, t₃=2.0 exactly
-    stream = CashFlowStream(
-        [
-            CashFlow(-10_000.0, date(2025, 1, 1)),
-            CashFlow(5_000.0, date(2026, 1, 1)),
-            CashFlow(7_000.0, date(2027, 1, 1)),
-        ]
-    )
-    irr = stream.irr()
-    # Verify by evaluating NPV at the returned rate
-    ref_date = date(2025, 1, 1)
-    assert stream.npv(irr, ref_date) == pytest.approx(0.0, abs=1e-6)
-    # Quadratic solution: x = 1/(1+r), 7000x²+5000x−10000=0 → r = 0.12321245...
-    # x = (−5000 + sqrt(305_000_000)) / 14_000
-    assert irr == pytest.approx(0.12321245982864881, abs=1e-8)
+@given(cashflow_lists, st.one_of(NON_FINITE, st.floats(max_value=-1.0)))
+@example([], -1.0)
+def test_npv_rejects_rates_outside_the_domain(entries, rate):
+    """The rate must be finite and greater than -1, even for an empty stream."""
+    with pytest.raises(ValueError, match="rate must be"):
+        CashFlowStream(entries).npv(rate, date(2028, 1, 1))
 
 
-def test_irr_convention_default():
-    """Default 'actual/actual' convention produces the same result as the explicit argument."""
-    stream = CashFlowStream(
-        [
-            CashFlow(-5_000.0, date(2025, 3, 1)),
-            CashFlow(2_000.0, date(2026, 3, 1)),
-            CashFlow(4_500.0, date(2027, 3, 1)),
-        ]
-    )
-    assert stream.irr() == stream.irr(convention="actual/actual")
+@st.composite
+def conventional_profiles(
+    draw: st.DrawFn,
+    min_offset_days: int = 365,
+    multiple: st.SearchStrategy[float] = st.floats(min_value=0.5, max_value=3.0),
+) -> list[CashFlow]:
+    """Draw one investment followed by later inflows returning a multiple of it. A single sign
+    change means NPV falls monotonically through exactly one root above -1."""
+    start = draw(st.dates(min_value=date(1990, 1, 1), max_value=date(2080, 12, 31)))
+    investment = draw(st.floats(min_value=1.0, max_value=1e9))
+    offsets = draw(st.lists(st.integers(min_offset_days, 30 * 365), min_size=1, max_size=5))
+    weights = draw(st.lists(st.floats(0.01, 1.0), min_size=len(offsets), max_size=len(offsets)))
+    returned = investment * draw(multiple)
+    return [CashFlow(-investment, start)] + [
+        CashFlow(returned * weight / math.fsum(weights), start + timedelta(days=offset))
+        for weight, offset in zip(weights, sorted(offsets), strict=True)
+    ]
 
 
-def test_irr_npv_is_zero_at_irr():
-    """stream.npv(stream.irr(), ref_date) ≈ 0 for a multi-year project."""
-    stream = CashFlowStream(
-        [
-            CashFlow(-50_000.0, date(2025, 1, 1)),
-            CashFlow(15_000.0, date(2026, 1, 1)),
-            CashFlow(20_000.0, date(2027, 1, 1)),
-            CashFlow(25_000.0, date(2028, 1, 1)),
-        ]
-    )
-    irr = stream.irr()
-    assert stream.npv(irr, date(2025, 1, 1)) == pytest.approx(0.0, abs=1e-6)
+def _irr_residual(entries: list[CashFlow], rate: float) -> float:
+    """NPV at the IRR as a fraction of total absolute cash flow, valued at the earliest date."""
+    valuation = min(cf.date for cf in entries)
+    return abs(CashFlowStream(entries).npv(rate, valuation)) / _amount_scale(entries)
 
 
-def test_irr_initial_guess_at_domain_floor_raises_non_convergence():
-    """An underflowed centroid guess should not divide by zero at r = -1."""
-    stream = CashFlowStream(
-        [
-            CashFlow(-100.0, date(2025, 1, 1)),
-            CashFlow(1.0, date(2025, 1, 2)),
-        ]
-    )
+@given(conventional_profiles(), st.floats(min_value=1e-3, max_value=1e3), cashflow_lists)
+@example(  # one non-leap year apart: exactly 10%
+    [CashFlow(-1000.0, date(2025, 1, 1)), CashFlow(1100.0, date(2026, 1, 1))], 1.0, []
+)
+@example(  # whole years apart: the root of 7000x² + 5000x - 10000
+    [
+        CashFlow(-10_000.0, date(2025, 1, 1)),
+        CashFlow(5_000.0, date(2026, 1, 1)),
+        CashFlow(7_000.0, date(2027, 1, 1)),
+    ],
+    1.0,
+    [],
+)
+def test_irr_is_a_root_of_npv_that_ignores_scale_order_and_non_cash(entries, factor, noise):
+    """For a conventional investment profile, the IRR zeroes NPV, and is unchanged by scaling
+    every amount, by reordering entries, or by adding non-cash flows."""
+    stream = CashFlowStream(entries)
 
-    with pytest.raises(ValueError, match="did not converge"):
-        stream.irr()
+    rate = stream.irr()
 
-
-def test_irr_no_inflows():
-    """Stream with no positive cashflows raises ValueError."""
-    stream = CashFlowStream(
-        [
-            CashFlow(-1_000.0, date(2025, 1, 1)),
-            CashFlow(-500.0, date(2026, 1, 1)),
-        ]
-    )
-    with pytest.raises(ValueError, match="inflow"):
-        stream.irr()
-
-
-def test_irr_no_outflows():
-    """Stream with no negative cashflows raises ValueError."""
-    stream = CashFlowStream(
-        [
-            CashFlow(1_000.0, date(2025, 1, 1)),
-            CashFlow(500.0, date(2026, 1, 1)),
-        ]
-    )
-    with pytest.raises(ValueError, match="outflow"):
-        stream.irr()
+    assert _irr_residual(entries, rate) <= 1e-8
+    assert math.isclose(stream.scale(factor).irr(), rate, rel_tol=1e-6, abs_tol=1e-9)
+    assert math.isclose(CashFlowStream(entries[::-1]).irr(), rate, rel_tol=1e-6, abs_tol=1e-9)
+    non_cash = [cf.replace(is_cash=False) for cf in noise]
+    assert CashFlowStream(entries + non_cash).irr() == rate
 
 
-def test_irr_empty():
-    """Empty stream raises ValueError (no inflows or outflows)."""
-    with pytest.raises(ValueError):
-        CashFlowStream([]).irr()
+@given(conventional_profiles(min_offset_days=1, multiple=st.floats(min_value=1e-6, max_value=1e6)))
+@example([CashFlow(-100.0, date(2025, 1, 1)), CashFlow(1.0, date(2025, 1, 2))])  # guess at -1
+def test_irr_returns_a_root_or_reports_non_convergence(entries):
+    """For any conventional profile, however extreme, irr either returns a rate that zeroes NPV
+    or raises ValueError; it never returns a wrong rate or fails with another error."""
+    try:
+        rate = CashFlowStream(entries).irr()
+    except ValueError as error:
+        assert "converge" in str(error)
+        return
+
+    assert _irr_residual(entries, rate) <= 1e-8
 
 
-def test_irr_excludes_non_cash():
-    """Non-cash flows (is_cash=False) are excluded from the IRR calculation.
+one_signed_streams = st.tuples(
+    st.sampled_from([1.0, -1.0]),
+    st.lists(st.tuples(st.floats(min_value=0.0, max_value=1e12), STREAM_DATES), max_size=4),
+    cashflow_lists,
+).map(
+    lambda drawn: [CashFlow(drawn[0] * amount, day) for amount, day in drawn[1]]
+    + [cf.replace(is_cash=False) for cf in drawn[2]]
+)
 
-    The stream's only outflow is non-cash; cash-only view is all inflows,
-    so irr() must raise ValueError rather than computing a spurious rate.
-    """
-    stream = CashFlowStream(
-        [
-            CashFlow(-5_000.0, date(2025, 1, 1), is_cash=False),
-            CashFlow(1_000.0, date(2026, 1, 1)),
-            CashFlow(1_500.0, date(2027, 1, 1)),
-        ]
-    )
-    with pytest.raises(ValueError):
-        stream.irr()
+
+@given(one_signed_streams)
+@example([])
+@example(  # the only outflow is non-cash
+    [
+        CashFlow(-5_000.0, date(2025, 1, 1), is_cash=False),
+        CashFlow(1_000.0, date(2026, 1, 1)),
+        CashFlow(1_500.0, date(2027, 1, 1)),
+    ]
+)
+def test_irr_requires_cash_inflows_and_outflows(entries):
+    """Without both a cash inflow and a cash outflow NPV has no root, whatever the non-cash
+    flows, so irr raises."""
+    with pytest.raises(ValueError, match="inflow|outflow"):
+        CashFlowStream(entries).irr()
+
+
+# === non-mutation ===
+
+
+@given(cashflow_lists, FREQUENCIES)
+def test_cashflow_operations_leave_the_source_unchanged(entries, frequency):
+    """Every CashFlowStream-specific operation leaves the source entries unchanged."""
+    stream = CashFlowStream(entries)
+    snapshot = list(entries)
+    operations = [
+        lambda s: s.filter(lambda cf: cf.amount > 0),
+        lambda s: s.filter(is_cash=True),
+        lambda s: s.inflows(),
+        lambda s: s.outflows(),
+        lambda s: s.cash_only(),
+        lambda s: s.date_range(date(2028, 1, 1), date(2028, 7, 1)),
+        lambda s: s.group_by(period=frequency),
+        lambda s: s.group_by_pro_forma_category(),
+        lambda s: s.group_by_tax_treatment(),
+        lambda s: s.sort(),
+        lambda s: s.sort(attr="amount", descending=True),
+        lambda s: s.scale(2.0),
+        lambda s: s.npv(0.1, date(2028, 1, 1)),
+    ]
+
+    for operation in operations:
+        operation(stream)
+        assert stream.entries == snapshot
