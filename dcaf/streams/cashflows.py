@@ -13,6 +13,7 @@ from datetime import date
 from typing import (
     Any,
     Callable,
+    Iterable,
     Optional,
     TypeVar,
     cast,
@@ -25,7 +26,7 @@ from dcaf.finance.escalation import (
     EscalationPolicy,
     _resolve_escalation_policy_override,
 )
-from dcaf.shared.time import period_window_event_date, period_windows
+from dcaf.shared.time import period_start, period_window_event_date, period_windows
 from dcaf.shared.types import (
     DayCountConvention,
     Period,
@@ -256,6 +257,29 @@ class CashFlowGroup(BaseGroup[KeyType, CashFlow, "CashFlowStream"]):
         """Return an empty stream for internal regrouping helpers."""
         return CashFlowStream()
 
+    def sum(self) -> dict[KeyType, float]:
+        """
+        Return the per-group sum of cashflow amounts.
+
+        Returns
+        -------
+        dict[KeyType, float]
+            Mapping of each group key to the sum of cashflow amounts in that group.
+
+        Examples
+        --------
+        >>> from datetime import date
+        >>> from dcaf.streams import CashFlow, CashFlowStream
+        >>> stream = CashFlowStream([
+        ...     CashFlow(100.0, date(2026, 1, 1), label="a"),
+        ...     CashFlow(50.0, date(2026, 2, 1), label="a"),
+        ...     CashFlow(-30.0, date(2026, 3, 1), label="b"),
+        ... ])
+        >>> stream.group_by(lambda cf: cf.label).sum()
+        {'a': 150.0, 'b': -30.0}
+        """
+        return {key: stream.sum() for key, stream in self.groups.items()}
+
 
 @dataclass
 class CashFlowStream(BaseStream[CashFlow]):
@@ -313,9 +337,52 @@ class CashFlowStream(BaseStream[CashFlow]):
     2
     """
 
-    def _amount(self, entry: CashFlow) -> float:
-        """Return the numeric amount for internal shared helpers."""
-        return entry.amount
+    @classmethod
+    def from_streams(
+        cls, *iterables: "CashFlowStream | CashFlow | Iterable[CashFlow]"
+    ) -> "CashFlowStream":
+        """
+        Combine cashflow streams, single cashflows, and iterables into one stream.
+
+        Parameters
+        ----------
+        *iterables : CashFlowStream or CashFlow or Iterable[CashFlow]
+            Variable number of sources, concatenated in argument order.
+
+        Returns
+        -------
+        CashFlowStream
+            New stream containing all cashflows from all inputs, in argument order.
+
+        Raises
+        ------
+        TypeError
+            If a source is a stream of a different type, such as a ``GenerationStream``.
+
+        Notes
+        -----
+        No deduplication is performed. A cashflow that appears in multiple inputs
+        will appear multiple times in the result. Call ``.sort()`` on the result
+        if ordering is required. Any non-iterable source is treated as a single
+        entry.
+
+        Examples
+        --------
+        >>> from datetime import date
+        >>> capex = CashFlow(-1_000.0, date(2026, 1, 1))
+        >>> revenue = CashFlowStream.from_recurring(date(2027, 1, 1), 2, 600.0)
+        >>> CashFlowStream.from_streams(capex, revenue).count()
+        3
+        """
+        sources: list[CashFlowStream | Iterable[CashFlow]] = []
+        for item in iterables:
+            try:
+                iter(cast(Iterable[CashFlow], item))
+            except TypeError:
+                sources.append([cast(CashFlow, item)])
+            else:
+                sources.append(cast(Iterable[CashFlow], item))
+        return super().from_streams(*sources)
 
     @classmethod
     def from_recurring(
@@ -528,6 +595,40 @@ class CashFlowStream(BaseStream[CashFlow]):
         """Return only cash-basis cashflows (``is_cash=True``)."""
         return self._filter_where(lambda flow: flow.is_cash)
 
+    def date_range(self, start: date | None = None, end: date | None = None) -> "CashFlowStream":
+        """
+        Filter cashflows to the half-open ``[start, end)`` interval.
+
+        ``start`` is inclusive; ``end`` is exclusive. Either bound may be
+        omitted to leave that side unbounded.
+
+        Parameters
+        ----------
+        start : date, optional
+            Earliest date to include (inclusive). If ``None``, no lower bound.
+        end : date, optional
+            Exclusive upper boundary. Cashflows on or after this date are excluded.
+            If ``None``, no upper bound.
+
+        Returns
+        -------
+        CashFlowStream
+            New stream containing only cashflows within the date range.
+
+        Examples
+        --------
+        >>> from datetime import date
+        >>> stream = CashFlowStream.from_recurring(date(2026, 1, 1), 12, 100.0, "month")
+        >>> stream.date_range(date(2026, 3, 1), date(2026, 6, 1)).count()
+        3
+        """
+        result = self.entries
+        if start is not None:
+            result = [flow for flow in result if flow.date >= start]
+        if end is not None:
+            result = [flow for flow in result if flow.date < end]
+        return self._new(result)
+
     @overload
     def group_by(self, fn: Callable[[CashFlow], KeyType]) -> "CashFlowGroup[KeyType]": ...
     @overload
@@ -572,7 +673,7 @@ class CashFlowStream(BaseStream[CashFlow]):
 
         # period path
         assert period is not None
-        period_groups = self._grouped_entries_by_period(period)
+        period_groups = self._grouped_entries_by_key(lambda flow: period_start(flow.date, period))
         return CashFlowGroup(cast(dict[date, CashFlowStream], self._grouped_streams(period_groups)))
 
     def group_by_pro_forma_category(self) -> CashFlowGroup[ProFormaCategory | None]:
@@ -763,6 +864,32 @@ class CashFlowStream(BaseStream[CashFlow]):
         >>> result_stream = CashFlowStream.from_streams(scaled_costs, other_flows)
         """
         return CashFlowStream([cf.replace(amount=cf.amount * factor) for cf in self.entries])
+
+    def sum(self) -> float:
+        """
+        Return the sum of all cashflow amounts.
+
+        Includes both cash and non-cash cashflows. Use :meth:`cash_only` first to
+        total only cash movements.
+
+        Returns
+        -------
+        float
+            Sum of ``amount`` over all cashflows. Returns ``0.0`` for an empty stream.
+
+        Examples
+        --------
+        >>> from datetime import date
+        >>> stream = CashFlowStream([
+        ...     CashFlow(-500.0, date(2026, 1, 1)),
+        ...     CashFlow(2_000.0, date(2026, 6, 1)),
+        ... ])
+        >>> stream.sum()
+        1500.0
+        >>> CashFlowStream().sum()
+        0.0
+        """
+        return sum((flow.amount for flow in self.entries), start=0.0)
 
     def min(self, key: Optional[Callable[[CashFlow], SupportsLessThan]] = None) -> CashFlow:
         """

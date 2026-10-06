@@ -373,6 +373,29 @@ class GenerationGroup(BaseGroup[KeyType, Generation, "GenerationStream"]):
         """Return an empty stream for internal regrouping helpers."""
         return GenerationStream()
 
+    def sum(self) -> dict[KeyType, float]:
+        """
+        Return the per-group sum of generation amounts in MWh.
+
+        Returns
+        -------
+        dict[KeyType, float]
+            Mapping of each group key to the total MWh in that group.
+
+        Examples
+        --------
+        >>> from datetime import date
+        >>> from dcaf.streams import Generation, GenerationStream
+        >>> stream = GenerationStream([
+        ...     Generation(100.0, date(2030, 1, 1), label="a"),
+        ...     Generation(50.0, date(2031, 1, 1), label="a"),
+        ...     Generation(30.0, date(2030, 1, 1), label="b"),
+        ... ])
+        >>> stream.group_by(lambda g: g.label).sum()
+        {'a': 150.0, 'b': 30.0}
+        """
+        return {key: stream.sum() for key, stream in self.groups.items()}
+
 
 @dataclass
 class GenerationStream(BaseStream[Generation]):
@@ -413,10 +436,6 @@ class GenerationStream(BaseStream[Generation]):
     >>> gen[1:3].count()
     2
     """
-
-    def _amount(self, entry: Generation) -> float:
-        """Return the numeric amount for internal shared helpers."""
-        return entry.amount_mwh
 
     @classmethod
     def from_capacity(
@@ -598,6 +617,15 @@ class GenerationStream(BaseStream[Generation]):
         GenerationStream
             New stream containing all provided generation entries.
 
+        Raises
+        ------
+        TypeError
+            If a source is a stream of a different type, such as a ``CashFlowStream``.
+
+        Notes
+        -----
+        Any non-iterable source is treated as a single entry.
+
         Examples
         --------
         >>> g1 = Generation(100.0, date(2030, 1, 1))
@@ -606,7 +634,15 @@ class GenerationStream(BaseStream[Generation]):
         >>> stream.count()
         2
         """
-        return super().from_streams(*iterables)
+        sources: list[GenerationStream | Iterable[Generation]] = []
+        for item in iterables:
+            try:
+                iter(cast(Iterable[Generation], item))
+            except TypeError:
+                sources.append([cast(Generation, item)])
+            else:
+                sources.append(cast(Iterable[Generation], item))
+        return super().from_streams(*sources)
 
     def with_capacity(
         self,
@@ -838,6 +874,30 @@ class GenerationStream(BaseStream[Generation]):
         >>> scaled_gen_stream = gen_stream.scale(1.2)
         """
         return GenerationStream([e.replace(e.amount_mwh * factor) for e in self.entries])
+
+    def sum(self) -> float:
+        """
+        Return the total generation in MWh.
+
+        Signed entries net against each other, so outage entries reduce the total.
+
+        Returns
+        -------
+        float
+            Sum of ``amount_mwh`` over all entries. Returns ``0.0`` for an empty stream.
+
+        Examples
+        --------
+        >>> stream = GenerationStream([
+        ...     Generation(1_000.0, date(2030, 1, 1)),
+        ...     Generation(-200.0, date(2030, 6, 1)),
+        ... ])
+        >>> stream.sum()
+        800.0
+        >>> GenerationStream().sum()
+        0.0
+        """
+        return sum((entry.amount_mwh for entry in self.entries), start=0.0)
 
     def discounted_sum(
         self,

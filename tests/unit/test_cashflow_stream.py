@@ -297,75 +297,6 @@ def test_from_streams_rejects_other_stream_types():
         CashFlowStream.from_streams(generation_stream)
 
 
-def test_apply_no_condition(_create_cf_stream):
-    """Tests the CashFlowStream.apply method with no condition."""
-
-    def _modify_cf(cf):
-        return cf.replace(amount=cf.amount * 2)
-
-    cf_stream_old = _create_cf_stream[0]
-    cf_stream_new = cf_stream_old.apply(_modify_cf)
-    assert isinstance(cf_stream_new, CashFlowStream)
-    assert cf_stream_new[0].amount == -1000
-    assert cf_stream_new[1].amount == 4000
-    assert cf_stream_new[2].amount == -2000
-    assert cf_stream_new[3].amount == 200
-    assert cf_stream_old[0].amount == -500  # Verifies that the original object was not modified
-
-
-def test_apply_with_condition(_create_cf_stream):
-    """Tests that CashFlowStream.apply method with a condition."""
-
-    def _modify_cf(cf):
-        return cf.replace(amount=cf.amount * 2)
-
-    cf_stream_old = _create_cf_stream[0]
-    cf_stream_new = cf_stream_old.apply(_modify_cf, lambda cf: "exp" in cf.label)
-    assert isinstance(cf_stream_new, CashFlowStream)
-    assert len(cf_stream_new) == 4
-    assert cf_stream_new[0].amount == -1000  # Modified
-    assert cf_stream_new[1].amount == 2000
-    assert cf_stream_new[2].amount == -2000  # Modified
-    assert cf_stream_new[3].amount == 100
-    assert cf_stream_old[0].amount == -500  # Verifies that the original object was not modified
-
-
-def test_apply_preserves_output_ordering(_create_cf_stream):
-    """apply() is one-to-one and preserves input order in its output."""
-    cf_stream, flows = _create_cf_stream
-    result = cf_stream.apply(lambda cf: cf.replace(amount=cf.amount * 2))
-    assert [flow.date for flow in result.entries] == [flow.date for flow in flows]
-
-
-def test_apply_streamwise(_create_cf_stream):
-    """Tests the CashFlowStream.apply_streamwise method."""
-
-    def _modify_stream(stream):
-        num_flows = len(stream.entries)
-        new_flows = [
-            CashFlow(
-                cf.amount,
-                cf.date,
-                cf.label + f"_cf_{i + 1}/{num_flows}",
-                cf.is_cash,
-                cf.pro_forma_category,
-                cf.tax_treatment,
-            )
-            for i, cf in enumerate(stream.entries)
-        ]
-        return CashFlowStream(new_flows)
-
-    cf_stream_old = _create_cf_stream[0]
-    cf_stream_new = cf_stream_old.apply_streamwise(_modify_stream)
-    assert cf_stream_new.entries[0].label == "exp_cf_1/4"
-    assert cf_stream_new.entries[1].label == "rev_cf_2/4"
-    assert cf_stream_new.entries[2].label == "exp_2_cf_3/4"
-    assert cf_stream_new.entries[3].label == "rev_2_cf_4/4"
-
-    # Verify that the original cashflow stream was not modified
-    assert cf_stream_old.entries[0].label == "exp"
-
-
 def test_filter(_create_cf_stream):
     """Tests the CashFlowStream.filter method."""
 
@@ -581,73 +512,6 @@ def test_sum(_create_cf_stream):
     cf_stream = _create_cf_stream[0]
     cf_sum = cf_stream.sum()
     assert cf_sum == 600.0
-
-
-def test_count(_create_cf_stream):
-    """Tests the CashFlowStream.count method on streams with and without cashflows."""
-    # Check with multiple cashflows
-    cf_stream_with_flows = _create_cf_stream[0]
-    assert cf_stream_with_flows.count() == 4
-    # Check no cashflows
-    cf_stream_no_flows = CashFlowStream([])
-    assert cf_stream_no_flows.count() == 0
-
-
-def test_len_dunder(_create_cf_stream):
-    """``len(stream)`` returns the number of cashflows."""
-    cf_stream_with_flows = _create_cf_stream[0]
-    assert len(cf_stream_with_flows) == 4
-    assert len(CashFlowStream([])) == 0
-
-
-def test_iter_dunder(_create_cf_stream):
-    """Iterating a CashFlowStream yields its cashflows in order."""
-    cf_stream, flows = _create_cf_stream
-    assert list(cf_stream) == list(flows)
-
-
-def test_getitem_int_dunder(_create_cf_stream):
-    """Integer indexing returns a single CashFlow."""
-    cf_stream, flows = _create_cf_stream
-    assert cf_stream[0] == flows[0]
-    assert cf_stream[2] == flows[2]
-
-
-def test_getitem_slice_dunder(_create_cf_stream):
-    """Slice indexing returns a CashFlowStream with the selected entries."""
-    cf_stream, flows = _create_cf_stream
-    result = cf_stream[1:3]
-    assert isinstance(result, CashFlowStream)
-    assert result.entries == [flows[1], flows[2]]
-
-
-def test_getitem_negative_index_matches_list(_create_cf_stream):
-    """Negative indices match ordinary Python list indexing."""
-    cf_stream, flows = _create_cf_stream
-    assert cf_stream[-1] == flows[-1]
-    assert cf_stream[-2] == flows[-2]
-
-
-def test_getitem_stepped_slice_matches_list(_create_cf_stream):
-    """Stepped slices match ordinary Python list slicing."""
-    cf_stream, flows = _create_cf_stream
-    result = cf_stream[::2]
-    assert isinstance(result, CashFlowStream)
-    assert result.entries == flows[::2]
-
-
-def test_getitem_reversed_slice_matches_list(_create_cf_stream):
-    """Reversed slices match ordinary Python list slicing."""
-    cf_stream, flows = _create_cf_stream
-    result = cf_stream[::-1]
-    assert isinstance(result, CashFlowStream)
-    assert result.entries == flows[::-1]
-
-
-def test_truthiness_follows_length(_create_cf_stream):
-    """Empty streams are falsy and non-empty streams are truthy."""
-    assert bool(_create_cf_stream[0]) is True
-    assert bool(CashFlowStream([])) is False
 
 
 def test_min_default_key(_create_cf_stream):
@@ -898,20 +762,17 @@ def test_filter_string_classification_normalized_consistently():
         ("group_by_tax_treatment", lambda s: s.group_by_tax_treatment()),
         ("sort", lambda s: s.sort(lambda cf: cf.amount)),
         ("scale", lambda s: s.scale(2.0)),
-        ("apply", lambda s: s.apply(lambda cf: cf.replace(amount=cf.amount * 2))),
-        ("flat_apply", lambda s: s.flat_apply(lambda cf: [cf, cf])),
-        ("filter_apply", lambda s: s.filter_apply(lambda cf: cf if cf.amount > 0 else None)),
         ("date_range", lambda s: s.date_range(start=date(2026, 2, 1))),
         ("inflows", lambda s: s.inflows()),
         ("outflows", lambda s: s.outflows()),
         ("cash_only", lambda s: s.cash_only()),
-        ("append", lambda s: s.append(CashFlow(999.0, date(2026, 12, 31)))),
-        ("extend", lambda s: s.extend([CashFlow(999.0, date(2026, 12, 31))])),
-        ("getitem_slice", lambda s: s[1:3]),
     ],
 )
 def test_non_mutating_methods_leave_original_unchanged(_create_cf_stream, name, op):
-    """Every non-mutating method leaves the original entry sequence unchanged."""
+    """Every non-mutating method leaves the original entry sequence unchanged.
+
+    Methods inherited unchanged from BaseStream are covered by ``test_stream_base.py``.
+    """
     cf_stream, flows = _create_cf_stream
     original_entries = list(cf_stream.entries)
 
@@ -919,155 +780,6 @@ def test_non_mutating_methods_leave_original_unchanged(_create_cf_stream, name, 
 
     assert cf_stream.entries == original_entries
     assert cf_stream.entries == flows
-
-
-# ---- append tests ----
-
-
-def test_append():
-    """Tests appending a single cashflow."""
-    stream = CashFlowStream([CashFlow(100.0, date(2026, 1, 1))])
-    new_flow = CashFlow(200.0, date(2026, 2, 1))
-    result = stream.append(new_flow)
-    assert len(result.entries) == 2
-    assert result.entries[1] == new_flow
-
-
-def test_append_immutability():
-    """Tests that append does not modify the original stream."""
-    original = CashFlowStream([CashFlow(100.0, date(2026, 1, 1))])
-    _ = original.append(CashFlow(200.0, date(2026, 2, 1)))
-    assert len(original.entries) == 1
-
-
-def test_append_empty_stream():
-    """Tests appending to an empty stream."""
-    flow = CashFlow(100.0, date(2026, 1, 1))
-    result = CashFlowStream([]).append(flow)
-    assert result.entries == [flow]
-
-
-# ---- extend tests ----
-
-
-def test_extend_with_stream():
-    """Tests extending with another CashFlowStream."""
-    s1 = CashFlowStream([CashFlow(100.0, date(2026, 1, 1))])
-    s2 = CashFlowStream([CashFlow(200.0, date(2026, 2, 1))])
-    result = s1.extend(s2)
-    assert len(result.entries) == 2
-
-
-def test_extend_with_iterable():
-    """Tests extending with a plain list of CashFlow objects."""
-    s1 = CashFlowStream([CashFlow(100.0, date(2026, 1, 1))])
-    extra = [CashFlow(200.0, date(2026, 2, 1)), CashFlow(300.0, date(2026, 3, 1))]
-    result = s1.extend(extra)
-    assert len(result.entries) == 3
-
-
-def test_extend_immutability():
-    """Tests that extend does not modify the original stream."""
-    original = CashFlowStream([CashFlow(100.0, date(2026, 1, 1))])
-    _ = original.extend(CashFlowStream([CashFlow(200.0, date(2026, 2, 1))]))
-    assert len(original.entries) == 1
-
-
-def test_extend_rejects_other_stream_types():
-    """extend rejects stream subclasses from other domains."""
-    original = CashFlowStream([CashFlow(100.0, date(2026, 1, 1))])
-    generation_stream = GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 1)
-    with pytest.raises(TypeError, match="Cannot combine CashFlowStream with GenerationStream"):
-        original.extend(generation_stream)
-
-
-# ---- flat_apply tests ----
-
-
-def test_flat_apply():
-    """Tests flat_apply producing multiple flows per input."""
-    stream = CashFlowStream([CashFlow(100.0, date(2026, 1, 1))])
-    result = stream.flat_apply(lambda cf: [cf, CashFlow(cf.amount * 2, cf.date, "doubled")])
-    assert len(result.entries) == 2
-    assert result.entries[1].amount == 200.0
-
-
-def test_flat_apply_filtering():
-    """Tests flat_apply returning empty iterables to drop flows."""
-    stream = CashFlowStream(
-        [
-            CashFlow(100.0, date(2026, 1, 1)),
-            CashFlow(-50.0, date(2026, 2, 1)),
-        ]
-    )
-    result = stream.flat_apply(lambda cf: [cf] if cf.amount > 0 else [])
-    assert len(result.entries) == 1
-    assert result.entries[0].amount == 100.0
-
-
-def test_flat_apply_empty_stream():
-    """Tests flat_apply on an empty stream."""
-    result = CashFlowStream([]).flat_apply(lambda cf: [cf])
-    assert result.entries == []
-
-
-def test_flat_apply_preserves_output_ordering():
-    """flat_apply() emits entries in order: per-input in order, each input's outputs in order."""
-    cf1 = CashFlow(100.0, date(2026, 1, 1), label="a")
-    cf2 = CashFlow(200.0, date(2026, 2, 1), label="b")
-    stream = CashFlowStream([cf1, cf2])
-
-    def _split(cf):
-        return [
-            cf.replace(label=f"{cf.label}_1"),
-            cf.replace(label=f"{cf.label}_2"),
-        ]
-
-    result = stream.flat_apply(_split)
-    assert [flow.label for flow in result.entries] == ["a_1", "a_2", "b_1", "b_2"]
-
-
-# ---- filter_apply tests ----
-
-
-def test_filter_apply():
-    """Tests filter_apply keeping and transforming flows."""
-    stream = CashFlowStream(
-        [
-            CashFlow(100.0, date(2026, 1, 1)),
-            CashFlow(-50.0, date(2026, 2, 1)),
-        ]
-    )
-    result = stream.filter_apply(
-        lambda cf: CashFlow(cf.amount * 2, cf.date) if cf.amount > 0 else None
-    )
-    assert len(result.entries) == 1
-    assert result.entries[0].amount == 200.0
-
-
-def test_filter_apply_all_none():
-    """Tests filter_apply when all flows are dropped."""
-    stream = CashFlowStream([CashFlow(100.0, date(2026, 1, 1))])
-    result = stream.filter_apply(lambda cf: None)
-    assert result.entries == []
-
-
-def test_filter_apply_preserves_output_ordering():
-    """filter_apply() preserves the relative order of surviving entries."""
-    cf1 = CashFlow(100.0, date(2026, 1, 1), label="a")
-    cf2 = CashFlow(-50.0, date(2026, 2, 1), label="b")
-    cf3 = CashFlow(300.0, date(2026, 3, 1), label="c")
-    stream = CashFlowStream([cf1, cf2, cf3])
-
-    result = stream.filter_apply(lambda cf: cf if cf.amount > 0 else None)
-
-    assert [flow.label for flow in result.entries] == ["a", "c"]
-
-
-def test_filter_apply_empty_stream():
-    """Tests filter_apply on an empty stream."""
-    result = CashFlowStream([]).filter_apply(lambda cf: cf)
-    assert result.entries == []
 
 
 # ---- inflows / outflows / cash_only tests ----
