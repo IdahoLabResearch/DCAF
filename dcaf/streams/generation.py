@@ -612,8 +612,9 @@ class GenerationStream(BaseStream[Generation]):
         ------
         ValueError
             If the date range is empty or invalid, numeric inputs are not
-            finite, capacity inputs are negative, or ``capacity_reduction`` is
-            outside ``[0, 1]``.
+            finite, capacity inputs are negative, ``capacity_factor`` is
+            outside ``[0, 1]``, or ``capacity_reduction`` is outside
+            ``[0, 1]``.
 
         Examples
         --------

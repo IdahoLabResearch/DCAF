@@ -69,8 +69,8 @@ def generator_outage(
     ------
     ValueError
         If the date range is empty or invalid, numeric inputs are not finite,
-        capacity inputs are negative, or ``capacity_reduction`` is outside
-        ``[0, 1]``.
+        capacity inputs are negative, ``capacity_factor`` is outside ``[0, 1]``,
+        or ``capacity_reduction`` is outside ``[0, 1]``.
 
     Examples
     --------
@@ -201,7 +201,8 @@ def construction_outage(
     ------
     ValueError
         If the date range is empty or invalid, capacity inputs are negative,
-        ``capacity_reduction`` is outside ``[0, 1]``, or ``sell_price_per_unit``,
+        ``capacity_factor`` is outside ``[0, 1]``, ``capacity_reduction`` is outside
+        ``[0, 1]``, or ``sell_price_per_unit``,
         ``fixed_cost``, or ``cost_per_day`` is not finite.
 
     Examples
