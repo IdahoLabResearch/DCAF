@@ -34,7 +34,11 @@ from dcaf.shared.types import (
     normalize_cashflow_classification,
     parse_day_count_convention,
 )
-from dcaf.shared.validation import validate_finite, validate_non_negative
+from dcaf.shared.validation import (
+    validate_capacity_factor,
+    validate_finite,
+    validate_non_negative,
+)
 from dcaf.streams.cashflows import CashFlowStream
 from dcaf.streams.generation import GenerationStream
 
@@ -165,8 +169,7 @@ class CapacityGenerationConfig:
 
     def __post_init__(self) -> None:
         validate_non_negative(self.capacity_mw, "capacity_mw")
-        if not 0.0 <= self.capacity_factor <= 1.0:
-            raise ValueError("capacity_factor must be between 0 and 1")
+        validate_capacity_factor(self.capacity_factor, "capacity_factor")
         if self.periods is not None and self.periods <= 0:
             raise ValueError("generation periods must be positive")
         if (
@@ -197,8 +200,7 @@ class GenerationOutageConfig:
         if self.capacity_mw is not None:
             validate_non_negative(self.capacity_mw, "capacity_mw")
         if self.capacity_factor is not None:
-            if not 0.0 <= self.capacity_factor <= 1.0:
-                raise ValueError("capacity_factor must be between 0 and 1")
+            validate_capacity_factor(self.capacity_factor, "capacity_factor")
         validate_capacity_reduction(self.capacity_reduction)
 
 
@@ -224,8 +226,7 @@ class ConstructionOutageConfig:
     def __post_init__(self) -> None:
         validate_outage_dates(self.start, self.end)
         validate_non_negative(self.capacity_mw, "capacity_mw")
-        if not 0.0 <= self.capacity_factor <= 1.0:
-            raise ValueError("capacity_factor must be between 0 and 1")
+        validate_capacity_factor(self.capacity_factor, "capacity_factor")
         validate_capacity_reduction(self.capacity_reduction)
         if self.sell_price_per_unit is not None:
             validate_finite(self.sell_price_per_unit, "sell_price_per_unit")

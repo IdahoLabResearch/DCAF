@@ -37,7 +37,12 @@ from dcaf.shared.types import (
     TimingConvention,
     normalize_cashflow_classification,
 )
-from dcaf.shared.validation import validate_date, validate_finite, validate_non_negative
+from dcaf.shared.validation import (
+    validate_capacity_factor,
+    validate_date,
+    validate_finite,
+    validate_non_negative,
+)
 from dcaf.streams.base import BaseGroup, BaseStream
 from dcaf.metrics.npv import npv
 
@@ -379,9 +384,8 @@ def _validate_outage_inputs(
 
     validate_finite(capacity_reduction, "capacity_reduction")
     validate_non_negative(capacity_mw, "capacity_mw")
-    validate_non_negative(capacity_factor, "capacity_factor")
-    if not 0.0 <= capacity_reduction <= 1.0:
-        raise ValueError("capacity_reduction must be between 0 and 1")
+    validate_capacity_factor(capacity_factor, "capacity_factor")
+    validate_capacity_factor(capacity_reduction, "capacity_reduction")
 
 
 @dataclass
@@ -533,9 +537,7 @@ class GenerationStream(BaseStream[Generation]):
         2
         """
         validate_non_negative(capacity_mw, "capacity_mw")
-        validate_finite(capacity_factor, "capacity_factor")
-        if not 0.0 <= capacity_factor <= 1.0:
-            raise ValueError("capacity_factor must be between 0 and 1")
+        validate_capacity_factor(capacity_factor, "capacity_factor")
 
         entries: list[Generation] = []
         windows = period_windows(
