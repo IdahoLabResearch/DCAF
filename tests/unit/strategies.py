@@ -127,6 +127,31 @@ ANCHOR_DATES = st.one_of(
     st.sampled_from([date(2028, 2, 29), date(2000, 2, 29), date(2030, 2, 28), date(2100, 2, 28)]),
 )
 
+# Month-end schedule anchors: the last day of a uniformly drawn month, plus Feb. month-ends in
+# leap, non-leap, and century years.
+MONTH_END_DATES = st.one_of(
+    DATES.map(lambda day: day.replace(day=monthrange(day.year, day.month)[1])),
+    st.sampled_from([date(2028, 2, 29), date(2000, 2, 29), date(2030, 2, 28), date(2100, 2, 28)]),
+)
+
+
+@st.composite
+def _dates_off_short_month_ends(draw: st.DrawFn) -> date:
+    """Draw a day that is not the last day of a month shorter than 31 days, over-weighting the
+    28th onward. The 31st of a 31-day month is included."""
+    day = draw(DATES)
+    month_length = monthrange(day.year, day.month)[1]
+    last = month_length if month_length == 31 else month_length - 1
+    return day.replace(day=draw(st.one_of(st.integers(1, last), st.integers(min(28, last), last))))
+
+
+# Schedule anchors where the end-of-month rule has no effect, including Feb. 28 in a leap year
+# and the 30th of a 31-day month.
+DATES_OFF_SHORT_MONTH_ENDS = st.one_of(
+    _dates_off_short_month_ends(),
+    st.sampled_from([date(2028, 2, 28), date(2030, 1, 30), date(2030, 1, 31), date(2100, 2, 27)]),
+)
+
 
 def calendar_period_key(day: date, frequency: str) -> date:
     """Identify the calendar settlement period containing *day* by its first day."""

@@ -13,14 +13,16 @@ from datetime import date, timedelta
 import warnings
 
 import pytest
-from hypothesis import assume, example, given
+from hypothesis import example, given
 from hypothesis import strategies as st
 
 from dcaf.shared.time import add_periods, elapsed_periods, period_windows
 from strategies import (
     ANCHOR_DATES,
+    DATES_OFF_SHORT_MONTH_ENDS,
     DAY_COUNT_CONVENTIONS,
     FREQUENCIES,
+    MONTH_END_DATES,
     anchored_boundary,
     is_month_end,
 )
@@ -171,13 +173,12 @@ def test_add_periods_reverse_count_returns_to_the_start_when_its_day_survives(
         assert (back.year, back.month) == (start.year, start.month)
 
 
-@given(ANCHOR_DATES, st.integers(-240, 240), st.sampled_from(["month", "quarter", "year"]))
+@given(MONTH_END_DATES, st.integers(-240, 240), st.sampled_from(["month", "quarter", "year"]))
 @example(date(2030, 4, 30), -1, "month")  # backward from a 30-day month-end: Mar. 31
 @example(date(2030, 6, 30), 2, "quarter")  # Jun. 30 -> Dec. 31
 def test_end_of_month_start_keeps_every_boundary_on_a_month_end(start, count, frequency):
     """Under the default month-end rule, a schedule starting on a month-end lands on a month-end
     at every month, quarter, or year boundary, stepping forward or backward."""
-    assume(is_month_end(start))
     assert is_month_end(add_periods(start, count, frequency))
 
 
@@ -190,10 +191,9 @@ def test_daily_schedules_ignore_end_of_month(start, count):
     assert add_periods(start, count, "day", end_of_month=False) == expected
 
 
-@given(ANCHOR_DATES, st.integers(-240, 240), FREQUENCIES)
+@given(DATES_OFF_SHORT_MONTH_ENDS, st.integers(-240, 240), FREQUENCIES)
 def test_end_of_month_only_changes_short_month_end_starts(start, count, frequency):
     """The flag only matters for a start on the last day of a month shorter than 31 days."""
-    assume(not (is_month_end(start) and start.day < 31))
     assert add_periods(start, count, frequency, end_of_month=True) == add_periods(
         start, count, frequency, end_of_month=False
     )
