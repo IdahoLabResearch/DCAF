@@ -12,7 +12,7 @@ from collections.abc import Iterator, Sequence
 from datetime import date
 from typing import assert_never
 
-from dcaf.shared.time import time_delta_per_period
+from dcaf.shared.time import add_periods
 from dcaf.shared.types import (
     MACRSConvention,
     MACRSPropertyClass,
@@ -296,6 +296,8 @@ def macrs_schedule(
     label: str = "MACRS Depreciation",
     pro_forma_category: ProFormaCategory | str | None = ProFormaCategory.DEPRECIATION,
     tax_treatment: TaxTreatment | str = TaxTreatment.DEDUCTIBLE,
+    *,
+    end_of_month: bool = True,
 ) -> CashFlowStream:
     """
     Generate a MACRS depreciation schedule.
@@ -306,6 +308,9 @@ def macrs_schedule(
         Depreciable basis (positive number). Flows will be negative.
     placed_in_service : date
         Date the asset is placed in service; first depreciation is on this date.
+        Year *k* is dated at yearly boundary *k* anchored at this date (see
+        :func:`~dcaf.shared.time.add_periods`), so a Feb. 29 placement is dated
+        Feb. 28 in non-leap years and Feb. 29 again in leap years.
     property_class : MACRSPropertyClass
         IRS property class (3, 5, 7, 10, 15, or 20).
     convention : MACRSConvention, optional
@@ -319,6 +324,10 @@ def macrs_schedule(
         Pro-forma category for each flow. Default is ``"depreciation"``.
     tax_treatment : TaxTreatment or str, optional
         Tax treatment for each flow. Default is ``"deductible"``.
+    end_of_month : bool, optional
+        Whether a placement on the last day of a month dates every year on the last
+        day of its month, so a Feb. 28 placement reaches Feb. 29 in leap years.
+        Default is ``True``.
 
     Returns
     -------
@@ -346,7 +355,7 @@ def macrs_schedule(
     )
     entries: list[CashFlow] = []
     for i, rate in enumerate(rates):
-        dep_date = date(placed_in_service.year + i, placed_in_service.month, placed_in_service.day)
+        dep_date = add_periods(placed_in_service, i, "year", end_of_month=end_of_month)
         entries.append(
             CashFlow(
                 amount=-cost_basis * rate,
@@ -376,6 +385,8 @@ def vdb_schedule(
     label: str = "VDB Depreciation",
     pro_forma_category: ProFormaCategory | str | None = ProFormaCategory.DEPRECIATION,
     tax_treatment: TaxTreatment | str = TaxTreatment.DEDUCTIBLE,
+    *,
+    end_of_month: bool = True,
 ) -> CashFlowStream:
     """
     Generate a variable declining balance depreciation schedule.
@@ -410,8 +421,9 @@ def vdb_schedule(
         values both candidates and returns the higher-NPV schedule.
     schedule_dates : Sequence[date] | None, optional
         Explicit dates for convention-aware schedule entries. When provided,
-        depreciation flows are placed on these dates instead of
-        ``placed_in_service + n * frequency``. Dates before
+        depreciation flows are placed on these dates instead of boundary ``n``
+        of the schedule anchored at ``placed_in_service`` (see
+        :func:`~dcaf.shared.time.add_periods`). Dates before
         ``placed_in_service`` are ignored; a matching date is included.
     valuation_rate : float | None, optional
         Annual discount rate used when ``convention`` is
@@ -429,6 +441,10 @@ def vdb_schedule(
         Pro-forma category for each flow. Default is ``"depreciation"``.
     tax_treatment : TaxTreatment or str, optional
         Tax treatment for each flow. Default is ``"deductible"``.
+    end_of_month : bool, optional
+        Whether a placement on the last day of a month dates every monthly,
+        quarterly, or yearly period on the last day of its month. Ignored when
+        ``schedule_dates`` is given. Default is ``True``.
 
     Returns
     -------
@@ -508,14 +524,11 @@ def vdb_schedule(
 
     if convention != "none":
         if normalized_schedule_dates is None:
-            delta = time_delta_per_period(frequency)
             period_count = life + (1 if terminal_catch_up else 0)
-            generated_dates: list[date] = []
-            current_date = placed_in_service
-            for _ in range(period_count):
-                generated_dates.append(current_date)
-                current_date += delta
-            candidate_dates: Sequence[date] = tuple(generated_dates)
+            candidate_dates: Sequence[date] = tuple(
+                add_periods(placed_in_service, k, frequency, end_of_month=end_of_month)
+                for k in range(period_count)
+            )
         else:
             candidate_dates = normalized_schedule_dates
 
@@ -577,8 +590,6 @@ def vdb_schedule(
             tax_treatment=resolved_tax_treatment,
         )
 
-    delta = time_delta_per_period(frequency)
-    current_date = placed_in_service
     resolved_category, resolved_tax_treatment = normalize_cashflow_classification(
         pro_forma_category, tax_treatment
     )
@@ -597,13 +608,14 @@ def vdb_schedule(
         entries.append(
             CashFlow(
                 amount=-depreciation,
-                date=current_date,
+                date=add_periods(
+                    placed_in_service, period_number - 1, frequency, end_of_month=end_of_month
+                ),
                 label=label,
                 is_cash=False,
                 pro_forma_category=resolved_category,
                 tax_treatment=resolved_tax_treatment,
             )
         )
-        current_date += delta
 
     return CashFlowStream(entries)
