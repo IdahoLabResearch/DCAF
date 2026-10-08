@@ -34,8 +34,8 @@ from dcaf.shared.types import (
 from dcaf.shared.time import (
     PeriodWindow,
     _calendar_period_windows,
+    add_periods,
     period_window_event_date,
-    time_delta_per_period,
     timedelta_fractional_years,
 )
 
@@ -351,6 +351,11 @@ class ConstructionSpendConfig:
     day_count_convention : {"actual/365-no-leap", "actual/365-fixed", "actual/actual"}, optional
         Day-count convention used for annual construction escalation and
         construction-period interest.
+    end_of_month : bool, optional
+        Whether a construction start on the last day of a month keeps every
+        debt-servicing boundary on the last day of its month. Also applies to
+        the implicit escalation. A user-supplied escalation policy keeps its own
+        setting. Default is ``True``.
 
     Notes
     -----
@@ -382,6 +387,7 @@ class ConstructionSpendConfig:
     amount_reference_date: date | None = None
     day_count_convention: DayCountConvention = "actual/actual"
     timing: TimingConvention = "end"
+    end_of_month: bool = True
 
     def __post_init__(self) -> None:
         if self.total_cost <= 0:
@@ -421,6 +427,7 @@ def _construction_simple_escalation(config: ConstructionSpendConfig) -> Constant
         rate=config.escalation,
         period=cast(Period, parse_period(str(config.escalation_period)).value),
         day_count_convention=config.day_count_convention,
+        end_of_month=config.end_of_month,
     )
 
 
@@ -444,18 +451,20 @@ def _iter_period_boundaries(
     start_date: date,
     end_date: date,
     period: _PeriodEnum,
+    end_of_month: bool = True,
 ) -> list[tuple[date, date]]:
-    """Generate inclusive-exclusive period boundaries over a construction window."""
-    delta = time_delta_per_period(period.value)
+    """Generate half-open periods anchored at *start_date*, the last cut at *end_date*."""
     boundaries: list[tuple[date, date]] = []
     period_index = 0
 
     while True:
-        current = start_date + delta * period_index
+        current = add_periods(start_date, period_index, period.value, end_of_month=end_of_month)
         if current >= end_date:
             return boundaries
 
-        next_date = start_date + delta * (period_index + 1)
+        next_date = add_periods(
+            start_date, period_index + 1, period.value, end_of_month=end_of_month
+        )
         period_end = next_date if next_date <= end_date else end_date
         boundaries.append((current, period_end))
         period_index += 1
@@ -601,6 +610,7 @@ def _build_cashflows(
         config.start_date,
         config.end_date,
         _debt_servicing_period(config),
+        config.end_of_month,
     ):
         while draw_index < len(scheduled_draws) and scheduled_draws[draw_index][0] <= service_start:
             debt_balance += scheduled_draws[draw_index][1]
@@ -669,6 +679,10 @@ class ConstructionSpendBuilder:
     amount_reference_date : date, optional
         Date at which ``total_cost`` is known. Escalation is evaluated from this
         date to each spend booking date. Defaults to ``start_date``.
+    end_of_month : bool, optional
+        Whether a construction start on the last day of a month keeps every
+        debt-servicing boundary, and the implicit escalation, on the last day of
+        its month. Default is ``True``.
 
     Notes
     -----
@@ -704,6 +718,7 @@ class ConstructionSpendBuilder:
         escalation_period: Period = "year",
         amount_reference_date: date | None = None,
         day_count_convention: DayCountConvention = "actual/actual",
+        end_of_month: bool = True,
     ) -> None:
         self._config = ConstructionSpendConfig(
             total_cost=total_cost,
@@ -717,6 +732,7 @@ class ConstructionSpendBuilder:
             escalation_period=parse_period(str(escalation_period)),
             amount_reference_date=amount_reference_date,
             day_count_convention=day_count_convention,
+            end_of_month=end_of_month,
         )
         self._escalation_policy: EscalationPolicy | None = None
 
@@ -1029,6 +1045,7 @@ def construction_spend_schedule(
     amount_reference_date: date | None = None,
     day_count_convention: DayCountConvention = "actual/actual",
     escalation_policy: EscalationPolicy | None = None,
+    end_of_month: bool = True,
 ) -> CashFlowStream:
     """Build a construction spend schedule directly.
 
@@ -1069,6 +1086,10 @@ def construction_spend_schedule(
         ``amount_reference_date``.
     day_count_convention : DayCountConvention, optional
         Day-count convention used for annual escalation and construction interest.
+    end_of_month : bool, optional
+        Whether a construction start on the last day of a month keeps every
+        debt-servicing boundary on the last day of its month. Also applies to the
+        implicit escalation, but not to ``escalation_policy``. Default is ``True``.
 
     Returns
     -------
@@ -1135,6 +1156,7 @@ def construction_spend_schedule(
         escalation_period=escalation_period,
         amount_reference_date=amount_reference_date,
         day_count_convention=day_count_convention,
+        end_of_month=end_of_month,
     )
     if policy_override is not None:
         builder = builder.escalation_policy(policy_override)
