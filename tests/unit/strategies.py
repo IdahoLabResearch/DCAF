@@ -4,9 +4,10 @@
 
 The oracles deliberately reimplement calendar logic in the most direct way possible (day-by-day
 counting, month arithmetic) rather than calling DCAF helpers, so properties checked against them
-are not tautological.
+are not tautological. Month lengths come from the standard library's ``calendar.monthrange``.
 """
 
+from calendar import monthrange
 from datetime import date, timedelta
 
 from hypothesis import strategies as st
@@ -83,6 +84,73 @@ def _next_calendar_period_start(period_start: date, frequency: str) -> date:
     months = {"month": 1, "quarter": 3, "year": 12}[frequency]
     index = period_start.year * 12 + period_start.month - 1 + months
     return date(index // 12, index % 12 + 1, 1)
+
+
+def is_month_end(day: date) -> bool:
+    """Return whether *day* is the last day of its month."""
+    return day.day == monthrange(day.year, day.month)[1]
+
+
+def anchored_boundary(start: date, count: int, frequency: str, end_of_month: bool = True) -> date:
+    """Return boundary *count* of a schedule anchored at *start*: the start's day number in the
+    target month, clamped to shorter months, or the target month's last day when
+    *end_of_month* is set and *start* is a month-end. Daily schedules ignore *end_of_month*."""
+    # Daily frequency is the simple case since the day is our base unit of time
+    if frequency == "day":
+        return start + timedelta(days=count)
+    # Month/quarter/year frequencies can have subtleties in anchoring due to handling of leap
+    # years and the variable length of months.
+    # Use number of months as base unit of time for month/quarter/year frequencies
+    months = {"month": 1, "quarter": 3, "year": 12}[frequency] * count
+    index = start.year * 12 + start.month - 1 + months
+    year, month = index // 12, index % 12 + 1
+    month_length = monthrange(year, month)[1]
+    # start date is the last day of its month and `end_of_month=True` -> anchor to last day of month
+    if end_of_month and is_month_end(start):
+        return date(year, month, month_length)
+    # otherwise keep the start's day number, clamped to shorter months
+    return date(year, month, min(start.day, month_length))
+
+
+@st.composite
+def _late_month_dates(draw: st.DrawFn) -> date:
+    """Draw a day from the 28th through the end of a month, where anchoring rules differ."""
+    day = draw(DATES)
+    return day.replace(day=draw(st.integers(28, monthrange(day.year, day.month)[1])))
+
+
+# Schedule anchors over-weight late-month days, including Feb. 28 and Feb. 29 in leap,
+# non-leap, and century years, since uniform dates rarely land on them.
+ANCHOR_DATES = st.one_of(
+    DATES,
+    _late_month_dates(),
+    st.sampled_from([date(2028, 2, 29), date(2000, 2, 29), date(2030, 2, 28), date(2100, 2, 28)]),
+)
+
+# Month-end schedule anchors: the last day of a uniformly drawn month, plus Feb. month-ends in
+# leap, non-leap, and century years.
+MONTH_END_DATES = st.one_of(
+    DATES.map(lambda day: day.replace(day=monthrange(day.year, day.month)[1])),
+    st.sampled_from([date(2028, 2, 29), date(2000, 2, 29), date(2030, 2, 28), date(2100, 2, 28)]),
+)
+
+
+@st.composite
+def _dates_off_short_month_ends(draw: st.DrawFn) -> date:
+    """Draw a day that is not the last day of a month shorter than 31 days, over-weighting the
+    28th onward. The 31st of a 31-day month is included."""
+    day = draw(DATES)
+    month_length = monthrange(day.year, day.month)[1]
+    last = month_length if month_length == 31 else month_length - 1
+    return day.replace(day=draw(st.one_of(st.integers(1, last), st.integers(min(28, last), last))))
+
+
+# Schedule anchors where the end-of-month rule has no effect, including Feb. 28 in a leap year
+# and the 30th of a 31-day month.
+DATES_OFF_SHORT_MONTH_ENDS = st.one_of(
+    _dates_off_short_month_ends(),
+    st.sampled_from([date(2028, 2, 28), date(2030, 1, 30), date(2030, 1, 31), date(2100, 2, 27)]),
+)
 
 
 def calendar_period_key(day: date, frequency: str) -> date:
