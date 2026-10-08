@@ -140,12 +140,19 @@ class ConstantRateEscalation:
     day_count_convention : {"actual/365-no-leap", "actual/365-fixed", "actual/actual"}, optional
         Day-count convention used when converting annual rates to fractional
         periods. Default is ``"actual/actual"``.
+    end_of_month : bool, optional
+        Whether monthly and quarterly escalation from a reference date on the
+        last day of a month steps on the last day of each month. Default is
+        ``True``.
 
     Notes
     -----
-    - Annual escalation uses the supplied day-count convention.
-    - Monthly and quarterly escalation use calendar-based elapsed periods so
-      aligned dates such as January 1 to February 1 count as exactly one month.
+    - Annual escalation uses the supplied day-count convention and ignores
+      ``end_of_month``.
+    - Monthly and quarterly escalation compound one full step at each boundary
+      of the schedule anchored at ``reference_date`` (see
+      :func:`~dcaf.shared.time.add_periods`), plus the elapsed share of the
+      days in the scheduled period containing ``target_date``.
 
     Examples
     --------
@@ -161,12 +168,25 @@ class ConstantRateEscalation:
     >>> monthly = ConstantRateEscalation(date(2025, 1, 1), rate=0.01, period="month")
     >>> round(monthly.factor(date(2025, 3, 1)), 4)
     1.0201
+
+    From a month-end reference date, each month-end is one full step unless
+    ``end_of_month`` is disabled:
+
+    >>> eom = ConstantRateEscalation(date(2030, 4, 30), rate=0.01, period="month")
+    >>> round(eom.factor(date(2030, 5, 31)), 4)
+    1.01
+    >>> no_eom = ConstantRateEscalation(
+    ...     date(2030, 4, 30), rate=0.01, period="month", end_of_month=False
+    ... )
+    >>> round(no_eom.factor(date(2030, 5, 31)), 4)
+    1.0103
     """
 
     reference_date: date
     rate: float
     period: Period = "year"
     day_count_convention: DayCountConvention = "actual/actual"
+    end_of_month: bool = True
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "period", cast(Period, parse_period(str(self.period)).value))
@@ -198,6 +218,7 @@ class ConstantRateEscalation:
             target_date,
             self.period,
             self.day_count_convention,
+            end_of_month=self.end_of_month,
         )
         return compound_factor(self.rate, periods)
 
@@ -507,6 +528,7 @@ class EscalationBuilder:
         period: Period = "year",
         start_date: date | None = None,
         day_count_convention: DayCountConvention = "actual/actual",
+        end_of_month: bool = True,
     ) -> "EscalationBuilder":
         """Append a constant-rate escalation segment.
 
@@ -523,6 +545,10 @@ class EscalationBuilder:
         day_count_convention : {"actual/365-no-leap", "actual/365-fixed", "actual/actual"}, optional
             Day-count convention used when ``period="year"``. Default is
             ``"actual/actual"``.
+        end_of_month : bool, optional
+            Whether monthly and quarterly escalation from a segment start on
+            the last day of a month steps on the last day of each month.
+            Default is ``True``.
 
         Returns
         -------
@@ -536,6 +562,7 @@ class EscalationBuilder:
                 rate=rate,
                 period=period,
                 day_count_convention=day_count_convention,
+                end_of_month=end_of_month,
             ),
             start_date=segment_start,
         )
