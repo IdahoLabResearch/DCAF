@@ -13,9 +13,8 @@ Functions:
 
 from datetime import date
 
-from dateutil.relativedelta import relativedelta
-
 from dcaf.finance.escalation import EscalationPolicy
+from dcaf.shared.time import add_periods
 from dcaf.shared.types import (
     DayCountConvention,
     Period,
@@ -48,6 +47,7 @@ def ptc(
     escalation_policy: EscalationPolicy | None = None,
     frequency: Period = "year",
     timing: TimingConvention = "end",
+    end_of_month: bool = True,
 ) -> CashFlowStream:
     """
     Compute Production Tax Credit cashflows from a generation stream.
@@ -77,7 +77,8 @@ def ptc(
     years : int
         Number of calendar years of PTC eligibility, measured from the earliest
         generation period start. The anniversary ending the eligibility interval
-        is exclusive.
+        is exclusive and is the yearly boundary ``years`` of the schedule anchored
+        at that start (see :func:`~dcaf.shared.time.add_periods`).
     escalation : float, optional
         Compound escalation rate for the PTC value, interpreted over
         ``escalation_period``. With the default ``escalation_period="year"``,
@@ -108,6 +109,11 @@ def ptc(
     timing : {"begin", "middle", "end"}, optional
         Position of each credit date within its effective settlement overlap.
         Default is ``"end"``.
+    end_of_month : bool, optional
+        Whether eligibility starting on the last day of a month ends on the last
+        day of its month, so a start on Feb. 28 reaches Feb. 29 in a leap year.
+        It does not yet apply to the implicit PTC rate escalation. Default is
+        ``True``.
 
     Returns
     -------
@@ -165,7 +171,7 @@ def ptc(
         return CashFlowStream()
 
     eligibility_start = min(entry.period_start for entry in generation_stream.entries)
-    eligibility_end = eligibility_start + relativedelta(years=years)
+    eligibility_end = add_periods(eligibility_start, years, "year", end_of_month=end_of_month)
     settlements = _generation_settlements(
         generation_stream.entries,
         frequency=frequency,
