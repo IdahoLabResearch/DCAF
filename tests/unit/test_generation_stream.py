@@ -328,15 +328,15 @@ def test_from_outage_is_one_negative_entry_over_the_outage(
 invalid_outage_inputs = st.one_of(
     st.integers(-400, 0).map(lambda days: {"days": days}),
     st.one_of(NON_FINITE, NEGATIVE, ABOVE_ONE).map(lambda value: {"capacity_reduction": value}),
-    st.one_of(NON_FINITE, NEGATIVE).flatmap(
-        lambda value: st.sampled_from([{"capacity_mw": value}, {"capacity_factor": value}])
-    ),
+    st.one_of(NON_FINITE, NEGATIVE).map(lambda value: {"capacity_mw": value}),
+    st.one_of(NON_FINITE, NEGATIVE, ABOVE_ONE).map(lambda value: {"capacity_factor": value}),
 )
 
 
 @given(DATES, invalid_outage_inputs)
 @example(date(2030, 1, 2), {"days": 0})  # empty interval
 @example(date(2030, 1, 1), {"capacity_reduction": 1.1})
+@example(date(2030, 1, 1), {"capacity_factor": 1.1})
 def test_from_outage_rejects_invalid_inputs(start, invalid):
     """An empty or reversed interval, a reduction outside [0, 1], and a negative or non-finite
     capacity or factor are rejected."""
