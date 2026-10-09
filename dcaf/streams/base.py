@@ -6,11 +6,14 @@ These base classes collect the storage and collection mechanics shared by
 domain-specific stream objects such as cashflows and generation. They are
 intentionally internal: public modules should continue to provide the
 user-facing API, domain language, and full end-user documentation.
+
+Every method here is defined without assuming anything about the entry type.
+Behavior that needs to know what an entry is, such as reading its amount or
+date, belongs to the domain-specific subclasses.
 """
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import date
 from typing import (
     Any,
     Callable,
@@ -25,8 +28,7 @@ from typing import (
     overload,
 )
 
-from dcaf.shared.types import Period, SupportsLessThan
-from dcaf.shared.time import period_start
+from dcaf.shared.types import SupportsLessThan
 
 EntryT = TypeVar("EntryT")
 KeyT = TypeVar("KeyT")
@@ -42,8 +44,6 @@ class _StreamProtocol(Protocol[EntryT]):
 
     def count(self) -> int: ...
 
-    def sum(self) -> float: ...
-
     def _new(self, entries: Iterable[EntryT]) -> Self: ...
 
 
@@ -51,9 +51,9 @@ class _StreamProtocol(Protocol[EntryT]):
 class BaseStream(Generic[EntryT]):
     """Reusable collection behavior for entry-based stream classes.
 
-    Subclasses are expected to store their records in ``entries`` and define
-    the domain-specific pieces that cannot be inferred generically, such as
-    how to read an entry amount or which named attributes are valid sort keys.
+    Subclasses store their records in ``entries`` and add the domain-specific
+    operations that depend on what an entry is, such as summing amounts,
+    scaling, date filtering, and default sort order.
     """
 
     entries: list[EntryT] = field(default_factory=list)
@@ -68,49 +68,41 @@ class BaseStream(Generic[EntryT]):
         """Construct a new instance of the current concrete stream type."""
         return type(self)(list(entries))
 
-    def _amount(self, entry: EntryT) -> float:
-        """Return the numeric amount used by :meth:`sum`."""
-        raise NotImplementedError
-
-    def _resolve_sort_key(self, attr: str) -> Callable[[EntryT], SupportsLessThan]:
-        """Return the key function for a named sort attribute."""
-        return lambda entry: getattr(entry, attr)
-
     @classmethod
-    def from_streams(cls, *iterables: "BaseStream[EntryT] | EntryT | Iterable[EntryT]") -> Self:
+    def from_streams(cls, *sources: "BaseStream[EntryT] | Iterable[EntryT]") -> Self:
         """
-        Combine stream objects, single entries, and iterables into one stream.
+        Combine stream objects and iterables of entries into one stream.
 
         Parameters
         ----------
-        *iterables : stream, entry, or Iterable[entry]
+        *sources : stream or Iterable[entry]
             Variable number of sources. Each may be an instance of the same
-            concrete stream type, a single entry, or any iterable of entries.
+            concrete stream type or any iterable of entries.
 
         Returns
         -------
         Self
             New stream containing all entries from all inputs, in argument order.
 
+        Raises
+        ------
+        TypeError
+            If a source is a stream of a different concrete type.
+
         Notes
         -----
         No deduplication is performed. An entry that appears in multiple inputs
         will appear multiple times in the result. Call ``.sort()`` on the result
-        if ordering is required.
+        if ordering is required. Accepting bare entries as sources would require
+        knowing that entries are not themselves iterable, so subclasses that
+        support it do so in their own override.
         """
         all_entries: list[EntryT] = []
 
-        for item in iterables:
-            if isinstance(item, BaseStream):
-                cls._validate_stream_type(item)
-                all_entries.extend(item.entries)
-            else:
-                try:
-                    iterator = iter(cast(Iterable[EntryT], item))
-                except TypeError:
-                    all_entries.append(cast(EntryT, item))
-                else:
-                    all_entries.extend(iterator)
+        for source in sources:
+            if isinstance(source, BaseStream):
+                cls._validate_stream_type(source)
+            all_entries.extend(source)
 
         return cls(all_entries)
 
@@ -299,63 +291,11 @@ class BaseStream(Generic[EntryT]):
         """Return a new stream filtered by predicate."""
         return self._new(entry for entry in self.entries if fn(entry))
 
-    def _filter_by_attrs(self, **attrs: object) -> Self:
-        """Return a new stream filtered by exact attribute matches."""
-
-        def matches(entry: EntryT) -> bool:
-            for name, value in attrs.items():
-                if value is not None and getattr(entry, name) != value:
-                    return False
-            return True
-
-        return self._filter_where(matches)
-
-    def date_range(self, start: date | None = None, end: date | None = None) -> Self:
-        """
-        Filter entries to the half-open ``[start, end)`` interval.
-
-        ``start`` is inclusive; ``end`` is exclusive. Either bound may be
-        omitted to leave that side unbounded.
-
-        Parameters
-        ----------
-        start : date, optional
-            Earliest date to include (inclusive). If ``None``, no lower bound.
-        end : date, optional
-            Exclusive upper boundary. Entries on or after this date are excluded.
-            If ``None``, no upper bound.
-
-        Returns
-        -------
-        Self
-            New stream containing only entries within the date range.
-        """
-        result = self.entries
-        if start is not None:
-            result = [entry for entry in result if getattr(entry, "date") >= start]
-        if end is not None:
-            result = [entry for entry in result if getattr(entry, "date") < end]
-        return self._new(result)
-
     def _grouped_entries_by_key(self, fn: Callable[[EntryT], _KeyT]) -> "dict[_KeyT, list[EntryT]]":
         """Group entries by an arbitrary key function."""
         groups: defaultdict[_KeyT, list[EntryT]] = defaultdict(list)
         for entry in self.entries:
             groups[fn(entry)].append(entry)
-        return dict(groups)
-
-    def _grouped_entries_by_attr(self, attr: str) -> "dict[_KeyT, list[EntryT]]":
-        """Group entries by a named attribute."""
-        groups: defaultdict[_KeyT, list[EntryT]] = defaultdict(list)
-        for entry in self.entries:
-            groups[getattr(entry, attr)].append(entry)
-        return dict(groups)
-
-    def _grouped_entries_by_period(self, period: Period) -> dict[date, list[EntryT]]:
-        """Group entries by normalized period start date."""
-        groups: defaultdict[date, list[EntryT]] = defaultdict(list)
-        for entry in self.entries:
-            groups[period_start(getattr(entry, "date"), period)].append(entry)
         return dict(groups)
 
     def _grouped_streams(self, groups: "dict[_KeyT, list[EntryT]]") -> "dict[_KeyT, Self]":
@@ -368,9 +308,6 @@ class BaseStream(Generic[EntryT]):
     @overload
     def sort(self, *, attr: str, descending: bool = ...) -> Self: ...
 
-    @overload
-    def sort(self) -> Self: ...
-
     def sort(
         self,
         fn: Callable[[EntryT], SupportsLessThan] | None = None,
@@ -379,9 +316,10 @@ class BaseStream(Generic[EntryT]):
         descending: bool = False,
     ) -> Self:
         """
-        Return a new stream sorted by a key function or named attribute.
+        Return a new stream stably sorted by a key function or named attribute.
 
-        When called with no arguments, sorts by ``date`` ascending.
+        Exactly one of *fn* or *attr* must be provided. Subclasses choose any
+        default sort order, because a default key depends on the entry type.
 
         Parameters
         ----------
@@ -400,33 +338,21 @@ class BaseStream(Generic[EntryT]):
         Raises
         ------
         ValueError
-            If both *fn* and *attr* are provided.
+            If both or neither of *fn* and *attr* are provided.
         """
         if fn is not None and attr is not None:
             raise ValueError("Cannot pass both a key function and 'attr' to sort()")
+        if fn is None and attr is None:
+            raise ValueError("sort() requires a key function or 'attr' argument")
 
         if fn is not None:
             return self._new(sorted(self.entries, key=fn, reverse=descending))
 
-        resolved_attr = attr if attr is not None else "date"
-        key = self._resolve_sort_key(resolved_attr)
-        return self._new(sorted(self.entries, key=key, reverse=descending))
-
-    def scale(self, factor: float) -> Self:
-        """Return a new stream with entry amounts scaled by a given factor."""
-        raise NotImplementedError
-
-    def sum(self) -> float:
-        """
-        Return the sum of all entry amounts.
-
-        Returns
-        -------
-        float
-            Sum of the numeric amount for each entry. Returns ``0.0`` for an
-            empty stream.
-        """
-        return sum((self._amount(entry) for entry in self.entries), start=0.0)
+        return self._new(
+            sorted(
+                self.entries, key=lambda entry: getattr(entry, cast(str, attr)), reverse=descending
+            )
+        )
 
     def count(self) -> int:
         """
@@ -600,19 +526,6 @@ class BaseGroup(Generic[KeyT, EntryT, StreamT]):
     def __iter__(self) -> "Iterator[KeyT]":
         """Iterate over grouping keys."""
         return iter(self.groups)
-
-    def sum(self) -> "dict[KeyT, float]":
-        """
-        Return the per-group sum of entry amounts.
-
-        Returns
-        -------
-        dict[KeyT, float]
-            Mapping of each group key to the sum of entry amounts in that group.
-        """
-        return {
-            key: cast(_StreamProtocol[EntryT], stream).sum() for key, stream in self.groups.items()
-        }
 
     def count(self) -> "dict[KeyT, int]":
         """

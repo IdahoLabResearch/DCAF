@@ -37,7 +37,7 @@ from dcaf.shared.types import (
     TimingConvention,
     normalize_cashflow_classification,
 )
-from dcaf.shared.validation import validate_finite, validate_non_negative
+from dcaf.shared.validation import validate_date, validate_finite, validate_non_negative
 from dcaf.streams.base import BaseGroup, BaseStream
 from dcaf.metrics.npv import npv
 
@@ -71,8 +71,12 @@ class Generation:
     Raises
     ------
     ValueError
-        If neither a date nor complete period bounds are provided, if date and
-        period bounds are provided together, or if the period is empty or reversed.
+        If ``amount_mwh`` is NaN or infinite, if neither a date nor complete period
+        bounds are provided, if date and period bounds are provided together, or if
+        the period is empty or reversed.
+    TypeError
+        If ``date``, ``period_start``, or ``period_end`` is supplied but is not a plain
+        ``datetime.date`` (``datetime`` values are rejected).
 
     Notes
     -----
@@ -89,6 +93,10 @@ class Generation:
     period_end: dt.date = cast(dt.date, None)
 
     def __post_init__(self) -> None:
+        validate_finite(self.amount_mwh, "amount_mwh")
+        for name in ("date", "period_start", "period_end"):
+            if getattr(self, name) is not None:
+                validate_date(getattr(self, name), name)
         if self.date is not None and (self.period_start is not None or self.period_end is not None):
             raise ValueError("date cannot be provided together with period bounds")
         if self.date is not None:
@@ -230,6 +238,75 @@ def _prorated_generation_amount(
     return entry.amount_mwh * effective_hours / source_hours
 
 
+def _calendar_allocations(
+    entry: Generation,
+    *,
+    frequency: Period,
+    day_count_convention: DayCountConvention,
+    clip_start: date | None = None,
+    clip_end: date | None = None,
+) -> list[tuple[date, date, float]]:
+    """Split an entry's generation within ``[clip_start, clip_end)`` across calendar periods.
+
+    Returns ``(window_start, window_end, amount_mwh)`` for each calendar-period overlap, shared
+    by elapsed hours under the day-count convention. The final window takes the remainder, so
+    the amounts sum exactly to the generation available in the clipped interval. Settlement and
+    period grouping both allocate through this helper so they cannot disagree.
+    """
+    effective_start = (
+        entry.period_start if clip_start is None else max(entry.period_start, clip_start)
+    )
+    effective_end = entry.period_end if clip_end is None else min(entry.period_end, clip_end)
+    if effective_end <= effective_start:
+        return []
+
+    eligible_amount = _prorated_generation_amount(
+        entry,
+        start=effective_start,
+        end=effective_end,
+        day_count_convention=day_count_convention,
+    )
+    windows = _calendar_period_windows(effective_start, effective_end, frequency)
+    allocated: list[float] = []
+    window_hours = [
+        elapsed_hours(window_start, window_end, day_count_convention)
+        for window_start, window_end in windows
+    ]
+    total_window_hours = fsum(window_hours)
+    allocations: list[tuple[date, date, float]] = []
+    for index, ((window_start, window_end), hours) in enumerate(
+        zip(windows, window_hours, strict=True)
+    ):
+        if index == len(windows) - 1:
+            amount_mwh = eligible_amount - fsum(allocated)
+        elif total_window_hours == 0.0:
+            amount_mwh = 0.0
+        else:
+            amount_mwh = eligible_amount * hours / total_window_hours
+        allocated.append(amount_mwh)
+        allocations.append((window_start, window_end, amount_mwh))
+    return allocations
+
+
+def _calendar_pieces(
+    entry: Generation, *, frequency: Period, day_count_convention: DayCountConvention
+) -> list[Generation]:
+    """Split an entry at calendar period boundaries into period-bounded pieces.
+
+    An entry that lies within a single calendar period is returned unchanged, so point entries
+    keep their legacy ``date``.
+    """
+    allocations = _calendar_allocations(
+        entry, frequency=frequency, day_count_convention=day_count_convention
+    )
+    if len(allocations) == 1:
+        return [entry]
+    return [
+        Generation(amount_mwh, label=entry.label, period_start=start, period_end=end)
+        for start, end, amount_mwh in allocations
+    ]
+
+
 def _generation_settlements(
     entries: list[Generation],
     *,
@@ -242,38 +319,14 @@ def _generation_settlements(
     """Allocate each source entry independently across calendar settlement periods."""
     settlements: list[_GenerationSettlement] = []
     for source_index, entry in enumerate(entries):
-        assert entry.period_start is not None
-        assert entry.period_end is not None
-        effective_start = (
-            entry.period_start if clip_start is None else max(entry.period_start, clip_start)
-        )
-        effective_end = entry.period_end if clip_end is None else min(entry.period_end, clip_end)
-        if effective_end <= effective_start:
-            continue
-
-        eligible_amount = _prorated_generation_amount(
+        allocations = _calendar_allocations(
             entry,
-            start=effective_start,
-            end=effective_end,
+            frequency=frequency,
             day_count_convention=day_count_convention,
+            clip_start=clip_start,
+            clip_end=clip_end,
         )
-        windows = _calendar_period_windows(effective_start, effective_end, frequency)
-        allocated: list[float] = []
-        window_hours = [
-            elapsed_hours(window_start, window_end, day_count_convention)
-            for window_start, window_end in windows
-        ]
-        total_window_hours = fsum(window_hours)
-        for index, ((window_start, window_end), hours) in enumerate(
-            zip(windows, window_hours, strict=True)
-        ):
-            if index == len(windows) - 1:
-                amount_mwh = eligible_amount - fsum(allocated)
-            elif total_window_hours == 0.0:
-                amount_mwh = 0.0
-            else:
-                amount_mwh = eligible_amount * hours / total_window_hours
-            allocated.append(amount_mwh)
+        for window_start, window_end, amount_mwh in allocations:
             window = PeriodWindow(start=window_start, end=window_end)
             settlements.append(
                 _GenerationSettlement(
@@ -365,6 +418,29 @@ class GenerationGroup(BaseGroup[KeyType, Generation, "GenerationStream"]):
         """Return an empty stream for internal regrouping helpers."""
         return GenerationStream()
 
+    def sum(self) -> dict[KeyType, float]:
+        """
+        Return the per-group sum of generation amounts in MWh.
+
+        Returns
+        -------
+        dict[KeyType, float]
+            Mapping of each group key to the total MWh in that group.
+
+        Examples
+        --------
+        >>> from datetime import date
+        >>> from dcaf.streams import Generation, GenerationStream
+        >>> stream = GenerationStream([
+        ...     Generation(100.0, date(2030, 1, 1), label="a"),
+        ...     Generation(50.0, date(2031, 1, 1), label="a"),
+        ...     Generation(30.0, date(2030, 1, 1), label="b"),
+        ... ])
+        >>> stream.group_by(lambda g: g.label).sum()
+        {'a': 150.0, 'b': 30.0}
+        """
+        return {key: stream.sum() for key, stream in self.groups.items()}
+
 
 @dataclass
 class GenerationStream(BaseStream[Generation]):
@@ -405,10 +481,6 @@ class GenerationStream(BaseStream[Generation]):
     >>> gen[1:3].count()
     2
     """
-
-    def _amount(self, entry: Generation) -> float:
-        """Return the numeric amount for internal shared helpers."""
-        return entry.amount_mwh
 
     @classmethod
     def from_capacity(
@@ -590,6 +662,15 @@ class GenerationStream(BaseStream[Generation]):
         GenerationStream
             New stream containing all provided generation entries.
 
+        Raises
+        ------
+        TypeError
+            If a source is a stream of a different type, such as a ``CashFlowStream``.
+
+        Notes
+        -----
+        Any non-iterable source is treated as a single entry.
+
         Examples
         --------
         >>> g1 = Generation(100.0, date(2030, 1, 1))
@@ -598,7 +679,15 @@ class GenerationStream(BaseStream[Generation]):
         >>> stream.count()
         2
         """
-        return super().from_streams(*iterables)
+        sources: list[GenerationStream | Iterable[Generation]] = []
+        for item in iterables:
+            try:
+                iter(cast(Iterable[Generation], item))
+            except TypeError:
+                sources.append([cast(Generation, item)])
+            else:
+                sources.append(cast(Iterable[Generation], item))
+        return super().from_streams(*sources)
 
     def with_capacity(
         self,
@@ -690,11 +779,29 @@ class GenerationStream(BaseStream[Generation]):
         GenerationStream
             New stream containing entries that overlap half-open ``[start, end)``.
 
+        Raises
+        ------
+        ValueError
+            If both bounds are given and ``end`` is not after ``start``. An empty
+            interval is rejected rather than silently matching the entries that span it.
+
         Notes
         -----
         Entries are selected as complete source records; their amounts and
         period bounds are not clipped or prorated by this filtering method.
+
+        Examples
+        --------
+        >>> stream = GenerationStream.from_capacity(100, 0.9, date(2030, 1, 1), 4)
+        >>> stream.date_range(date(2031, 6, 1), date(2032, 1, 1)).count()
+        1
+        >>> stream.date_range(date(2031, 6, 1), date(2031, 6, 1))
+        Traceback (most recent call last):
+        ...
+        ValueError: date_range end must be after start
         """
+        if start is not None and end is not None and end <= start:
+            raise ValueError("date_range end must be after start")
         return self._new(
             entry
             for entry in self.entries
@@ -705,13 +812,30 @@ class GenerationStream(BaseStream[Generation]):
     @overload
     def group_by(self, fn: Callable[[Generation], KeyType]) -> "GenerationGroup[KeyType]": ...
     @overload
-    def group_by(self, fn: None = None, *, period: Period) -> "GenerationGroup[date]": ...
+    def group_by(
+        self,
+        fn: None = None,
+        *,
+        period: Period,
+        day_count_convention: DayCountConvention = ...,
+    ) -> "GenerationGroup[date]": ...
 
     def group_by(  # type: ignore[misc]
-        self, fn: Callable[[Generation], Any] | None = None, *, period: Period | None = None
+        self,
+        fn: Callable[[Generation], Any] | None = None,
+        *,
+        period: Period | None = None,
+        day_count_convention: DayCountConvention = "actual/actual",
     ) -> "GenerationGroup[Any]":
         """
-        Group entries by a key function or by time period.
+        Group entries by a key function or by calendar period.
+
+        A key function groups complete entries. Grouping by ``period`` instead
+        splits every entry at calendar period boundaries, sharing its MWh across
+        the pieces by elapsed hours, and groups each piece under the first day of
+        its calendar period. A multi-year entry grouped by ``"year"`` therefore
+        contributes a prorated piece to each calendar year it overlaps, matching
+        how :meth:`to_revenue` settles the same entry at that frequency.
 
         Parameters
         ----------
@@ -719,12 +843,18 @@ class GenerationStream(BaseStream[Generation]):
             Key function mapping each Generation to a hashable group key.
             Mutually exclusive with ``period``.
         period : Period, optional
-            Group by time period (``"day"``, ``"month"``, ``"quarter"``, ``"year"``).
+            Group by calendar period (``"day"``, ``"month"``, ``"quarter"``, ``"year"``).
+        day_count_convention : DayCountConvention, optional
+            Day-count convention used to share a split entry's MWh across calendar
+            periods. Used only with ``period``. Default is ``"actual/actual"``.
 
         Returns
         -------
         GenerationGroup[Any]
             Grouped container mapping each computed key to a ``GenerationStream``.
+            Within each group, entries and pieces keep their source order. Entries
+            that lie within one calendar period are grouped unchanged; split pieces
+            are period-bounded entries with the source label.
 
         Raises
         ------
@@ -737,6 +867,15 @@ class GenerationStream(BaseStream[Generation]):
         GenerationGroup(...)
         >>> stream.group_by(period="month")
         GenerationGroup(...)
+
+        Split a two-year entry into calendar years:
+
+        >>> two_years = GenerationStream([
+        ...     Generation(731.0, period_start=date(2030, 7, 1), period_end=date(2032, 7, 1)),
+        ... ])
+        >>> totals = two_years.group_by(period="year").sum()
+        >>> {key.year: round(mwh, 6) for key, mwh in totals.items()}
+        {2030: 184.0, 2031: 365.0, 2032: 182.0}
         """
         if fn is not None and period is not None:
             raise ValueError("Cannot pass both a key function and 'period' to group_by()")
@@ -748,10 +887,14 @@ class GenerationStream(BaseStream[Generation]):
             return GenerationGroup(cast(dict[Any, GenerationStream], self._grouped_streams(groups)))
 
         assert period is not None
-        per_groups: dict[date, list[Generation]] = {}
-        for entry in self.entries:
-            key = period_start(entry.period_start, period)
-            per_groups.setdefault(key, []).append(entry)
+        pieces = self.flat_apply(
+            lambda entry: _calendar_pieces(
+                entry, frequency=period, day_count_convention=day_count_convention
+            )
+        )
+        per_groups = pieces._grouped_entries_by_key(
+            lambda entry: period_start(entry.period_start, period)
+        )
         return GenerationGroup(
             cast(dict[date, GenerationStream], self._grouped_streams(per_groups))
         )
@@ -830,6 +973,30 @@ class GenerationStream(BaseStream[Generation]):
         >>> scaled_gen_stream = gen_stream.scale(1.2)
         """
         return GenerationStream([e.replace(e.amount_mwh * factor) for e in self.entries])
+
+    def sum(self) -> float:
+        """
+        Return the total generation in MWh.
+
+        Signed entries net against each other, so outage entries reduce the total.
+
+        Returns
+        -------
+        float
+            Sum of ``amount_mwh`` over all entries. Returns ``0.0`` for an empty stream.
+
+        Examples
+        --------
+        >>> stream = GenerationStream([
+        ...     Generation(1_000.0, date(2030, 1, 1)),
+        ...     Generation(-200.0, date(2030, 6, 1)),
+        ... ])
+        >>> stream.sum()
+        800.0
+        >>> GenerationStream().sum()
+        0.0
+        """
+        return sum((entry.amount_mwh for entry in self.entries), start=0.0)
 
     def discounted_sum(
         self,
