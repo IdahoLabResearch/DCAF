@@ -116,21 +116,10 @@ def _next_calendar_period_start(period_start: date, frequency: str) -> date:
     return date(index // 12, index % 12 + 1, 1)
 
 
-def add_period(day: date, frequency: str) -> date:
-    """Return the day one nominal period after *day*, clamping to the end of a shorter month."""
-    if frequency == "day":
-        return day + timedelta(days=1)
-    months = {"month": 1, "quarter": 3, "year": 12}[frequency]
-    index = day.year * 12 + day.month - 1 + months
-    year, month = index // 12, index % 12 + 1
-    month_length = (date(year + month // 12, month % 12 + 1, 1) - date(year, month, 1)).days
-    return date(year, month, min(day.day, month_length))
-
-
-def tail_days(tail_start: date, fraction: float, frequency: str) -> int:
+def tail_days(tail_start: date, next_boundary: date, fraction: float) -> int:
     """Count the complete days in a fractional final period: the requested share of the next
-    nominal period, with a sub-day remainder dropped."""
-    requested = fraction * (add_period(tail_start, frequency) - tail_start).days
+    scheduled period ``[tail_start, next_boundary)``, with a sub-day remainder dropped."""
+    requested = fraction * (next_boundary - tail_start).days
     nearest = round(requested)
     return nearest if abs(requested - nearest) <= 1e-12 else int(requested)
 
