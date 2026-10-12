@@ -19,6 +19,12 @@ def validate_non_negative(value: float, name: str) -> None:
         raise ValueError(f"{name} must be non-negative")
 
 
+def validate_capacity_factor(value: float, name: str) -> None:
+    """Raise ``ValueError`` unless *value* is finite and lies in ``[0, 1]``."""
+    if not isfinite(value) or not 0.0 <= value <= 1.0:
+        raise ValueError(f"{name} must be between 0 and 1")
+
+
 def validate_date(value: object, name: str) -> None:
     """Raise ``TypeError`` unless *value* is a plain ``date``.
 
