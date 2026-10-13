@@ -167,10 +167,7 @@ def test_construction_interest_periods_are_anchored(start, days, servicing_perio
 @pytest.mark.parametrize(
     ("end_of_month", "expected_dates"),
     [
-        (
-            True,
-            [date(2030, 5, 31), date(2030, 6, 30), date(2030, 7, 31)]
-        ),
+        (True, [date(2030, 5, 31), date(2030, 6, 30), date(2030, 7, 31)]),
         (
             False,
             [date(2030, 5, 30), date(2030, 6, 30), date(2030, 7, 30), date(2030, 7, 31)],
