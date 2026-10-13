@@ -12,7 +12,7 @@ from typing import assert_never
 from dcaf.project.contracts import EnergyContract, GenerationSettlementEvent
 from dcaf.shared.time import (
     PeriodWindow,
-    _calendar_period_windows,
+    calendar_period_windows,
     elapsed_hours,
     period_start,
     period_window_event_date,
@@ -200,7 +200,7 @@ def _fixed_contract_settlements(
     assert contract.quantity_frequency is not None
 
     settlements: list[_GenerationSettlement] = []
-    for quantity_start, quantity_end in _calendar_period_windows(
+    for quantity_start, quantity_end in calendar_period_windows(
         contract.start,
         contract.end,
         contract.quantity_frequency,
@@ -334,7 +334,7 @@ def _remainder_settlements(
     for source_index, source in enumerate(generation.entries):
         source_requests = [request for request in requests if request.source_index == source_index]
         boundaries = {source.period_start, source.period_end}
-        for window_start, window_end in _calendar_period_windows(
+        for window_start, window_end in calendar_period_windows(
             source.period_start,
             source.period_end,
             frequency,

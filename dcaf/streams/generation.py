@@ -22,7 +22,7 @@ from dcaf.finance.escalation import (
 )
 from dcaf.shared.time import (
     PeriodWindow,
-    _calendar_period_windows,
+    calendar_period_windows,
     elapsed_hours,
     period_start,
     period_window_event_date,
@@ -271,7 +271,7 @@ def _calendar_allocations(
         end=effective_end,
         day_count_convention=day_count_convention,
     )
-    windows = _calendar_period_windows(effective_start, effective_end, frequency)
+    windows = calendar_period_windows(effective_start, effective_end, frequency)
     allocated: list[float] = []
     window_hours = [
         elapsed_hours(window_start, window_end, day_count_convention)

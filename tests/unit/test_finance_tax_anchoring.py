@@ -25,10 +25,11 @@ from dcaf.finance.construction import (
     ConstructionSpendBuilder,
     construction_spend_schedule,
 )
+from dcaf.shared.time import add_periods
 from dcaf.streams.generation import Generation, GenerationStream
 from dcaf.tax.depreciation import macrs_schedule, vdb_schedule
 from dcaf.tax.incentives import ptc
-from strategies import ANCHOR_DATES, FREQUENCIES, anchored_boundary
+from strategies import ANCHOR_DATES, FREQUENCIES
 
 END_OF_MONTH = st.booleans()
 NON_DAILY_FREQUENCIES = st.sampled_from(["month", "quarter", "year"])
@@ -66,7 +67,7 @@ def test_amortization_payment_dates_are_anchored(start, term, frequency, end_of_
     schedule = AmortizationSchedule.build(
         100_000.0, 0.05, term, start, frequency, end_of_month=end_of_month
     )
-    expected = [anchored_boundary(start, k, frequency, end_of_month) for k in range(term)]
+    expected = [add_periods(start, k, frequency, end_of_month=end_of_month) for k in range(term)]
     for stream in (schedule.total, schedule.interest, schedule.principal):
         assert [flow.date for flow in stream] == expected
 
@@ -95,7 +96,9 @@ def test_amortization_interest_free_dates_select_anchored_payments(
         .interest_free(from_date=from_date, to_date=to_date)
         .build()
     )
-    payment_dates = [anchored_boundary(start, k, frequency, end_of_month) for k in range(term)]
+    payment_dates = [
+        add_periods(start, k, frequency, end_of_month=end_of_month) for k in range(term)
+    ]
     expected_free = [from_date <= payment_date < to_date for payment_date in payment_dates]
     assert [flow.amount == 0.0 for flow in schedule.interest] == expected_free
 
@@ -157,8 +160,10 @@ def test_construction_interest_periods_are_anchored(start, days, servicing_perio
 
     expected = []
     k = 1
-    while anchored_boundary(start, k - 1, servicing_period, end_of_month) < end:
-        expected.append(min(anchored_boundary(start, k, servicing_period, end_of_month), end))
+    while add_periods(start, k - 1, servicing_period, end_of_month=end_of_month) < end:
+        expected.append(
+            min(add_periods(start, k, servicing_period, end_of_month=end_of_month), end)
+        )
         k += 1
     interest_dates = [flow.date for flow in stream if flow.label == "Capitalized Interest"]
     assert interest_dates == expected
@@ -244,7 +249,7 @@ def test_vdb_schedule_dates_are_anchored(placed_in_service, life, frequency, end
         1000.0, 0.0, placed_in_service, life, frequency, end_of_month=end_of_month
     )
     expected = [
-        anchored_boundary(placed_in_service, k, frequency, end_of_month) for k in range(life)
+        add_periods(placed_in_service, k, frequency, end_of_month=end_of_month) for k in range(life)
     ]
     assert [flow.date for flow in stream] == expected
 
@@ -275,7 +280,7 @@ def test_vdb_schedule_convention_dates_are_anchored(
         end_of_month=end_of_month,
     )
     boundaries = [
-        anchored_boundary(placed_in_service, k, frequency, end_of_month)
+        add_periods(placed_in_service, k, frequency, end_of_month=end_of_month)
         for k in range(life + terminal_catch_up)
     ]
     dates = [flow.date for flow in stream]
@@ -302,7 +307,8 @@ def test_macrs_schedule_dates_are_anchored(
         1000.0, placed_in_service, property_class, convention, end_of_month=end_of_month
     )
     expected = [
-        anchored_boundary(placed_in_service, k, "year", end_of_month) for k in range(stream.count())
+        add_periods(placed_in_service, k, "year", end_of_month=end_of_month)
+        for k in range(stream.count())
     ]
     assert [flow.date for flow in stream] == expected
     assert stream.sum() == pytest.approx(-1000.0)
@@ -346,7 +352,7 @@ def test_ptc_eligibility_ends_on_the_anchored_anniversary(start, years, end_of_m
     """PTC eligibility is ``[start, start + years)`` with the end on the anchored yearly
     boundary: generation on the day before that boundary earns credit, and generation on the
     boundary does not."""
-    eligibility_end = anchored_boundary(start, years, "year", end_of_month)
+    eligibility_end = add_periods(start, years, "year", end_of_month=end_of_month)
     generation = GenerationStream(
         [
             Generation(1.0, start),
