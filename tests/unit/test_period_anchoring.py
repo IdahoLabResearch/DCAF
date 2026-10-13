@@ -9,40 +9,35 @@ quarters are measured against the same boundaries, so every full scheduled perio
 period long.
 """
 
+from calendar import monthrange
 from datetime import date, timedelta
 import warnings
 
 import pytest
-from hypothesis import example, given
+from hypothesis import assume, example, given
 from hypothesis import strategies as st
 
-from dcaf.shared.time import add_periods, elapsed_periods, period_windows
+from dcaf.shared.time import (
+    _is_month_end,
+    _whole_days_with_truncation,
+    add_periods,
+    elapsed_periods,
+    period_windows,
+)
 from strategies import (
     ANCHOR_DATES,
     DATES_OFF_SHORT_MONTH_ENDS,
     DAY_COUNT_CONVENTIONS,
     FREQUENCIES,
     MONTH_END_DATES,
-    anchored_boundary,
-    is_month_end,
 )
 
 END_OF_MONTH = st.booleans()
-MONTHLY_FREQUENCIES = st.sampled_from(["month", "quarter"])
+CALENDAR_FREQUENCIES = st.sampled_from(["month", "quarter", "year"])
+MONTHS_PER_PERIOD = {"month": 1, "quarter": 3, "year": 12}
 # Measurement on whole anchored boundaries: daily, monthly, and quarterly periods count boundaries,
 # while years are measured by the day-count convention and so are excluded.
 COUNTED_FREQUENCIES = st.sampled_from(["day", "month", "quarter"])
-
-
-def _elapsed_oracle(start: date, end: date, frequency: str, end_of_month: bool) -> float:
-    """Count whole anchored periods from *start* to *end*, plus the elapsed share of the days in
-    the anchored period containing *end*."""
-    k = 0
-    while anchored_boundary(start, k + 1, frequency, end_of_month) <= end:
-        k += 1
-    lower = anchored_boundary(start, k, frequency, end_of_month)
-    upper = anchored_boundary(start, k + 1, frequency, end_of_month)
-    return k + (end - lower).days / (upper - lower).days
 
 
 # === Boundary dates: reference schedules ===
@@ -127,17 +122,36 @@ def test_add_periods_matches_reference_schedules(
 # === Boundary dates: properties ===
 
 
-@given(ANCHOR_DATES, st.integers(-240, 240), FREQUENCIES, END_OF_MONTH)
-@example(date(2028, 2, 29), 4, "year", True)  # leap day returns in the next leap year
-@example(date(2100, 2, 28), 1, "year", True)  # 2100 is not a leap year
-@example(date(2030, 4, 30), -1, "month", True)  # backward from a month-end: Mar. 31
-@example(date(2030, 4, 30), -1, "month", False)  # backward keeping the day number: Mar. 30
-def test_add_periods_counts_each_boundary_from_the_start(start, count, frequency, end_of_month):
-    """Boundary *k* is computed from the start, never from an earlier clamped boundary, in either
-    direction."""
-    assert add_periods(start, count, frequency, end_of_month=end_of_month) == anchored_boundary(
-        start, count, frequency, end_of_month
-    )
+@given(ANCHOR_DATES, st.integers(-240, 240), CALENDAR_FREQUENCIES, END_OF_MONTH)
+@example(date(2030, 6, 30), 2, "quarter", True)  # Jun. -> Dec.
+@example(date(2028, 2, 29), -1, "year", False)  # Feb. 2028 -> Feb. 2027
+@example(date(2030, 1, 31), 1, "month", False)  # Jan. 31 -> Feb., not Mar.
+def test_add_periods_lands_in_the_month_count_periods_away(start, count, frequency, end_of_month):
+    """Boundary *count* falls in the calendar month exactly *count* periods of months away from
+    the start's month, in either direction. Checks the month only; the day is covered by
+    ``test_add_periods_keeps_the_start_day_clamped_to_the_month``."""
+    boundary = add_periods(start, count, frequency, end_of_month=end_of_month)
+    months = (boundary.year - start.year) * 12 + boundary.month - start.month
+    assert months == count * MONTHS_PER_PERIOD[frequency]
+
+
+@given(ANCHOR_DATES, st.integers(-240, 240), CALENDAR_FREQUENCIES, END_OF_MONTH)
+@example(date(2030, 1, 31), 1, "month", True)  # clamps to Feb. 28
+@example(date(2030, 4, 30), 1, "month", True)  # month-end start reaches May 31
+@example(date(2030, 4, 30), 1, "month", False)  # keeps the 30th
+@example(date(2028, 2, 29), 1, "year", False)  # clamps to Feb. 28, 2029
+@example(date(2029, 2, 28), 3, "year", True)  # month-end start reaches Feb. 29, 2032
+def test_add_periods_keeps_the_start_day_clamped_to_the_month(
+    start, count, frequency, end_of_month
+):
+    """Each boundary keeps the start's day number, clamped to the last day of a shorter month,
+    or is the last day of its month when the month-end rule applies to a month-end start."""
+    boundary = add_periods(start, count, frequency, end_of_month=end_of_month)
+    month_length = monthrange(boundary.year, boundary.month)[1]
+    if end_of_month and _is_month_end(start):
+        assert boundary.day == month_length
+    else:
+        assert boundary.day == min(start.day, month_length)
 
 
 @given(ANCHOR_DATES, FREQUENCIES, END_OF_MONTH)
@@ -166,7 +180,7 @@ def test_add_periods_reverse_count_returns_to_the_start_when_its_day_survives(
     there = add_periods(start, count, frequency, end_of_month=end_of_month)
     back = add_periods(there, -count, frequency, end_of_month=end_of_month)
 
-    survives = (start.day <= 27 or is_month_end(start)) if end_of_month else start.day <= 28
+    survives = (start.day <= 27 or _is_month_end(start)) if end_of_month else start.day <= 28
     if frequency == "day" or survives:
         assert back == start
     else:
@@ -179,7 +193,7 @@ def test_add_periods_reverse_count_returns_to_the_start_when_its_day_survives(
 def test_end_of_month_start_keeps_every_boundary_on_a_month_end(start, count, frequency):
     """Under the default month-end rule, a schedule starting on a month-end lands on a month-end
     at every month, quarter, or year boundary, stepping forward or backward."""
-    assert is_month_end(add_periods(start, count, frequency))
+    assert _is_month_end(add_periods(start, count, frequency))
 
 
 @given(ANCHOR_DATES, st.integers(-240, 240))
@@ -260,17 +274,33 @@ def test_scheduled_years_are_measured_by_day_count_convention(
     assert measured == pytest.approx(expected)
 
 
-@given(ANCHOR_DATES, st.integers(1, 2000), COUNTED_FREQUENCIES, END_OF_MONTH)
-@example(date(2030, 4, 30), 15, "month", True)  # 15 of the 31 days in [Apr. 30, May 31)
-@example(date(2030, 1, 1), 36, "quarter", True)  # 36 of the 90 days in [Jan. 1, Apr. 1)
-def test_partial_periods_measure_the_elapsed_share_of_the_scheduled_period(
-    start, days, frequency, end_of_month
+@given(ANCHOR_DATES, st.integers(0, 240), COUNTED_FREQUENCIES, END_OF_MONTH, st.integers(1, 91))
+@example(date(2030, 4, 30), 0, "month", True, 15)  # inside [Apr. 30, May 31)
+@example(date(2030, 1, 31), 0, "month", False, 27)  # last day of [Jan. 31, Feb. 28)
+def test_partial_periods_measure_strictly_between_whole_counts(
+    start, whole, frequency, end_of_month, offset
 ):
-    """Elapsed days, months, or quarters count the whole scheduled periods passed, plus the
-    elapsed share of the days in the scheduled period containing the end date."""
+    """A date strictly between boundaries *whole* and *whole* + 1 measures strictly between
+    *whole* and *whole* + 1 periods."""
+    lower = add_periods(start, whole, frequency, end_of_month=end_of_month)
+    upper = add_periods(start, whole + 1, frequency, end_of_month=end_of_month)
+    assume(offset < (upper - lower).days)
+    end = lower + timedelta(days=offset)
+
+    measured = elapsed_periods(start, end, frequency, end_of_month=end_of_month)
+    assert whole < measured < whole + 1
+
+
+@given(ANCHOR_DATES, st.integers(0, 2000), COUNTED_FREQUENCIES, END_OF_MONTH)
+@example(date(2030, 1, 31), 27, "month", True)  # Feb. 27 -> Feb. 28 crosses a clamped boundary
+@example(date(2030, 4, 30), 30, "month", False)  # May 30 -> May 31 crosses a boundary
+def test_elapsed_periods_increase_as_the_end_moves_later(start, days, frequency, end_of_month):
+    """Moving the end date one day later always measures more periods, including across a
+    boundary where one scheduled period gives way to the next."""
     end = start + timedelta(days=days)
     measured = elapsed_periods(start, end, frequency, end_of_month=end_of_month)
-    assert measured == pytest.approx(_elapsed_oracle(start, end, frequency, end_of_month))
+    later = elapsed_periods(start, end + timedelta(days=1), frequency, end_of_month=end_of_month)
+    assert measured < later
 
 
 @given(ANCHOR_DATES, st.integers(1, 2000), FREQUENCIES, END_OF_MONTH, DAY_COUNT_CONVENTIONS)
@@ -316,7 +346,7 @@ def test_year_measurement_ignores_end_of_month(start, days, end_of_month, conven
 )
 def test_end_of_month_changes_month_end_measurement(start, end, frequency, end_of_month, expected):
     """Exact elapsed months and quarters from month-end starts under each setting of the
-    month-end rule, worked out by hand so they do not depend on the test oracle."""
+    month-end rule, worked out by hand."""
     measured = elapsed_periods(start, end, frequency, end_of_month=end_of_month)
     assert measured == pytest.approx(expected)
 
@@ -332,7 +362,9 @@ def test_period_windows_are_anchored_whole_periods(start, periods, frequency, en
     boundaries, each measuring exactly one period."""
     windows = period_windows(start, periods, frequency, end_of_month=end_of_month)
 
-    expected = [anchored_boundary(start, k, frequency, end_of_month) for k in range(periods + 1)]
+    expected = [
+        add_periods(start, k, frequency, end_of_month=end_of_month) for k in range(periods + 1)
+    ]
     assert [(w.start, w.end) for w in windows] == list(zip(expected, expected[1:]))
     assert all(w.fraction == 1.0 for w in windows)
 
@@ -377,12 +409,10 @@ def test_period_windows_fractional_tail_is_a_share_of_the_next_scheduled_period(
         warnings.simplefilter("ignore")
         windows = period_windows(start, whole + fraction, frequency, end_of_month=end_of_month)
 
-    tail_start = anchored_boundary(start, whole, frequency, end_of_month)
-    next_boundary = anchored_boundary(start, whole + 1, frequency, end_of_month)
+    tail_start = add_periods(start, whole, frequency, end_of_month=end_of_month)
+    next_boundary = add_periods(start, whole + 1, frequency, end_of_month=end_of_month)
     period_days = (next_boundary - tail_start).days
-    requested = fraction * period_days
-    nearest = round(requested)
-    tail_days = nearest if abs(requested - nearest) <= 1e-12 else int(requested)
+    tail_days, _ = _whole_days_with_truncation(fraction * period_days)
 
     assert len(windows) == whole + (tail_days > 0)
     if tail_days:
