@@ -37,7 +37,7 @@ from strategies import (
     STREAM_LABELS,
     TAX_TREATMENTS,
     TIMINGS,
-    add_period,
+    anchored_boundary,
     calendar_period_key,
     calendar_windows,
     counted_days,
@@ -255,6 +255,7 @@ def test_from_capacity_tiles_whole_periods_with_capacity_energy(
 @example(date(2030, 1, 1), 0, 0.5, "month")  # 15.5 days of January keeps 15 and warns
 @example(date(2030, 2, 1), 0, 0.5, "month")  # exactly 14 days of February does not warn
 @example(date(2030, 1, 1), 2, 0.5, "day")  # half a day is dropped entirely
+@example(date(2026, 1, 30), 1, 0.5, "month")  # tail is half of Feb 28 to Mar 30, not Mar 28
 def test_from_capacity_fractional_tail_keeps_complete_days(start, whole, fraction, frequency):
     """A fractional period count appends the complete days of the requested share of the next
     period, warning exactly when a partial day is dropped."""
@@ -265,14 +266,15 @@ def test_from_capacity_fractional_tail_keeps_complete_days(start, whole, fractio
 
     full = stream[:whole]
     tail_start = full[-1].period_end if full else start
-    days = tail_days(tail_start, periods - whole, frequency)
+    next_boundary = anchored_boundary(start, whole + 1, frequency)
+    days = tail_days(tail_start, next_boundary, periods - whole)
     assert len(stream) == whole + (days > 0)
     if days:
         assert (stream[-1].period_start, stream[-1].period_end) == (
             tail_start,
             tail_start + timedelta(days=days),
         )
-    requested = (periods - whole) * (add_period(tail_start, frequency) - tail_start).days
+    requested = (periods - whole) * (next_boundary - tail_start).days
     truncated = abs(requested - round(requested)) > 1e-12
     assert any(issubclass(w.category, PeriodTruncationWarning) for w in caught) is truncated
 
