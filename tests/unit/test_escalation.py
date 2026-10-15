@@ -1,8 +1,10 @@
 # © 2026 Battelle Energy Alliance, LLC
 # ALL RIGHTS RESERVED
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
+from hypothesis import example, given
+from hypothesis import strategies as st
 
 from dcaf.finance.escalation import (
     CompositeEscalation,
@@ -11,6 +13,12 @@ from dcaf.finance.escalation import (
     EscalationSegment,
     IndexSeriesEscalation,
 )
+from dcaf.shared.time import add_periods
+from strategies import ANCHOR_DATES, DAY_COUNT_CONVENTIONS
+
+END_OF_MONTH = st.booleans()
+MONTHLY_FREQUENCIES = st.sampled_from(["month", "quarter"])
+RATES = st.floats(min_value=-0.05, max_value=0.05)
 
 
 def test_constant_rate_escalation_annual():
@@ -26,6 +34,113 @@ def test_constant_rate_escalation_monthly_period():
 
     assert policy.factor(date(2025, 2, 1)) == pytest.approx(1.01)
     assert policy.factor(date(2025, 3, 1)) == pytest.approx(1.0201)
+
+
+# === Constant-rate escalation on anchored schedules ===
+
+
+@given(ANCHOR_DATES, st.integers(0, 240), MONTHLY_FREQUENCIES, END_OF_MONTH, RATES)
+@example(date(2030, 4, 30), 1, "month", True, 0.01)  # Apr. 30 -> May 31
+@example(date(2030, 4, 30), 1, "month", False, 0.01)  # Apr. 30 -> May 30
+@example(date(2030, 1, 31), 2, "month", True, 0.01)  # Jan. 31 -> Feb. 28 -> Mar. 31
+@example(date(2030, 6, 30), 2, "quarter", True, 0.01)  # Jun. 30 -> Dec. 31
+def test_constant_rate_compounds_one_step_per_scheduled_boundary(
+    reference_date, count, period, end_of_month, rate
+):
+    """Monthly and quarterly escalation compounds exactly one step at each boundary of the
+    schedule anchored at the reference date, under either setting of the month-end rule."""
+    policy = ConstantRateEscalation(
+        reference_date, rate=rate, period=period, end_of_month=end_of_month
+    )
+    target = add_periods(reference_date, count, period, end_of_month=end_of_month)
+    assert policy.factor(target) == pytest.approx((1.0 + rate) ** count)
+
+
+@pytest.mark.parametrize(
+    ("reference_date", "target_date", "period", "end_of_month", "periods"),
+    [
+        (date(2030, 4, 30), date(2030, 5, 31), "month", True, 1.0),
+        # Without the month-end rule, one month after Apr. 30 is May 30, so May 31 is one day
+        # into the 31-day month [May 30, Jun. 30).
+        (date(2030, 4, 30), date(2030, 5, 31), "month", False, 1 + 1 / 31),
+        (date(2030, 6, 30), date(2030, 12, 31), "quarter", True, 2.0),
+        # Without the month-end rule, Dec. 31 is one day into the 90-day quarter
+        # [Dec. 30, Mar. 30).
+        (date(2030, 6, 30), date(2030, 12, 31), "quarter", False, 2 + 1 / 90),
+        # A partial quarter is its share of the quarter's days: 36 of the 90 in [Jan. 1, Apr. 1).
+        (date(2030, 1, 1), date(2030, 2, 6), "quarter", True, 0.4),
+        (date(2030, 1, 1), date(2030, 2, 6), "quarter", False, 0.4),
+    ],
+)
+def test_constant_rate_end_of_month_reference_values(
+    reference_date, target_date, period, end_of_month, periods
+):
+    """Exact escalation factors from month-end and partial-period references under each setting
+    of the month-end rule, worked out by hand."""
+    policy = ConstantRateEscalation(
+        reference_date, rate=0.01, period=period, end_of_month=end_of_month
+    )
+    assert policy.factor(target_date) == pytest.approx(1.01**periods)
+
+
+@given(ANCHOR_DATES, st.integers(1, 2000), MONTHLY_FREQUENCIES, RATES)
+@example(date(2030, 4, 30), 31, "month", 0.01)  # Apr. 30 -> May 31
+def test_constant_rate_end_of_month_defaults_to_true(reference_date, days, period, rate):
+    """Omitting ``end_of_month`` behaves exactly like passing ``True``."""
+    target = reference_date + timedelta(days=days)
+    default = ConstantRateEscalation(reference_date, rate=rate, period=period)
+    explicit = ConstantRateEscalation(reference_date, rate=rate, period=period, end_of_month=True)
+    assert default.end_of_month is True
+    assert default.factor(target) == explicit.factor(target)
+
+
+@given(ANCHOR_DATES, st.integers(-2000, 2000), RATES, DAY_COUNT_CONVENTIONS)
+@example(date(2029, 2, 28), 365, 0.02, "actual/actual")  # a month-end reference
+def test_constant_rate_yearly_and_daily_escalation_ignore_end_of_month(
+    reference_date, days, rate, convention
+):
+    """Yearly escalation is measured by the day-count convention and daily escalation by whole
+    days, so the month-end rule never changes either factor."""
+    target = reference_date + timedelta(days=days)
+    for period in ("year", "day"):
+        with_eom, without_eom = (
+            ConstantRateEscalation(
+                reference_date,
+                rate=rate,
+                period=period,
+                day_count_convention=convention,
+                end_of_month=end_of_month,
+            )
+            for end_of_month in (True, False)
+        )
+        assert with_eom.factor(target) == without_eom.factor(target)
+
+
+@given(ANCHOR_DATES, st.integers(1, 2000), MONTHLY_FREQUENCIES, END_OF_MONTH, RATES)
+@example(date(2030, 4, 30), 31, "month", False, 0.01)  # Apr. 30 -> May 31 off month-ends
+def test_builder_constant_rate_passes_end_of_month_through(
+    reference_date, days, period, end_of_month, rate
+):
+    """A constant-rate segment added through the builder escalates exactly like a directly
+    constructed policy with the same month-end rule."""
+    target = reference_date + timedelta(days=days)
+    built = (
+        EscalationBuilder(reference_date)
+        .constant_rate(rate, period=period, end_of_month=end_of_month)
+        .build()
+    )
+    direct = ConstantRateEscalation(
+        reference_date, rate=rate, period=period, end_of_month=end_of_month
+    )
+    assert built == direct
+    assert built.factor(target) == direct.factor(target)
+
+
+def test_builder_constant_rate_end_of_month_defaults_to_true():
+    """A builder constant-rate segment uses the month-end rule unless told otherwise."""
+    built = EscalationBuilder(date(2030, 4, 30)).constant_rate(0.01, period="month").build()
+    assert isinstance(built, ConstantRateEscalation)
+    assert built.end_of_month is True
 
 
 def test_index_series_escalation_uses_step_interpolation():
