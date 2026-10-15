@@ -10,7 +10,7 @@ discounting. Edge cases of interest are pinned as explicit examples.
 
 import math
 import warnings
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import date, timedelta
 from operator import attrgetter
 
@@ -23,7 +23,15 @@ from dcaf.finance.escalation import (
     EscalationBuilder,
     IndexSeriesEscalation,
 )
-from dcaf.shared.time import PeriodTruncationWarning
+from dcaf.shared.time import (
+    PeriodTruncationWarning,
+    PeriodWindow,
+    _whole_days_with_truncation,
+    add_periods,
+    period_start,
+    period_window_event_date,
+    timedelta_fractional_years,
+)
 from dcaf.shared.types import ProFormaCategory, TaxTreatment
 from dcaf.streams import CashFlow, CashFlowGroup, CashFlowStream, Generation, GenerationStream
 from strategies import (
@@ -40,13 +48,8 @@ from strategies import (
     STREAM_LABELS,
     TAX_TREATMENTS,
     TIMINGS,
-    anchored_boundary,
-    calendar_period_key,
     enum_spellings,
     pooled_lists,
-    tail_days,
-    timing_point,
-    year_fraction,
 )
 
 stream_cashflows = st.builds(
@@ -125,7 +128,7 @@ def test_from_recurring_books_each_whole_period_at_its_timing_point(
     low, high = PERIOD_DAYS[frequency]
     for (w_start, w_end), cf in zip(windows, stream, strict=True):
         assert low <= (w_end - w_start).days <= high
-        assert cf.date == timing_point(w_start, w_end, timing)
+        assert cf.date == period_window_event_date(PeriodWindow(w_start, w_end), timing)
         assert cf.amount == amount
 
 
@@ -144,15 +147,14 @@ def test_from_recurring_fractional_tail_prorates_complete_days(start, whole, fra
         windows = _recurring_windows(start, periods, frequency)
 
     tail_start = windows[whole - 1][1] if whole else start
-    next_boundary = anchored_boundary(start, whole + 1, frequency)
-    days = tail_days(tail_start, next_boundary, periods - whole)
+    next_boundary = add_periods(start, whole + 1, frequency)
+    requested = (periods - whole) * (next_boundary - tail_start).days
+    days, truncated = _whole_days_with_truncation(requested)
     assert len(stream) == whole + (days > 0)
     assert all(cf.amount == 1.0 for cf in stream[:whole])
     if days:
         assert windows[-1] == (tail_start, tail_start + timedelta(days=days))
         assert 0.0 < stream[-1].amount < 1.0
-    requested = (periods - whole) * (next_boundary - tail_start).days
-    truncated = abs(requested - round(requested)) > 1e-12
     assert any(issubclass(w.category, PeriodTruncationWarning) for w in caught) is truncated
 
 
@@ -283,7 +285,7 @@ def test_from_recurring_defaults_to_annual_cash_flows_at_period_end(start, perio
     assert stream.entries == [
         CashFlow(
             amount,
-            timing_point(w_start, w_end, "end"),
+            period_window_event_date(PeriodWindow(w_start, w_end), "end"),
             label="Recurring Payment",
             pro_forma_category=ProFormaCategory.OTHER,
             tax_treatment=TaxTreatment.NONE,
@@ -479,9 +481,9 @@ def test_date_range_rejects_empty_or_reversed_interval(entries, end, days_after_
 def test_group_by_period_keys_flows_by_calendar_period(entries, frequency):
     """Grouping by period keys each flow by the first day of its calendar period, keeping input
     order within groups and first-appearance order across them; group_by_period is the same."""
-    expected: dict[date, list[CashFlow]] = {}
+    expected: defaultdict[date, list[CashFlow]] = defaultdict(list)
     for cf in entries:
-        expected.setdefault(calendar_period_key(cf.date, frequency), []).append(cf)
+        expected[period_start(cf.date, frequency)].append(cf)
     stream = CashFlowStream(entries)
 
     for grouped in (stream.group_by(period=frequency), stream.group_by_period(frequency)):
@@ -626,7 +628,7 @@ def test_npv_discounts_each_cash_flow_by_its_year_fraction(entries, rate, valuat
     signed so earlier flows compound forward; non-cash flows are ignored."""
     stream = CashFlowStream(entries)
     terms = [
-        cf.amount / (1 + rate) ** year_fraction(valuation, cf.date, dcc)
+        cf.amount / (1 + rate) ** timedelta_fractional_years(valuation, cf.date, dcc)
         for cf in entries
         if cf.is_cash
     ]

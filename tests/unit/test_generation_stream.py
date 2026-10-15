@@ -19,8 +19,17 @@ from hypothesis import assume, example, given
 from hypothesis import strategies as st
 
 from dcaf.finance.escalation import ConstantRateEscalation, IndexSeriesEscalation
-from dcaf.shared.time import PeriodTruncationWarning
-from dcaf.shared.types import ProFormaCategory, TaxTreatment
+from dcaf.shared.time import (
+    PeriodTruncationWarning,
+    PeriodWindow,
+    calendar_period_windows,
+    _whole_days_with_truncation,
+    add_periods,
+    elapsed_hours,
+    period_start,
+    period_window_event_date,
+)
+from dcaf.shared.types import DayCountConvention, Period, ProFormaCategory, TaxTreatment
 from dcaf.streams import CashFlow, CashFlowStream, Generation, GenerationGroup, GenerationStream
 from dcaf.streams.generation import _calendar_pieces
 from strategies import (
@@ -37,15 +46,9 @@ from strategies import (
     STREAM_LABELS,
     TAX_TREATMENTS,
     TIMINGS,
-    anchored_boundary,
-    calendar_period_key,
-    calendar_windows,
-    counted_days,
     enum_spellings,
     intervals,
     pooled_lists,
-    tail_days,
-    timing_point,
 )
 
 # === Generation strategies ===
@@ -76,8 +79,12 @@ def _settle(stream: GenerationStream, conventions: dict[str, str]) -> list[tuple
     return [(cf.date, cf.amount) for cf in stream.to_revenue(1.0, **conventions)]
 
 
-def _close(actual: float, expected: float, scale: float) -> bool:
-    return math.isclose(actual, expected, rel_tol=1e-9, abs_tol=1e-9 * abs(scale) + 1e-9)
+def _amount_scale(entries: list[Generation]) -> float:
+    return math.fsum(abs(g.amount_mwh) for g in entries)
+
+
+def _sum_tolerance(scale: float) -> dict[str, float]:
+    return {"rel": 1e-9, "abs": max(1e-9 * abs(scale), 1e-12)}
 
 
 @given(st.lists(generations, min_size=1, max_size=4), SETTLEMENT_CONVENTIONS)
@@ -91,7 +98,7 @@ def test_settlement_conserves_generation(entries, conventions):
 
     settled = math.fsum(amount for _, amount in _settle(stream, conventions))
 
-    assert _close(settled, stream.sum(), sum(abs(g.amount_mwh) for g in entries))
+    assert settled == pytest.approx(stream.sum(), **_sum_tolerance(_amount_scale(entries)))
 
 
 @given(period_generations, SETTLEMENT_CONVENTIONS)
@@ -102,18 +109,19 @@ def test_settlement_spreads_amount_by_counted_days_and_books_at_timing_point(g, 
     mid-period books at its own end (or begin/middle), not at the calendar period's.
     """
     dcc = conventions["day_count_convention"]
-    source_days = counted_days(g.period_start, g.period_end, dcc)
-    assume(source_days > 0)
-    windows = calendar_windows(g.period_start, g.period_end, conventions["frequency"])
+    source_hours = elapsed_hours(g.period_start, g.period_end, dcc)
+    assume(source_hours > 0)
+    windows = calendar_period_windows(g.period_start, g.period_end, conventions["frequency"])
 
     settled = _settle(GenerationStream([g]), conventions)
 
     assert [day for day, _ in settled] == [
-        timing_point(start, end, conventions["timing"]) for start, end in windows
+        period_window_event_date(PeriodWindow(start, end), conventions["timing"])
+        for start, end in windows
     ]
     for (_, amount), (start, end) in zip(settled, windows, strict=True):
-        expected = g.amount_mwh * counted_days(start, end, dcc) / source_days
-        assert _close(amount, expected, g.amount_mwh)
+        expected = g.amount_mwh * elapsed_hours(start, end, dcc) / source_hours
+        assert amount == pytest.approx(expected)
 
 
 @given(st.lists(generations, min_size=1, max_size=4), SETTLEMENT_CONVENTIONS)
@@ -133,9 +141,9 @@ def test_splitting_a_source_preserves_calendar_period_totals(amount, interval, d
     start, end = interval
     assume((end - start).days > 1)
     dcc = conventions["day_count_convention"]
-    assume(counted_days(start, end, dcc) > 0)
+    assume(elapsed_hours(start, end, dcc) > 0)
     cut = start + timedelta(days=data.draw(st.integers(1, (end - start).days - 1)))
-    first = amount * counted_days(start, cut, dcc) / counted_days(start, end, dcc)
+    first = amount * elapsed_hours(start, cut, dcc) / elapsed_hours(start, end, dcc)
     whole = GenerationStream([Generation(amount, period_start=start, period_end=end)])
     split = GenerationStream(
         [
@@ -147,14 +155,14 @@ def test_splitting_a_source_preserves_calendar_period_totals(amount, interval, d
     def period_totals(stream: GenerationStream) -> dict[date, float]:
         totals: dict[date, float] = {}
         for day, settled in _settle(stream, conventions):
-            key = calendar_period_key(day, conventions["frequency"])
+            key = period_start(day, conventions["frequency"])
             totals[key] = totals.get(key, 0.0) + settled
         return totals
 
     whole_totals, split_totals = period_totals(whole), period_totals(split)
     assert whole_totals.keys() == split_totals.keys()
     for key, total in whole_totals.items():
-        assert _close(split_totals[key], total, amount)
+        assert split_totals[key] == pytest.approx(total, **_sum_tolerance(abs(amount)))
 
 
 @given(
@@ -173,7 +181,7 @@ def test_revenue_is_bilinear_in_amount_and_price(g, factor, price, conventions):
 
     assert [cf.date for cf in revenue] == [day for day, _ in settled]
     for cf, (_, amount) in zip(revenue, settled, strict=True):
-        assert _close(cf.amount, amount * factor * price, g.amount_mwh * factor * price)
+        assert cf.amount == pytest.approx(amount * factor * price)
 
 
 @given(FINITE_AMOUNTS, DATES, SETTLEMENT_CONVENTIONS)
@@ -214,12 +222,8 @@ CONVERSIONS = st.sampled_from(["to_revenue", "to_cost"])
 GENERATION_SORT_ATTRS = ["period_start", "period_end", "amount_mwh", "label"]
 
 
-def _amount_scale(entries: list[Generation]) -> float:
-    return math.fsum(abs(g.amount_mwh) for g in entries)
-
-
 def _expected_capacity_mwh(capacity_mw, capacity_factor, start, end, dcc) -> float:
-    return capacity_mw * capacity_factor * 24.0 * counted_days(start, end, dcc)
+    return capacity_mw * capacity_factor * elapsed_hours(start, end, dcc)
 
 
 # === GenerationStream construction ===
@@ -248,7 +252,7 @@ def test_from_capacity_tiles_whole_periods_with_capacity_energy(
         expected = _expected_capacity_mwh(
             capacity_mw, capacity_factor, g.period_start, g.period_end, dcc
         )
-        assert _close(g.amount_mwh, expected, expected)
+        assert g.amount_mwh == pytest.approx(expected)
 
 
 @given(DATES, st.integers(0, 4), st.floats(min_value=0.01, max_value=0.99), FREQUENCIES)
@@ -266,16 +270,15 @@ def test_from_capacity_fractional_tail_keeps_complete_days(start, whole, fractio
 
     full = stream[:whole]
     tail_start = full[-1].period_end if full else start
-    next_boundary = anchored_boundary(start, whole + 1, frequency)
-    days = tail_days(tail_start, next_boundary, periods - whole)
+    next_boundary = add_periods(start, whole + 1, frequency)
+    requested = (periods - whole) * (next_boundary - tail_start).days
+    days, truncated = _whole_days_with_truncation(requested)
     assert len(stream) == whole + (days > 0)
     if days:
         assert (stream[-1].period_start, stream[-1].period_end) == (
             tail_start,
             tail_start + timedelta(days=days),
         )
-    requested = (periods - whole) * (next_boundary - tail_start).days
-    truncated = abs(requested - round(requested)) > 1e-12
     assert any(issubclass(w.category, PeriodTruncationWarning) for w in caught) is truncated
 
 
@@ -322,7 +325,7 @@ def test_from_outage_is_one_negative_entry_over_the_outage(
     [g] = outage
     assert (g.date, g.period_start, g.period_end, g.label) == (None, start, end, label)
     lost = reduction * _expected_capacity_mwh(capacity_mw, capacity_factor, start, end, dcc)
-    assert _close(g.amount_mwh, -lost, lost)
+    assert g.amount_mwh == pytest.approx(-lost)
 
 
 # Each invalid outage input overrides one valid argument; "days" sets ``end`` that many days
@@ -383,7 +386,9 @@ def test_outage_removes_exactly_the_generation_it_overlaps(
     lost = reduction * _expected_capacity_mwh(
         capacity_mw, capacity_factor, outage_start, outage_end, dcc
     )
-    assert _close(generation.extend(outage).sum(), full - lost, full)
+    assert generation.extend(outage).sum() == pytest.approx(
+        full - lost, **_sum_tolerance(abs(full) + abs(lost))
+    )
 
 
 @given(generation_lists, CAPACITIES, CAPACITY_FACTORS, DATES, st.integers(0, 4), FREQUENCIES)
@@ -479,7 +484,7 @@ NESTED_FREQUENCIES = st.sampled_from(
 )
 
 
-def _pieces(g: Generation, frequency: str, dcc: str) -> list[Generation]:
+def _pieces(g: Generation, frequency: Period, dcc: DayCountConvention) -> list[Generation]:
     return _calendar_pieces(g, frequency=frequency, day_count_convention=dcc)
 
 
@@ -493,12 +498,10 @@ def test_calendar_pieces_tile_the_source_at_calendar_boundaries(g, frequency, dc
     assert pieces[-1].period_end == g.period_end
     for before, after in zip(pieces, pieces[1:]):
         assert before.period_end == after.period_start
-        assert calendar_period_key(after.period_start, frequency) == after.period_start
+        assert period_start(after.period_start, frequency) == after.period_start
     for p in pieces:
         last_day = p.period_end - timedelta(days=1)
-        assert calendar_period_key(p.period_start, frequency) == calendar_period_key(
-            last_day, frequency
-        )
+        assert period_start(p.period_start, frequency) == period_start(last_day, frequency)
 
 
 @given(stream_generations, FREQUENCIES, DAY_COUNT_CONVENTIONS)
@@ -507,9 +510,7 @@ def test_calendar_pieces_leave_single_period_entries_unchanged(g, frequency, dcc
     """An entry inside one calendar period is returned as the same object, keeping its legacy
     date. A split entry becomes period-bounded pieces that keep the source label."""
     last_day = g.period_end - timedelta(days=1)
-    within_one_period = calendar_period_key(g.period_start, frequency) == calendar_period_key(
-        last_day, frequency
-    )
+    within_one_period = period_start(g.period_start, frequency) == period_start(last_day, frequency)
 
     pieces = _pieces(g, frequency, dcc)
 
@@ -543,7 +544,7 @@ def test_calendar_pieces_refine_through_nested_frequencies(g, frequencies, dcc):
         (p.period_start, p.period_end) for p in direct
     ]
     for got, want in zip(refined, direct, strict=True):
-        assert _close(got.amount_mwh, want.amount_mwh, g.amount_mwh)
+        assert got.amount_mwh == pytest.approx(want.amount_mwh, **_sum_tolerance(abs(g.amount_mwh)))
 
 
 @given(stream_generations, FREQUENCIES, DAY_COUNT_CONVENTIONS)
@@ -556,16 +557,17 @@ def test_calendar_pieces_conserve_and_share_amount_by_counted_days(g, frequency,
     """Piece amounts sum to the source amount, and any two pieces' amounts are in the ratio of
     their counted days. Together these fix each piece's sign to the source's."""
     pieces = _pieces(g, frequency, dcc)
-    days = [counted_days(p.period_start, p.period_end, dcc) for p in pieces]
+    hours = [elapsed_hours(p.period_start, p.period_end, dcc) for p in pieces]
 
-    assert _close(math.fsum(p.amount_mwh for p in pieces), g.amount_mwh, g.amount_mwh)
-    reference = max(range(len(pieces)), key=days.__getitem__)
-    assume(days[reference] > 0)
-    for p, d in zip(pieces, days, strict=True):
-        assert _close(
-            p.amount_mwh * days[reference],
-            pieces[reference].amount_mwh * d,
-            g.amount_mwh * days[reference],
+    assert math.fsum(p.amount_mwh for p in pieces) == pytest.approx(
+        g.amount_mwh, **_sum_tolerance(abs(g.amount_mwh))
+    )
+    reference = max(range(len(pieces)), key=hours.__getitem__)
+    assume(hours[reference] > 0)
+    for p, h in zip(pieces, hours, strict=True):
+        assert p.amount_mwh * hours[reference] == pytest.approx(
+            pieces[reference].amount_mwh * h,
+            **_sum_tolerance(abs(g.amount_mwh) * hours[reference]),
         )
 
 
@@ -577,7 +579,7 @@ def test_calendar_pieces_scale_with_the_source_amount(g, factor, frequency):
     scaled = _pieces(g.replace(amount_mwh=g.amount_mwh * factor), frequency, "actual/actual")
 
     for got, base in zip(scaled, pieces, strict=True):
-        assert _close(got.amount_mwh, base.amount_mwh * factor, g.amount_mwh * factor)
+        assert got.amount_mwh == pytest.approx(base.amount_mwh * factor)
 
 
 @pytest.mark.parametrize(
@@ -634,7 +636,7 @@ def test_group_by_period_groups_calendar_pieces_by_period_start(entries, frequen
     expected: dict[date, list[Generation]] = {}
     for g in entries:
         for piece in _pieces(g, frequency, dcc):
-            key = calendar_period_key(piece.period_start, frequency)
+            key = period_start(piece.period_start, frequency)
             expected.setdefault(key, []).append(piece)
 
     grouped = GenerationStream(entries).group_by(period=frequency, day_count_convention=dcc)
@@ -654,16 +656,16 @@ def test_period_group_totals_match_settled_period_totals(entries, conventions):
     stream = GenerationStream(entries)
     settled: dict[date, float] = {}
     for day, amount in _settle(stream, conventions):
-        key = calendar_period_key(day, frequency)
+        key = period_start(day, frequency)
         settled[key] = settled.get(key, 0.0) + amount
 
     totals = stream.group_by(period=frequency, day_count_convention=dcc).sum()
 
     scale = _amount_scale(entries)
-    assert _close(math.fsum(totals.values()), stream.sum(), scale)
+    assert math.fsum(totals.values()) == pytest.approx(stream.sum(), **_sum_tolerance(scale))
     assert totals.keys() == settled.keys()
     for key, total in totals.items():
-        assert _close(total, settled[key], scale)
+        assert total == pytest.approx(settled[key], **_sum_tolerance(scale))
 
 
 @given(generation_lists, st.functions(like=lambda g: None, returns=st.integers(0, 2), pure=True))
@@ -747,11 +749,14 @@ def test_sum_totals_amounts_and_group_sums_partition_it(entries, key):
     stream = GenerationStream(entries)
     grouped = stream.group_by(key)
 
-    assert _close(stream.sum(), math.fsum(g.amount_mwh for g in entries), _amount_scale(entries))
+    scale = _amount_scale(entries)
+    assert stream.sum() == pytest.approx(
+        math.fsum(g.amount_mwh for g in entries), **_sum_tolerance(scale)
+    )
     if not entries:
         assert stream.sum() == 0.0
     assert grouped.sum() == {k: group.sum() for k, group in grouped.items()}
-    assert _close(math.fsum(grouped.sum().values()), stream.sum(), _amount_scale(entries))
+    assert math.fsum(grouped.sum().values()) == pytest.approx(stream.sum(), **_sum_tolerance(scale))
 
 
 # === discounting and conversion to cashflows ===
@@ -780,9 +785,11 @@ def test_discounted_sum_is_the_npv_of_unit_price_revenue(entries, rate, valuatio
     discounted = stream.discounted_sum(rate, valuation, dcc, **timing)
 
     expected = stream.to_revenue(1.0, **conventions).npv(rate, valuation, dcc)
-    scale = _amount_scale(entries) * 16.0
-    assert _close(discounted, expected, scale)
-    assert _close(stream.discounted_sum(0.0, valuation, dcc, **timing), stream.sum(), scale)
+    scale = _amount_scale(entries)
+    assert discounted == pytest.approx(expected, **_sum_tolerance(16.0 * scale))
+    assert stream.discounted_sum(0.0, valuation, dcc, **timing) == pytest.approx(
+        stream.sum(), **_sum_tolerance(scale)
+    )
 
 
 @given(generation_lists, st.one_of(NON_FINITE, st.floats(max_value=-1.0)))
@@ -861,7 +868,7 @@ def test_price_escalates_to_each_settlement_date(entries, price, policy, convent
     assert [cf.date for cf in flows] == [day for day, _ in settled]
     for cf, (day, mwh) in zip(flows, settled, strict=True):
         expected = sign * mwh * price * policy.factor(day)
-        assert _close(cf.amount, expected, expected)
+        assert cf.amount == pytest.approx(expected)
 
 
 @given(

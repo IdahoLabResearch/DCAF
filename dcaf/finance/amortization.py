@@ -35,7 +35,7 @@ from dcaf.shared.types import (
 )
 from dcaf.shared.time import (
     PeriodWindow,
-    _calendar_period_windows,
+    calendar_period_windows,
     add_periods,
     elapsed_hours,
     period_start,
@@ -368,7 +368,7 @@ def _calendarize_cashflow_stream(
             if flow_index + 1 < len(stream.entries)
             else schedule_end
         )
-        windows = _calendar_period_windows(flow.date, source_end, frequency)
+        windows = calendar_period_windows(flow.date, source_end, frequency)
         source_hours = elapsed_hours(flow.date, source_end, day_count_convention)
         allocated: list[float] = []
         for window_index, (window_start, window_end) in enumerate(windows):

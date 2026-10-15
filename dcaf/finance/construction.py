@@ -33,7 +33,7 @@ from dcaf.shared.types import (
 )
 from dcaf.shared.time import (
     PeriodWindow,
-    _calendar_period_windows,
+    calendar_period_windows,
     add_periods,
     period_window_event_date,
     timedelta_fractional_years,
@@ -505,7 +505,7 @@ def _scheduled_spends(
             )
         ]
 
-    periods = _calendar_period_windows(
+    periods = calendar_period_windows(
         config.start_date,
         config.end_date,
         cast(Period, str(config.period)),

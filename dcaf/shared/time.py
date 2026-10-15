@@ -469,7 +469,7 @@ def time_delta_per_period(period: Period) -> relativedelta:
             assert_never(normalized_period)
 
 
-def _calendar_period_windows(
+def calendar_period_windows(
     start: date,
     end: date,
     frequency: Period,

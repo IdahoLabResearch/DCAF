@@ -1,10 +1,9 @@
 # © 2026 Battelle Energy Alliance, LLC
 # ALL RIGHTS RESERVED
-"""Shared Hypothesis strategies and independent calendar oracles for property tests.
+"""Shared Hypothesis strategies for property tests.
 
-The oracles deliberately reimplement calendar logic in the most direct way possible (day-by-day
-counting, month arithmetic) rather than calling DCAF helpers, so properties checked against them
-are not tautological. Month lengths come from the standard library's ``calendar.monthrange``.
+Strategies only generate inputs. Expected calendar values come from hand calculations or from
+properties of the DCAF helpers under test, never from reimplementations of those helpers.
 """
 
 from calendar import monthrange
@@ -69,87 +68,6 @@ def enum_spellings(draw: st.DrawFn, value: str) -> str:
     return draw(pad) + spelled + draw(pad)
 
 
-def is_leap_day(day: date) -> bool:
-    """Return whether *day* is Feb. 29."""
-    return day.month == 2 and day.day == 29
-
-
-def counted_days(start: date, end: date, day_count_convention: str) -> int:
-    """Count the days in ``[start, end)`` that a day-count convention puts on the clock."""
-    days = (start + timedelta(days=i) for i in range((end - start).days))
-    if day_count_convention == "actual/365-no-leap":
-        return sum(1 for day in days if not is_leap_day(day))
-    return sum(1 for _ in days)
-
-
-def year_fraction(start: date, end: date, day_count_convention: str) -> float:
-    """Return the signed years from *start* to *end*, adding each day's share of a year: 1/365
-    for counted days, or for actual/actual 1/365 or 1/366 by the length of the day's year."""
-    if end < start:
-        return -year_fraction(end, start, day_count_convention)
-    if day_count_convention != "actual/actual":
-        return counted_days(start, end, day_count_convention) / 365
-    days = (start + timedelta(days=i) for i in range((end - start).days))
-    return sum(1 / (date(day.year + 1, 1, 1) - date(day.year, 1, 1)).days for day in days)
-
-
-def _calendar_period_start(day: date, frequency: str) -> date:
-    """Return the first day of the calendar period containing *day*."""
-    match frequency:
-        case "day":
-            return day
-        case "month":
-            return day.replace(day=1)
-        case "quarter":
-            return date(day.year, (day.month - 1) // 3 * 3 + 1, 1)
-        case "year":
-            return date(day.year, 1, 1)
-    raise AssertionError(frequency)
-
-
-def _next_calendar_period_start(period_start: date, frequency: str) -> date:
-    """Return the first day of the calendar period after the one starting at *period_start*."""
-    if frequency == "day":
-        return period_start + timedelta(days=1)
-    months = {"month": 1, "quarter": 3, "year": 12}[frequency]
-    index = period_start.year * 12 + period_start.month - 1 + months
-    return date(index // 12, index % 12 + 1, 1)
-
-
-def tail_days(tail_start: date, next_boundary: date, fraction: float) -> int:
-    """Count the complete days in a fractional final period: the requested share of the next
-    scheduled period ``[tail_start, next_boundary)``, with a sub-day remainder dropped."""
-    requested = fraction * (next_boundary - tail_start).days
-    nearest = round(requested)
-    return nearest if abs(requested - nearest) <= 1e-12 else int(requested)
-
-
-def is_month_end(day: date) -> bool:
-    """Return whether *day* is the last day of its month."""
-    return day.day == monthrange(day.year, day.month)[1]
-
-
-def anchored_boundary(start: date, count: int, frequency: str, end_of_month: bool = True) -> date:
-    """Return boundary *count* of a schedule anchored at *start*: the start's day number in the
-    target month, clamped to shorter months, or the target month's last day when
-    *end_of_month* is set and *start* is a month-end. Daily schedules ignore *end_of_month*."""
-    # Daily frequency is the simple case since the day is our base unit of time
-    if frequency == "day":
-        return start + timedelta(days=count)
-    # Month/quarter/year frequencies can have subtleties in anchoring due to handling of leap
-    # years and the variable length of months.
-    # Use number of months as base unit of time for month/quarter/year frequencies
-    months = {"month": 1, "quarter": 3, "year": 12}[frequency] * count
-    index = start.year * 12 + start.month - 1 + months
-    year, month = index // 12, index % 12 + 1
-    month_length = monthrange(year, month)[1]
-    # start date is the last day of its month and `end_of_month=True` -> anchor to last day of month
-    if end_of_month and is_month_end(start):
-        return date(year, month, month_length)
-    # otherwise keep the start's day number, clamped to shorter months
-    return date(year, month, min(start.day, month_length))
-
-
 @st.composite
 def _late_month_dates(draw: st.DrawFn) -> date:
     """Draw a day from the 28th through the end of a month, where anchoring rules differ."""
@@ -189,32 +107,3 @@ DATES_OFF_SHORT_MONTH_ENDS = st.one_of(
     _dates_off_short_month_ends(),
     st.sampled_from([date(2028, 2, 28), date(2030, 1, 30), date(2030, 1, 31), date(2100, 2, 27)]),
 )
-
-
-def calendar_period_key(day: date, frequency: str) -> date:
-    """Identify the calendar settlement period containing *day* by its first day."""
-    return _calendar_period_start(day, frequency)
-
-
-def calendar_windows(start: date, end: date, frequency: str) -> list[tuple[date, date]]:
-    """Split ``[start, end)`` into its overlaps with consecutive calendar periods."""
-    windows = []
-    period_start = _calendar_period_start(start, frequency)
-    while period_start < end:
-        period_end = _next_calendar_period_start(period_start, frequency)
-        windows.append((max(start, period_start), min(end, period_end)))
-        period_start = period_end
-    return windows
-
-
-def timing_point(start: date, end: date, timing: str) -> date:
-    """Return the booking day for half-open ``[start, end)``: first, middle, or last day."""
-    last = end - timedelta(days=1)
-    match timing:
-        case "begin":
-            return start
-        case "middle":
-            return start + timedelta(days=(last - start).days // 2)
-        case "end":
-            return last
-    raise AssertionError(timing)
