@@ -24,7 +24,15 @@ from dcaf.shared.types import (
 from dcaf.shared.validation import validate_non_negative
 
 
-_FLOAT_TOLERANCE = 1e-12
+# A floating point absolute error tolerance of 1e-8 is chosen because this is on the order
+# of <1 second over a year
+#       1e-8 * 365 days = 0.315 sec
+# and <1 ms over a day
+#       1e-8 * 1 day = 0.864 ms
+# While floating point arithmetic has several orders of magnitude more precision than 1e-8,
+# this is already a very strict tolerance for the domain setting; DCAF uses the day as the
+# base unit of time.
+_FLOAT_TOLERANCE = 1e-8
 
 
 class PeriodTruncationWarning(UserWarning):

@@ -57,6 +57,8 @@ def test_is_month_end_when_next_day_is_start_of_next_month(day):
 
 
 # === _whole_days_with_truncation ===
+# NOTE: The function implementation uses a floating point tolerance of 1e-8, corresponding to
+#       <1 second per year and <1 ms per day.
 
 
 @pytest.mark.parametrize(
@@ -66,8 +68,10 @@ def test_is_month_end_when_next_day_is_start_of_next_month(day):
         (15.5, (15, True)),
         (0.5, (0, True)),
         (0.0, (0, False)),
-        (14.0 + 1e-13, (14, False)),  # within tolerance of a whole day
-        (14.0 - 1e-13, (14, False)),
+        (14.0 + 1e-12, (14, False)),  # within tolerance of a whole day
+        (14.0 - 1e-12, (14, False)),
+        (14.0 - 5e-9, (14, False)),  # just inside the 1e-8 tolerance
+        (14.0 - 2e-8, (13, True)),  # just outside the 1e-8 tolerance
         (14.0 - 1e-6, (13, True)),  # outside tolerance, so the partial day is dropped
         (14.0 + 1e-6, (14, True)),  # outside tolerance, so the partial day is dropped
     ],
