@@ -36,10 +36,10 @@ from dcaf.shared.types import (
 from dcaf.shared.time import (
     PeriodWindow,
     _calendar_period_windows,
+    add_periods,
     elapsed_hours,
     period_start,
     period_window_event_date,
-    time_delta_per_period,
 )
 
 
@@ -113,6 +113,8 @@ class AmortizationSchedule:
             ProFormaCategory.FINANCING_PRINCIPAL
         ),
         principal_tax_treatment: TaxTreatment | str = TaxTreatment.NONE,
+        *,
+        end_of_month: bool = True,
     ) -> AmortizationBuilder:
         """Return an ``AmortizationBuilder`` for fluent schedule configuration.
 
@@ -142,6 +144,9 @@ class AmortizationSchedule:
             Pro-forma category applied to principal cashflows.
         principal_tax_treatment : TaxTreatment or str, optional
             Tax treatment applied to principal cashflows.
+        end_of_month : bool, optional
+            Whether a schedule whose first payment is on the last day of a month
+            keeps every payment on the last day of its month. Default is ``True``.
 
         Returns
         -------
@@ -161,6 +166,7 @@ class AmortizationSchedule:
             interest_tax_treatment=interest_tax_treatment,
             principal_pro_forma_category=principal_pro_forma_category,
             principal_tax_treatment=principal_tax_treatment,
+            end_of_month=end_of_month,
         )
 
     @classmethod
@@ -182,6 +188,8 @@ class AmortizationSchedule:
             ProFormaCategory.FINANCING_PRINCIPAL
         ),
         principal_tax_treatment: TaxTreatment | str = TaxTreatment.NONE,
+        *,
+        end_of_month: bool = True,
     ) -> AmortizationSchedule:
         """Build and return an ``AmortizationSchedule`` directly (no rules).
 
@@ -214,6 +222,9 @@ class AmortizationSchedule:
             Pro-forma category applied to principal cashflows.
         principal_tax_treatment : TaxTreatment or str, optional
             Tax treatment applied to principal cashflows.
+        end_of_month : bool, optional
+            Whether a schedule whose first payment is on the last day of a month
+            keeps every payment on the last day of its month. Default is ``True``.
 
         Returns
         -------
@@ -233,6 +244,7 @@ class AmortizationSchedule:
             interest_tax_treatment=interest_tax_treatment,
             principal_pro_forma_category=principal_pro_forma_category,
             principal_tax_treatment=principal_tax_treatment,
+            end_of_month=end_of_month,
         ).build()
 
 
@@ -253,6 +265,8 @@ def amortize(
         ProFormaCategory.FINANCING_PRINCIPAL
     ),
     principal_tax_treatment: TaxTreatment | str = TaxTreatment.NONE,
+    *,
+    end_of_month: bool = True,
 ) -> AmortizationSchedule:
     """Build a standard fixed-payment amortization schedule.
 
@@ -288,6 +302,9 @@ def amortize(
         Default is ``ProFormaCategory.FINANCING_PRINCIPAL``.
     principal_tax_treatment : TaxTreatment or str, optional
         Tax treatment applied to principal cashflows. Default is ``TaxTreatment.NONE``.
+    end_of_month : bool, optional
+        Whether a schedule whose first payment is on the last day of a month keeps every
+        payment on the last day of its month. Default is ``True``.
 
     Returns
     -------
@@ -318,6 +335,7 @@ def amortize(
         interest_tax_treatment=interest_tax_treatment,
         principal_pro_forma_category=principal_pro_forma_category,
         principal_tax_treatment=principal_tax_treatment,
+        end_of_month=end_of_month,
     )
 
 
@@ -327,19 +345,23 @@ def _calendarize_cashflow_stream(
     frequency: Period,
     timing: TimingConvention,
     day_count_convention: DayCountConvention,
+    end_of_month: bool = True,
 ) -> CashFlowStream:
     """Allocate nominal payment intervals into calendar booking periods.
 
     Each original flow represents the interval from its anchored date to the
-    next anchored date. Amounts are split by elapsed hours, with a final
-    residual preserving each flow exactly, then aggregated by calendar period.
+    next anchored date; the final flow runs to the next boundary of the schedule
+    anchored at the first payment date. Amounts are split by elapsed hours, with
+    a final residual preserving each flow exactly, then aggregated by calendar
+    period.
     """
     if not stream.entries:
         return stream
 
-    delta = time_delta_per_period(frequency)
     grouped: dict[date, list[tuple[CashFlow, date, date, float]]] = {}
-    schedule_end = stream.entries[0].date + delta * len(stream.entries)
+    schedule_end = add_periods(
+        stream.entries[0].date, len(stream.entries), frequency, end_of_month=end_of_month
+    )
     for flow_index, flow in enumerate(stream.entries):
         source_end = (
             stream.entries[flow_index + 1].date
@@ -385,6 +407,7 @@ def _calendarize_amortization_schedule(
     frequency: Period,
     timing: TimingConvention,
     day_count_convention: DayCountConvention,
+    end_of_month: bool = True,
 ) -> AmortizationSchedule:
     """Calendarize all schedule components without changing total principal or interest."""
     return AmortizationSchedule(
@@ -393,18 +416,21 @@ def _calendarize_amortization_schedule(
             frequency=frequency,
             timing=timing,
             day_count_convention=day_count_convention,
+            end_of_month=end_of_month,
         ),
         interest=_calendarize_cashflow_stream(
             schedule.interest,
             frequency=frequency,
             timing=timing,
             day_count_convention=day_count_convention,
+            end_of_month=end_of_month,
         ),
         principal=_calendarize_cashflow_stream(
             schedule.principal,
             frequency=frequency,
             timing=timing,
             day_count_convention=day_count_convention,
+            end_of_month=end_of_month,
         ),
     )
 
@@ -435,6 +461,8 @@ class AmortizationBuilder:
             ProFormaCategory.FINANCING_PRINCIPAL
         ),
         principal_tax_treatment: TaxTreatment | str = TaxTreatment.NONE,
+        *,
+        end_of_month: bool = True,
     ) -> None:
         if term <= 0:
             raise ValueError("term must be positive")
@@ -443,6 +471,7 @@ class AmortizationBuilder:
         self._term = term
         self._start_date = start_date
         self._frequency: _PeriodEnum = parse_period(str(frequency))
+        self._end_of_month = end_of_month
         self._label = label
         self._interest_label = interest_label
         self._principal_label = principal_label
@@ -575,16 +604,24 @@ class AmortizationBuilder:
             Zero-based indices of periods whose payment dates fall within
             ``[from_date, to_date)``.
         """
-        delta = time_delta_per_period(self._frequency.value)
         indices: list[int] = []
         for i in range(self._term):
-            payment_date = self._start_date + delta * i
+            payment_date = self._payment_date(i)
             if from_date is not None and payment_date < from_date:
                 continue
             if to_date is not None and payment_date >= to_date:
                 continue
             indices.append(i)
         return set(indices)
+
+    def _payment_date(self, period_index: int) -> date:
+        """Return the date of payment *period_index*, anchored at the first payment date."""
+        return add_periods(
+            self._start_date,
+            period_index,
+            self._frequency.value,
+            end_of_month=self._end_of_month,
+        )
 
     def rate_change(self, from_period: int, annual_rate: float) -> Self:
         """Change the annual interest rate starting at a given period.
@@ -762,7 +799,6 @@ class AmortizationBuilder:
         """
         ppy = _payment_periods_per_year(self._frequency)
         default_config = _PeriodConfig(periodic_rate=self._annual_rate / ppy, pays_principal=True)
-        delta = time_delta_per_period(self._frequency.value)
 
         balance = self._principal
         total_flows: list[CashFlow] = []
@@ -773,9 +809,7 @@ class AmortizationBuilder:
             config = self._apply_rules(i, default_config)
             interest, principal, total = self._compute_amounts(balance, config, i, default_config)
             balance -= principal
-            t, intr, princ = self._make_cashflows(
-                self._start_date + delta * i, interest, principal, total
-            )
+            t, intr, princ = self._make_cashflows(self._payment_date(i), interest, principal, total)
             total_flows.append(t)
             interest_flows.append(intr)
             principal_flows.append(princ)
