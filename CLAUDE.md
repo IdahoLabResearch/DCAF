@@ -28,38 +28,41 @@ uv run pytest -n auto
 uv run mypy dcaf/
 
 # Linting and formatting
-uv run ruff check dcaf/
-uv run ruff format dcaf/
+uv run ruff check .
+uv run ruff format .
 ```
 
 ## Architecture
 
-The public API is re-exported from `dcaf/__init__.py`. Business logic is organized across modules in `dcaf/core/`:
+The package root (`dcaf/__init__.py`) exports only the project-level API (`EnergyProject`, `ProjectAnalysis`, contracts, policies). Lower-level primitives live in subpackages under `dcaf/` and are imported from them directly:
 
-- **`cashflows.py`** — Core cashflow abstractions (CashFlow, CashFlowStream, CashFlowGroup, CashFlowTags)
-- **`generation.py`** — Physical energy generation tracking (Generation, GenerationStream, GenerationGroup) with conversion to cashflows via `to_revenue()` and `to_cost()`
-- **`depreciation.py`** — Depreciation schedules (`macrs_schedule()`, `vdb()`, `vdb_schedule()`, IRS rate tables for half-year and mid-quarter conventions)
-- **`types.py`** — Shared type aliases (`Period`, `DayCountConvention`, `MACRSPropertyClass`, `MACRSConvention`, `SupportsLessThan`)
-- **`utils.py`** — Shared utilities (`period_start`, `timedelta_fractional_years`, `compound_factor`, `hours_per_period`, `time_delta_per_period`)
+- **`streams/`** — Stream primitives: `base.py` (`BaseStream`, `BaseGroup`), `cashflows.py` (`CashFlow`, `CashFlowStream`, `CashFlowGroup`), `generation.py` (`Generation`, `GenerationStream`, `GenerationGroup`, with conversion to cashflows via `to_revenue()` and `to_cost()`)
+- **`finance/`** — Financing and cost schedules: `amortization.py`, `construction.py` (spend schedules and financing), `escalation.py`, `opex.py`, `outage.py`
+- **`tax/`** — `depreciation.py` (`macrs_schedule()`, `vdb()`, `vdb_schedule()`, IRS rate tables for half-year and mid-quarter conventions), `incentives.py` (`ptc()`, `itc()`, `itc_adjusted_basis()`), `liability.py` (`compute_taxable_income()`, `tax_liability()`)
+- **`metrics/`** — Standalone `npv`, `irr`, and `lcoe` functions
+- **`shared/`** — `types.py` (`Period`, `DayCountConvention`, `MACRSPropertyClass`, `MACRSConvention`, `ProFormaCategory`, `TaxTreatment`, `SupportsLessThan`, ...), `time.py` (`period_start`, `timedelta_fractional_years`, `compound_factor`, `hours_per_period`, `time_delta_per_period`, ...), `validation.py`
+- **`project/`** — The high-level `EnergyProject` builder (`builder.py`), its compiler (`_compiler/`), and `analysis.py`, `contracts.py`, `policies.py`, `timeline.py`, `config.py`
 
 ### Core Abstractions
 
-- **`CashFlow`** — Frozen dataclass. Immutable unit representing a single cashflow with `amount` (float), `date`, `label`, `is_cash` (cash vs accrual like depreciation), and `tags` (frozenset of `CashFlowTags`).
-- **`CashFlowStream`** — Primary container of `CashFlow` objects. All operations (filter, apply, sort, group) return new instances. Supports fluent chaining: `stream.filter(fn).sort(fn).apply(fn)`.
-- **`CashFlowGroup[KeyType]`** — Generic dict-like container mapping keys to `CashFlowStream`s. Produced by `group_by()`, `group_by_tag()`, `group_by_period()`. Supports `aggregate()`, `apply_to_groups()`, and `ungroup()`.
-- **`CashFlowTags`** — Enum for categorization: REVENUE, EXPENSE, TAXABLE, TAX_DEDUCTIBLE, CAPEX, OPEX, DEPRECIATION.
-- **`Generation`** — Frozen dataclass for a single generation data point with `amount_mwh`, `date`, and `label`.
+- **`CashFlow`** — Frozen dataclass. Immutable unit representing a single cashflow with `amount` (float), `date`, `label`, `is_cash` (cash vs accrual like depreciation), `pro_forma_category` (`ProFormaCategory` or `None`), and `tax_treatment` (`TaxTreatment`).
+- **`CashFlowStream`** — Primary container of `CashFlow` objects (subclass of `BaseStream`). All operations (filter, apply, sort, group) return new instances. Supports fluent chaining: `stream.filter(fn).sort(fn).apply(fn)`.
+- **`CashFlowGroup[KeyType]`** — Generic dict-like container mapping keys to `CashFlowStream`s. Produced by `group_by()`, `group_by_pro_forma_category()`, `group_by_tax_treatment()`, `group_by_period()`. Supports `aggregate()`, `apply_to_groups()`, and `ungroup()`.
+- **`ProFormaCategory` / `TaxTreatment`** — Enums for categorization. `ProFormaCategory`: REVENUE, OPERATING_COST, CAPITAL_COST, TAX, TAX_CREDIT, DEPRECIATION, FINANCING_PROCEEDS, FINANCING_INTEREST, FINANCING_PRINCIPAL, OTHER. `TaxTreatment`: NONE, TAXABLE, DEDUCTIBLE.
+- **`Generation`** — Frozen dataclass for a single generation data point with `amount_mwh`, `label`, and either a legacy `date` or half-open `period_start`/`period_end` bounds.
 - **`GenerationStream`** — Container for `Generation` objects mirroring the CashFlowStream pattern. Supports `from_capacity()` factory, `filter()`, `group_by()`, `sum()`, `discounted_sum()`, and conversion methods (`to_revenue()`, `to_cost()`) that produce `CashFlowStream` objects.
 - **`GenerationGroup[KeyType]`** — Generic dict-like container mapping keys to `GenerationStream`s. Supports grouping by a key function or by time `period`.
+- **`EnergyProject`** — Immutable fluent builder: each configuration method returns a new instance. `analyze()` compiles it into a `ProjectAnalysis`; `cashflows()`, `metrics()`, and `pro_forma()` are shortcuts.
+- **`ProjectAnalysis`** — Frozen compiled result of `EnergyProject.analyze()`, exposing the `cashflows` property and the `metrics()` and `pro_forma()` methods.
 
 ### Key Design Patterns
 
-- **Immutability**: All data classes are frozen. All operations return new instances.
+- **Immutability**: Value types (`CashFlow`, `Generation`, project config and analysis records) are frozen dataclasses. Streams and groups are plain (non-frozen) dataclasses holding an `entries` list or `groups` dict, but all operations return new instances.
 - **Functional composition**: Methods accept callables (`Callable[[CashFlow], ...]`) for customizable transformations, filtering, and grouping.
 - **Exhaustive matching**: Uses `match/case` with `assert_never()` instead of catch-all exceptions.
-- **Modern Python 3.13+**: PEP 695 type aliases (`type X = ...`), generic syntax on methods (`group_by[KeyType]`), `Literal` types for constrained parameters.
-- **Day count conventions**: NPV calculations use configurable `DayCountConvention` (currently `"actual/actual"`), centralized in `utils.timedelta_fractional_years()`.
-- **Generation-to-cashflow bridge**: `GenerationStream` converts physical quantities (MWh) to financial cashflows, while tax incentives like PTC are modeled in `tax_incentives.py`.
+- **Python 3.11 compatible**: `TypeAlias` annotations (`X: TypeAlias = ...`), module-level `TypeVar`s for generics (no PEP 695 `type X = ...` or `def f[T]` syntax), `Literal` types for constrained parameters. Avoid stdlib APIs newer than 3.11 (e.g. `warnings.deprecated`).
+- **Day count conventions**: NPV calculations use configurable `DayCountConvention` (`"actual/365-no-leap"`, `"actual/365-fixed"`, or `"actual/actual"`, the default), centralized in `shared.time.timedelta_fractional_years()`.
+- **Generation-to-cashflow bridge**: `GenerationStream` converts physical quantities (MWh) to financial cashflows, while tax incentives like PTC are modeled in `tax/incentives.py`.
 
 ## Conventions
 
@@ -71,7 +74,7 @@ Every date-bounded interval in the public API uses **inclusive start, exclusive 
 - `EnergyProject.construction(construction_start, construction_end)` and `construction_spend_schedule(start_date, end_date)`
 - `EnergyProject.construction_outage(start, end)` / `EnergyProject.generation_outage(start, end)`
 - `GenerationStream.from_outage(start, end)`, `generator_outage(start, end)`, `construction_outage(start, end)`
-- `BaseStream.date_range(start, end)`, `CashFlowStream.date_range`, `GenerationStream.date_range`
+- `CashFlowStream.date_range(start, end)`, `GenerationStream.date_range`
 - `AmortizationBuilder.interest_free(from_date, to_date)`
 
 Concretely: to model a full calendar year 2026, write `operations_start=date(2026, 1, 1), operations_end=date(2027, 1, 1)`. The end date is the first day **after** the interval. **Do not** use `date(2026, 12, 31)` to mean "last day of 2026" — always use the first day of the following period as the exclusive upper bound.
@@ -82,7 +85,7 @@ When introducing a new date-interval API, follow the half-open convention and do
 
 ## Code Style
 
-- Python 3.13+ required
+- Python 3.11+ supported (`requires-python = ">=3.11"`, ruff `target-version = "py311"`)
 - Line length: 100 characters
 - Ruff for linting/formatting, mypy for type checking
 - Comprehensive type hints throughout, including generics and protocols
@@ -94,7 +97,7 @@ When introducing a new date-interval API, follow the half-open convention and do
 - Private functionality must have concise descriptive docstrings explaining what the code does and any important design decisions affecting its implementation or library use.
 - When refactoring or adding APIs, update docstrings as part of the change rather than as a follow-up.
 
-## AI Behavioral Guideliens
+## AI Behavioral Guidelines
 
 **Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
 
