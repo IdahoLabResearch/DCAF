@@ -152,11 +152,11 @@ the construction start date:
 
 | Example | NPV |
 |---------|-----|
-| `_simple` | ~$307 M (no financing, no escalation) |
-| `_full` (high-level) | ~$37 M (full financing and escalation) |
-| `_midlevel` | ~$186 M (MACRS deductions lower tax burden vs. high-level) |
-| `_builders` | ~$162 M (custom incentive; lower debt cost reduces service vs. midlevel) |
-| `_primitives` | ~−$36 M (no depreciation deduction; escalation on revenue only) |
+| `_simple` | ~$376 M (no financing, no escalation) |
+| `_full` (high-level) | ~$337 M (full financing and escalation) |
+| `_midlevel` | ~$345 M (MACRS deductions lower tax burden vs. high-level) |
+| `_builders` | ~$308 M (custom incentive; lower debt cost reduces service vs. midlevel) |
+| `_primitives` | ~$258 M (no depreciation deduction; escalation on revenue only) |
 
 All five examples include construction-outage modeling (10-day extensions to two
 baseline refueling outages during construction). The outage line items are

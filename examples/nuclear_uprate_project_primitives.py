@@ -21,6 +21,7 @@ Modeling notes
 - Taxes are approximated as a flat rate on revenue only; PTC is modeled as a
   separate tax-credit cashflow using the same project-delta treatment as ITC.
   depreciation and interest deductions are omitted for brevity.
+- Debt proceeds are DEBT_FRACTION of each construction draw.
 - Debt service is a level-payment annuity (no interest/principal split).
 - Construction outage impact is built as raw ``CashFlow`` objects with manually
   computed lost MWh × price plus fixed and per-day cost components, mirroring
@@ -163,9 +164,24 @@ for label, outage_start, outage_end in OUTAGE_WINDOWS:
     )
 outage_impact = CashFlowStream(outage_cashflows)
 
+# DEBT PROCEEDS — each construction draw is funded DEBT_FRACTION by debt. These draws are
+# neither escalated nor charged construction interest, so the proceeds sum to the principal.
+debt_proceeds = CashFlowStream(
+    [
+        CashFlow(
+            amount=-cf.amount * DEBT_FRACTION,
+            date=cf.date,
+            label=f"Debt Proceeds {cf.date.year}",
+            pro_forma_category=ProFormaCategory.FINANCING_PROCEEDS,
+            tax_treatment=TaxTreatment.NONE,
+        )
+        for cf in construction
+    ]
+)
+
 # DEBT SERVICE — level-payment annuity (interest and principal combined)
 # PMT = P * r / (1 - (1 + r)^-n)
-debt_principal = OVERNIGHT_CAPEX * DEBT_FRACTION
+debt_principal = debt_proceeds.sum()
 annual_debt_payment = debt_principal * COST_OF_DEBT / (1 - (1 + COST_OF_DEBT) ** -DEBT_TERM_YEARS)
 debt_service = CashFlowStream(
     [
@@ -198,6 +214,7 @@ taxes = CashFlowStream(
 # ASSEMBLE ALL CASHFLOWS
 cashflows = CashFlowStream.from_streams(
     construction,
+    debt_proceeds,
     revenue,
     ptc_credits,
     debt_service,
@@ -234,6 +251,7 @@ print(f"Total generation (MWh):      {total_generation:,.0f}")
 print(f"Construction cash flow ($):  {construction.sum():,.0f}")
 print(f"Revenue cash flow ($):       {revenue.sum():,.0f}")
 print(f"PTC cash flow ($):           {ptc_credits.sum():,.0f}")
+print(f"Debt proceeds ($):           {debt_proceeds.sum():,.0f}")
 print(f"Debt service cash flow ($):  {debt_service.sum():,.0f}")
 print(f"Outage impact ($):           {outage_impact.sum():,.0f}")
 print(f"Tax cash flow ($):           {taxes.sum():,.0f}")
