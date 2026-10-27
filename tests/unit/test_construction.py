@@ -728,62 +728,10 @@ def test_interest_flows_booked_at_period_end(treatment, label):
 
     interest_flows = [cf for cf in stream.entries if cf.label == label]
     assert [cf.date for cf in interest_flows] == [
+        date(2025, 2, 1),
         date(2025, 3, 1),
         date(2025, 4, 1),
     ]
-
-
-@pytest.mark.parametrize(
-    ("treatment", "label"),
-    [
-        ("pay", "Interest Payment"),
-        ("capitalize", "Capitalized Interest"),
-    ],
-)
-def test_interest_excludes_current_period_draws(treatment, label):
-    stream = construction_spend_schedule(
-        1200,
-        date(2025, 1, 1),
-        date(2025, 4, 1),
-        profile="flat",
-        financing=ConstructionFinancing.debt(
-            1.0,
-            interest_rate=0.12,
-            treatment=treatment,  # type: ignore[arg-type]
-        ),
-    )
-
-    spend_flows = [cf for cf in stream.entries if cf.label == "Construction Spend"]
-    interest_flows = [cf for cf in stream.entries if cf.label == label]
-
-    assert len(interest_flows) == 2
-
-    second_period_years = timedelta_fractional_years(date(2025, 2, 1), date(2025, 3, 1))
-    expected_second_interest = spend_flows[0].amount * 0.12 * second_period_years
-    assert interest_flows[0].amount == pytest.approx(expected_second_interest)
-
-
-def test_paid_interest_third_period_uses_only_prior_draws():
-    stream = construction_spend_schedule(
-        1200,
-        date(2025, 1, 1),
-        date(2025, 4, 1),
-        profile="flat",
-        financing=ConstructionFinancing.debt(
-            1.0,
-            interest_rate=0.12,
-            treatment="pay",
-        ),
-    )
-
-    spend_flows = [cf for cf in stream.entries if cf.label == "Construction Spend"]
-    interest_flows = [cf for cf in stream.entries if cf.label == "Interest Payment"]
-
-    third_period_years = timedelta_fractional_years(date(2025, 3, 1), date(2025, 4, 1))
-    expected_third_interest = (
-        (spend_flows[0].amount + spend_flows[1].amount) * 0.12 * third_period_years
-    )
-    assert interest_flows[1].amount == pytest.approx(expected_third_interest)
 
 
 def test_capitalized_interest_accumulates():
@@ -888,32 +836,6 @@ def test_paid_interest_does_not_accumulate_on_balance():
     assert capitalized_total > paid_total
 
 
-def test_annual_interest_servicing_uses_prior_year_balance_for_monthly_spend():
-    stream = construction_spend_schedule(
-        24_000,
-        date(2025, 1, 1),
-        date(2027, 1, 1),
-        period="month",
-        profile="flat",
-        financing=ConstructionFinancing.debt(
-            1.0,
-            interest_rate=0.12,
-            treatment="pay",
-            servicing_period="year",
-        ),
-    )
-
-    spend_flows = [cf for cf in stream.entries if cf.label == "Construction Spend"]
-    interest_flows = [cf for cf in stream.entries if cf.label == "Interest Payment"]
-
-    assert len(interest_flows) == 1
-    assert interest_flows[0].date == date(2027, 1, 1)
-
-    opening_balance = -sum(cf.amount for cf in spend_flows if cf.date <= date(2026, 1, 1))
-    expected_interest = -opening_balance * 0.12
-    assert interest_flows[0].amount == pytest.approx(expected_interest)
-
-
 def test_annual_capitalized_interest_rolls_forward_between_service_periods():
     stream = construction_spend_schedule(
         36_000,
@@ -931,7 +853,11 @@ def test_annual_capitalized_interest_rolls_forward_between_service_periods():
 
     interest_flows = [cf for cf in stream.entries if cf.label == "Capitalized Interest"]
 
-    assert [cf.date for cf in interest_flows] == [date(2027, 1, 1), date(2028, 1, 1)]
+    assert [cf.date for cf in interest_flows] == [
+        date(2026, 1, 1),
+        date(2027, 1, 1),
+        date(2028, 1, 1),
+    ]
     assert abs(interest_flows[1].amount) > abs(interest_flows[0].amount)
 
 

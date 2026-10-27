@@ -982,7 +982,10 @@ class EnergyProject:
             permanent-debt principal or ``"pay"``d in cash. Default is
             ``"capitalize"``.
         servicing_period : Period, optional
-            Period frequency for construction-period interest accrual.
+            Period frequency at which construction-period interest is booked
+            and, when capitalized, added to the debt balance. Each draw accrues
+            interest from its draw date regardless of this frequency. Defaults
+            to the construction spend ``period``.
         amortization_frequency : Period, optional
             Calendar frequency used to book permanent-debt payments. Nominal
             amortization amounts are allocated pro rata when the first or last
