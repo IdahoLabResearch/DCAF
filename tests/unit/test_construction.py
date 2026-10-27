@@ -3,9 +3,11 @@
 """Tests for construction spend schedule APIs, helpers, and reference accessors."""
 
 import inspect
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from dcaf.finance import (
     ConstantRateEscalation,
@@ -25,6 +27,7 @@ from dcaf.finance.construction import (
 from dcaf.shared.types import ProFormaCategory, TaxTreatment
 from dcaf.shared.time import timedelta_fractional_years
 from dcaf.streams import CashFlowStream
+from strategies import DAY_COUNT_CONVENTIONS, TIMINGS
 
 SPEND_PROFILES = get_spend_profiles()
 FLAT_CURVE = SPEND_PROFILES["flat"]
@@ -944,3 +947,142 @@ def test_quarterly_period():
     assert len(stream.entries) == 4
     total = sum(cf.amount for cf in stream.entries)
     assert abs(total - (-1_000_000)) < 1.0
+
+
+# === Draw-date interest accrual ===
+#
+# Each case is $1M flat spend in 2030 (a non-leap year, so every actual/actual year fraction is
+# days / 365), 50% debt, and 6% interest. Each draw is $500k times its spend window's share of
+# construction days, and each draw accrues simple interest from its draw date. Capitalized
+# interest joins the balance at each servicing-period end, so later periods compound on it.
+
+
+def test_draws_on_servicing_boundaries_keep_their_interest():
+    """Draws dated on a servicing-period start accrue over that whole period.
+
+    Draws of 500k x 31/90, 28/90 and 31/90 land on Jan 1, Feb 1 and Mar 1, each the start of a
+    monthly servicing period:
+
+    - Jan: 172,222.22 x 0.06 x 31/365 = 877.63
+    - Feb: (172,222.22 + 877.63 + 155,555.56) x 0.06 x 28/365 = 1,512.72
+    - Mar: (328,655.41 + 1,512.72 + 172,222.22) x 0.06 x 31/365 = 2,560.13
+    """
+    stream = construction_spend_schedule(
+        1_000_000.0,
+        date(2030, 1, 1),
+        date(2030, 4, 1),
+        timing="begin",
+        financing=ConstructionFinancing.debt(0.5, interest_rate=0.06),
+    )
+
+    interest = [-cf.amount for cf in stream.entries if cf.label == "Capitalized Interest"]
+    assert interest == pytest.approx([877.63, 1_512.72, 2_560.13], abs=0.01)
+    assert sum(interest) == pytest.approx(4_950.47, abs=0.01)
+
+
+@pytest.mark.parametrize(
+    ("end_of_month", "expected"),
+    [
+        # Servicing [Apr 30, May 31), [May 31, Jun 30), [Jun 30, Jul 31). Draws of 500k x 1/92,
+        # 31/92, 30/92 and 30/92 land on Apr 30, May 1, Jun 1 and Jul 1.
+        # - May 31: 5,434.78 x 31 days + 168,478.26 x 30 days -> 858.55
+        # - Jun 30: (173,913.04 + 858.55) x 1 day + (+ 163,043.48) x 29 days -> 1,639.14
+        # - Jul 31: (339,454.21 + 1,639.14) x 1 day + (+ 163,043.48) x 30 days -> 2,533.87
+        (True, [858.55, 1_639.14, 2_533.87]),
+        # Servicing [Apr 30, May 30), [May 30, Jun 30), [Jun 30, Jul 30), [Jul 30, Jul 31).
+        # - May 30: 5,434.78 x 30 days + 168,478.26 x 29 days -> 829.96
+        # - Jun 30: (173,913.04 + 829.96) x 31 days + 163,043.48 x 29 days -> 1,667.72
+        # - Jul 30: (339,456.52 + 1,667.72) x 30 days + 163,043.48 x 29 days -> 2,451.27
+        # - Jul 31: (504,167.72 + 2,451.27) x 1 day -> 83.01
+        (False, [829.96, 1_667.72, 2_451.27, 83.01]),
+    ],
+)
+def test_draws_inside_servicing_periods_accrue_from_their_draw_dates(end_of_month, expected):
+    """Draws on the 1st accrue from the 1st when servicing is anchored on Apr 30."""
+    stream = construction_spend_schedule(
+        1_000_000.0,
+        date(2030, 4, 30),
+        date(2030, 7, 31),
+        timing="begin",
+        financing=ConstructionFinancing.debt(0.5, interest_rate=0.06),
+        end_of_month=end_of_month,
+    )
+
+    interest = [-cf.amount for cf in stream.entries if cf.label == "Capitalized Interest"]
+    assert interest == pytest.approx(expected, abs=0.01)
+
+
+def test_annual_servicing_accrues_monthly_begin_draws_from_their_draw_dates():
+    """Each month's draw of 500k x days / 365 on the 1st accrues to Jan 1, 2031.
+
+    With one servicing period nothing compounds, so the total is
+    sum(500k x d_m / 365 x 0.06 x (days from the 1st of month m to Jan 1) / 365) = 16,251.00.
+    """
+    stream = construction_spend_schedule(
+        1_000_000.0,
+        date(2030, 1, 1),
+        date(2031, 1, 1),
+        timing="begin",
+        financing=ConstructionFinancing.debt(0.5, interest_rate=0.06, servicing_period="year"),
+    )
+
+    interest = [-cf.amount for cf in stream.entries if cf.label == "Capitalized Interest"]
+    assert interest == pytest.approx([16_251.00], abs=0.01)
+
+
+def test_annual_servicing_accrues_monthly_end_draws_from_their_draw_dates():
+    """With default end timing, each month's draw lands on the month's last day.
+
+    Each draw of 500k x d_m / 365 accrues from its month-end to Jan 1, 2031:
+    sum(500k x d_m / 365 x 0.06 x (days from the last of month m to Jan 1) / 365) = 13,831.19.
+    """
+    stream = construction_spend_schedule(
+        1_000_000.0,
+        date(2030, 1, 1),
+        date(2031, 1, 1),
+        financing=ConstructionFinancing.debt(0.5, interest_rate=0.06, servicing_period="year"),
+    )
+
+    interest = [-cf.amount for cf in stream.entries if cf.label == "Capitalized Interest"]
+    assert interest == pytest.approx([13_831.19], abs=0.01)
+
+
+@given(
+    start=st.dates(min_value=date(2020, 1, 1), max_value=date(2035, 12, 31)),
+    days=st.integers(min_value=1, max_value=4 * 366),
+    period=st.sampled_from(["month", "quarter", "year"]),
+    servicing_period=st.sampled_from(["month", "quarter", "year"]),
+    timing=TIMINGS,
+    day_count_convention=DAY_COUNT_CONVENTIONS,
+    end_of_month=st.booleans(),
+)
+def test_paid_interest_does_not_depend_on_servicing_grid(
+    start, days, period, servicing_period, timing, day_count_convention, end_of_month
+):
+    """Paid interest is simple interest on each draw from its draw date to construction end.
+
+    Paid interest never compounds, so cutting the accrual window into servicing periods must
+    not change its total. Each draw contributes ``draw x rate x yearfrac(draw date, end)``.
+    """
+    end = start + timedelta(days=days)
+    stream = construction_spend_schedule(
+        1_000_000.0,
+        start,
+        end,
+        period=period,
+        timing=timing,
+        financing=ConstructionFinancing.debt(
+            0.5, interest_rate=0.06, treatment="pay", servicing_period=servicing_period
+        ),
+        day_count_convention=day_count_convention,
+        end_of_month=end_of_month,
+    )
+
+    expected = sum(
+        -flow.amount * 0.5 * 0.06 * timedelta_fractional_years(flow.date, end, day_count_convention)
+        for flow in stream
+        if flow.label == "Construction Spend"
+    )
+    interest = sum(-flow.amount for flow in stream if flow.label == "Interest Payment")
+
+    assert interest == pytest.approx(expected, rel=1e-9, abs=1e-6)
