@@ -26,6 +26,7 @@ TimingConvention: TypeAlias = Literal["end", "begin", "middle"]
 DayCountConvention: TypeAlias = Literal["actual/365-no-leap", "actual/365-fixed", "actual/actual"]
 MACRSPropertyClass: TypeAlias = Literal[3, 5, 7, 10, 15, 20]
 MACRSConvention: TypeAlias = Literal["half-year", "mid-quarter"]
+# "best-of-half-year-mid-quarter" is deprecated (removal in 1.0); see vdb_schedule.
 VDBConvention: TypeAlias = Literal[
     "none", "half-year", "mid-quarter", "best-of-half-year-mid-quarter"
 ]

@@ -8,6 +8,7 @@ calculator, and factory functions for generating depreciation
 ``CashFlowStream`` objects.
 """
 
+import warnings
 from collections.abc import Iterator, Sequence
 from datetime import date
 from typing import assert_never
@@ -25,6 +26,15 @@ from dcaf.shared.types import (
 from dcaf.shared.validation import validate_finite, validate_non_negative
 from dcaf.streams.cashflows import CashFlow, CashFlowStream
 from dcaf.tax._macrs_tables import _MACRS_MID_QUARTER_RATES, _MACRS_RATES
+
+# Shared by ``vdb_schedule`` and ``EnergyProject.depreciation_vdb`` so both entry points
+# emit identical text.
+_BEST_OF_DEPRECATION_MESSAGE = (
+    'convention="best-of-half-year-mid-quarter" is deprecated and will be removed in DCAF 1.0. '
+    "The IRS 40% rule chooses the convention from all property placed in service during "
+    "the tax year, which DCAF does not know. Apply the 40% rule yourself and pass "
+    'convention="half-year" or convention="mid-quarter" instead.'
+)
 
 
 def _validate_vdb_inputs(
@@ -419,6 +429,13 @@ def vdb_schedule(
         period-by-period schedule. ``"half-year"`` and ``"mid-quarter"``
         apply convention-aware fractional first periods. ``"best-of-half-year-mid-quarter"``
         values both candidates and returns the higher-NPV schedule.
+
+        .. deprecated:: 0.3.0
+            ``"best-of-half-year-mid-quarter"`` is deprecated and will be removed in
+            1.0. The IRS 40% rule picks the convention from all property placed in
+            service during the tax year, which DCAF does not know. Apply the 40% rule
+            yourself and pass ``"half-year"`` or ``"mid-quarter"``. Using it emits a
+            :class:`DeprecationWarning`; the schedule it returns is unchanged.
     schedule_dates : Sequence[date] | None, optional
         Explicit dates for convention-aware schedule entries. When provided,
         depreciation flows are placed on these dates instead of boundary ``n``
@@ -427,10 +444,12 @@ def vdb_schedule(
         ``placed_in_service`` are ignored; a matching date is included.
     valuation_rate : float | None, optional
         Annual discount rate used when ``convention`` is
-        ``"best-of-half-year-mid-quarter"``.
+        ``"best-of-half-year-mid-quarter"``. This parameter exists only for that
+        deprecated convention and will be removed along with it in 1.0.
     valuation_date : date | None, optional
         Valuation date used when ``convention`` is
-        ``"best-of-half-year-mid-quarter"``.
+        ``"best-of-half-year-mid-quarter"``. This parameter exists only for that
+        deprecated convention and will be removed along with it in 1.0.
     terminal_catch_up : bool, optional
         When true, allow an additional terminal period that books any residual
         depreciation needed to exactly reach ``cost_basis - salvage_value``.
@@ -489,6 +508,11 @@ def vdb_schedule(
     >>> aligned.entries[0].date
     datetime.date(2030, 12, 31)
     """
+    if convention == "best-of-half-year-mid-quarter":
+        # stacklevel=2 attributes the warning to the user's call to vdb_schedule, which
+        # Python's default filters need to show a DeprecationWarning.
+        warnings.warn(_BEST_OF_DEPRECATION_MESSAGE, DeprecationWarning, stacklevel=2)
+
     if isinstance(life, bool) or not isinstance(life, int) or life <= 0:
         raise ValueError("life must be a positive integer")
 

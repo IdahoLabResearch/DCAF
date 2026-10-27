@@ -9,6 +9,7 @@ stays immutable: each configuration method returns a new project.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import replace as dc_replace
 from datetime import date
 from typing import Any, Self
@@ -45,6 +46,7 @@ from dcaf.project.policies import (
 )
 from dcaf.streams.cashflows import CashFlowGroup, CashFlowStream
 from dcaf.streams.generation import GenerationStream
+from dcaf.tax.depreciation import _BEST_OF_DEPRECATION_MESSAGE
 from dcaf.shared.types import (
     DayCountConvention,
     InterestTreatment,
@@ -1127,12 +1129,23 @@ class EnergyProject:
             Switch to straight-line when optimal. Default is ``True``.
         convention : VDBConvention, optional
             Half-period convention. Default is ``"none"``.
+
+            .. deprecated:: 0.3.0
+                ``"best-of-half-year-mid-quarter"`` is deprecated and will be removed
+                in 1.0. The IRS 40% rule picks the convention from all property placed
+                in service during the tax year, which DCAF does not know. Apply the
+                40% rule yourself and pass ``"half-year"`` or ``"mid-quarter"``. Using
+                it emits a :class:`DeprecationWarning`; the schedule is unchanged.
         schedule_dates : tuple of date, optional
             Explicit period dates.
         valuation_rate : float, optional
-            Discount rate for present-value election.
+            Discount rate for present-value election. This parameter exists only for
+            the deprecated ``"best-of-half-year-mid-quarter"`` convention and will be
+            removed along with it in 1.0.
         valuation_date : date, optional
-            Valuation date for present-value election.
+            Valuation date for present-value election. This parameter exists only for
+            the deprecated ``"best-of-half-year-mid-quarter"`` convention and will be
+            removed along with it in 1.0.
         terminal_catch_up : bool, optional
             Accumulate remaining basis in the final period. Default is ``False``.
         label : str, optional
@@ -1144,6 +1157,14 @@ class EnergyProject:
         EnergyProject
             New project with VDB depreciation configured.
         """
+        if convention == "best-of-half-year-mid-quarter":
+            # Warn here, once per user action: this method is the only place a
+            # VdbDepreciationConfig is built (it is not part of the public API), and it
+            # is called directly by the user, so stacklevel=2 lands on their line. The
+            # compiler silences the vdb_schedule warning when it replays this config.
+            # Warning before the config is built keeps the warning even when validation
+            # then raises.
+            warnings.warn(_BEST_OF_DEPRECATION_MESSAGE, DeprecationWarning, stacklevel=2)
         return self._with(
             depreciation=VdbDepreciationConfig(
                 life=life,
