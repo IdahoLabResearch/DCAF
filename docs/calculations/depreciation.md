@@ -52,6 +52,15 @@ round(vdb(35000, 7500, 36, 10, 20), 2)
 # -> 8603.8   (depreciation accrued over periods 10..20)
 ```
 
+```{deprecated} 0.3.0
+The `"best-of-half-year-mid-quarter"` value of `convention` in `vdb_schedule(...)` and
+`.depreciation_vdb(...)` is deprecated and will be removed in 1.0 (together with
+`valuation_rate` and `valuation_date`, which exist only for it). The IRS 40% rule chooses
+between half-year and mid-quarter using all property placed in service during the tax year,
+which DCAF does not know. Apply the 40% rule yourself and pass `"half-year"` or
+`"mid-quarter"`. The schedules it returns are unchanged for now.
+```
+
 ## Interaction with the ITC
 
 When an Investment Tax Credit is taken, the depreciable basis is reduced first — see

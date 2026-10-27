@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import warnings
+
 from dcaf.project._builder_config import MacrsDepreciationConfig, VdbDepreciationConfig
 from dcaf.project._compiler import scheduling
 from dcaf.project._compiler.context import AnalysisContext
@@ -111,9 +113,12 @@ def build_depreciation(
                 component_name="depreciation",
             )
         case VdbDepreciationConfig() as depreciation_config:
-            return scheduling.remap_event_dates(
-                context,
-                vdb_schedule(
+            # The deprecated best-of convention already warned when the user called
+            # EnergyProject.depreciation_vdb; silence vdb_schedule so one user action
+            # yields one warning (and the warning is not attributed to DCAF internals).
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", DeprecationWarning)
+                vdb_stream = vdb_schedule(
                     cost_basis=basis,
                     salvage_value=depreciation_config.salvage_value,
                     placed_in_service=placed,
@@ -127,7 +132,10 @@ def build_depreciation(
                     valuation_date=depreciation_config.valuation_date,
                     terminal_catch_up=depreciation_config.terminal_catch_up,
                     label=depreciation_config.label,
-                ),
+                )
+            return scheduling.remap_event_dates(
+                context,
+                vdb_stream,
                 frequency=depreciation_config.frequency,
                 phase_start=ops_start,
                 phase_end=ops_end,

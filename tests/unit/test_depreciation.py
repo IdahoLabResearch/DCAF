@@ -2,6 +2,7 @@
 # ALL RIGHTS RESERVED
 """Tests for variable declining balance depreciation."""
 
+import warnings
 from datetime import date
 
 import pytest
@@ -270,9 +271,12 @@ def test_vdb_mid_quarter_first_period_by_quarter(placed, expected_first_period):
 
 def test_vdb_schedule_best_of_convention_requires_valuation_inputs():
     """Candidate selection needs valuation inputs for the NPV comparison."""
-    with pytest.raises(
-        ValueError,
-        match="valuation_rate and valuation_date are required",
+    with (
+        pytest.warns(DeprecationWarning),
+        pytest.raises(
+            ValueError,
+            match="valuation_rate and valuation_date are required",
+        ),
     ):
         vdb_schedule(
             cost_basis=1000.0,
@@ -289,18 +293,19 @@ def test_vdb_schedule_best_of_convention_matches_workbook_shape():
     # Workbook models the asset entering service at the start of 2031 (Q1), with the
     # first deduction at year-end 2031. Under literal-date quarter semantics that is
     # the date 2031-01-01, so the preceding 2030-12-31 grid point is skipped.
-    stream = vdb_schedule(
-        cost_basis=877824.3662585187,
-        salvage_value=0.0,
-        placed_in_service=date(2031, 1, 1),
-        life=15,
-        factor=1.5,
-        convention="best-of-half-year-mid-quarter",
-        schedule_dates=schedule_dates,
-        valuation_rate=0.10,
-        valuation_date=date(2030, 12, 31),
-        terminal_catch_up=True,
-    )
+    with pytest.warns(DeprecationWarning):
+        stream = vdb_schedule(
+            cost_basis=877824.3662585187,
+            salvage_value=0.0,
+            placed_in_service=date(2031, 1, 1),
+            life=15,
+            factor=1.5,
+            convention="best-of-half-year-mid-quarter",
+            schedule_dates=schedule_dates,
+            valuation_rate=0.10,
+            valuation_date=date(2030, 12, 31),
+            terminal_catch_up=True,
+        )
 
     expected_amounts = [
         -76809.63204762038,
@@ -331,18 +336,19 @@ def test_vdb_schedule_best_of_convention_prefers_mid_quarter_candidate():
         schedule_dates=schedule_dates,
         terminal_catch_up=True,
     )
-    best_of = vdb_schedule(
-        cost_basis=877824.3662585187,
-        salvage_value=0.0,
-        placed_in_service=date(2031, 1, 1),
-        life=15,
-        factor=1.5,
-        convention="best-of-half-year-mid-quarter",
-        schedule_dates=schedule_dates,
-        valuation_rate=0.10,
-        valuation_date=date(2030, 12, 31),
-        terminal_catch_up=True,
-    )
+    with pytest.warns(DeprecationWarning):
+        best_of = vdb_schedule(
+            cost_basis=877824.3662585187,
+            salvage_value=0.0,
+            placed_in_service=date(2031, 1, 1),
+            life=15,
+            factor=1.5,
+            convention="best-of-half-year-mid-quarter",
+            schedule_dates=schedule_dates,
+            valuation_rate=0.10,
+            valuation_date=date(2030, 12, 31),
+            terminal_catch_up=True,
+        )
 
     assert [entry.amount for entry in best_of.entries[:3]] != pytest.approx(
         [entry.amount for entry in half_year.entries[:3]]
@@ -350,3 +356,49 @@ def test_vdb_schedule_best_of_convention_prefers_mid_quarter_candidate():
     assert [entry.amount for entry in best_of.entries[:3]] == pytest.approx(
         [-76809.63204762038, -80101.47342108983, -72091.32607898084]
     )
+
+
+def _best_of_vdb_schedule():
+    return vdb_schedule(
+        cost_basis=1000.0,
+        salvage_value=0.0,
+        placed_in_service=date(2026, 1, 1),
+        life=5,
+        convention="best-of-half-year-mid-quarter",
+        valuation_rate=0.10,
+        valuation_date=date(2026, 1, 1),
+    )
+
+
+def test_vdb_schedule_best_of_convention_warns_deprecation():
+    """The best-of convention is deprecated: it warns, names its replacement and removal."""
+    with pytest.warns(DeprecationWarning, match="best-of-half-year-mid-quarter") as record:
+        _best_of_vdb_schedule()
+
+    assert len(record) == 1
+    message = str(record[0].message)
+    assert "40% rule" in message
+    assert "half-year" in message
+    assert "mid-quarter" in message
+    assert "1.0" in message
+
+
+def test_vdb_schedule_best_of_convention_warning_points_at_caller():
+    """The warning is attributed to the line that called vdb_schedule, not to DCAF."""
+    with pytest.warns(DeprecationWarning) as record:
+        _best_of_vdb_schedule()
+
+    assert record[0].filename == __file__
+
+
+@pytest.mark.parametrize("convention", ["none", "half-year", "mid-quarter"])
+def test_vdb_schedule_supported_conventions_do_not_warn(convention):
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        vdb_schedule(
+            cost_basis=1000.0,
+            salvage_value=0.0,
+            placed_in_service=date(2026, 1, 1),
+            life=5,
+            convention=convention,
+        )
