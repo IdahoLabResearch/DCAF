@@ -7,7 +7,8 @@ using mid-level building blocks instead of the top-level ``EnergyProject`` build
 Each financial sub-system is configured independently:
 
 - ``construction_spend_schedule`` controls spend timing profile and construction-period debt
-- ``AmortizationSchedule.build`` produces a post-COD debt service schedule
+- ``AmortizationSchedule.build`` produces a post-COD debt service schedule; its principal
+  is the debt proceeds (a share of each cash construction spend) plus capitalized interest
 - ``GenerationStream.from_capacity`` builds the generation profile
 - ``construction_outage`` produces lost-revenue and replacement-cost cashflows for
   each refueling outage extension during construction
@@ -28,6 +29,7 @@ from dcaf.finance.amortization import AmortizationSchedule
 from dcaf.finance.construction import ConstructionFinancing, construction_spend_schedule
 from dcaf.finance.escalation import ConstantRateEscalation
 from dcaf.finance.outage import construction_outage
+from dcaf.shared.types import ProFormaCategory, TaxTreatment
 from dcaf.streams.cashflows import CashFlowStream
 from dcaf.streams.generation import GenerationStream
 from dcaf.tax.depreciation import macrs_schedule
@@ -94,10 +96,27 @@ construction = construction_spend_schedule(
     escalation_policy=escalation_policy,
 )
 
+# DEBT PROCEEDS
+# Each dated cash construction spend is funded DEBT_FRACTION by debt, so the proceeds
+# follow the escalated spend. Capitalized interest is non-cash, so it adds to the
+# principal without producing proceeds.
+cash_spend = construction.filter(is_cash=True)
+capitalized_interest = construction.filter(is_cash=False)
+debt_proceeds = CashFlowStream(
+    [
+        cf.replace(
+            amount=-cf.amount * DEBT_FRACTION,
+            label="Construction Debt Proceeds",
+            pro_forma_category=ProFormaCategory.FINANCING_PROCEEDS,
+            tax_treatment=TaxTreatment.NONE,
+        )
+        for cf in cash_spend
+    ]
+)
+
 # DEBT SERVICE (post-COD)
-# Principal is estimated from overnight cost; capitalized interest increases
-# the actual balance slightly, which is not modeled here for brevity.
-debt_principal = OVERNIGHT_CAPEX * DEBT_FRACTION
+# The amortized principal is the cash proceeds plus the capitalized interest.
+debt_principal = debt_proceeds.sum() - capitalized_interest.sum()
 debt_service = AmortizationSchedule.build(
     principal=debt_principal,
     annual_rate=COST_OF_DEBT,
@@ -174,6 +193,7 @@ taxes = tax_liability(taxable_income, tax_rate=TAX_RATE)
 # ASSEMBLE ALL CASHFLOWS
 cashflows = CashFlowStream.from_streams(
     construction,
+    debt_proceeds,
     revenue,
     ptc_credits,
     debt_service.total,
@@ -210,6 +230,7 @@ print(f"Total generation (MWh):      {total_generation:,.0f}")
 print(f"Construction cash flow ($):  {construction.sum():,.0f}")
 print(f"Revenue cash flow ($):       {revenue.sum():,.0f}")
 print(f"PTC cash flow ($):           {ptc_credits.sum():,.0f}")
+print(f"Debt proceeds ($):           {debt_proceeds.sum():,.0f}")
 print(f"Debt service cash flow ($):  {debt_service.total.sum():,.0f}")
 print(f"Outage impact ($):           {outage_impact.sum():,.0f}")
 print(f"Tax cash flow ($):           {taxes.sum():,.0f}")

@@ -141,11 +141,30 @@ construction = (
 # the basis for the upfront ITC-style component of the hybrid incentive.
 total_capitalized_cost = abs(construction.sum())
 
+# DEBT PROCEEDS
+# Each dated cash construction spend is funded DEBT_FRACTION by debt, so the proceeds
+# follow the escalated spend. Capitalized interest is non-cash, so it adds to the
+# principal without producing proceeds.
+cash_spend = construction.filter(is_cash=True)
+capitalized_interest = construction.filter(is_cash=False)
+debt_proceeds = CashFlowStream(
+    [
+        cf.replace(
+            amount=-cf.amount * DEBT_FRACTION,
+            label="Construction Debt Proceeds",
+            pro_forma_category=ProFormaCategory.FINANCING_PROCEEDS,
+            tax_treatment=TaxTreatment.NONE,
+        )
+        for cf in cash_spend
+    ]
+)
+
 # DEBT SERVICE
+# The amortized principal is the cash proceeds plus the capitalized interest.
 # AmortizationSchedule.builder() returns an AmortizationBuilder for rule chaining:
 #   .interest_free()   — zero interest rate for selected periods
 #   .rate_change()     — update the annual rate from a given period onward
-debt_principal = OVERNIGHT_CAPEX * DEBT_FRACTION
+debt_principal = debt_proceeds.sum() - capitalized_interest.sum()
 debt_service = (
     AmortizationSchedule.builder(
         principal=debt_principal,
@@ -263,6 +282,7 @@ taxes = tax_liability(taxable_income, tax_rate=TAX_RATE)
 # ASSEMBLE ALL CASHFLOWS
 cashflows = CashFlowStream.from_streams(
     construction,
+    debt_proceeds,
     revenue,
     hybrid_credits,
     debt_service.total,
@@ -300,6 +320,7 @@ print(f"Construction cash flow ($):  {construction.sum():,.0f}")
 print(f"Revenue cash flow ($):       {revenue.sum():,.0f}")
 print(f"Hybrid ITC credit ($):       {upfront_credit.amount:,.0f}")
 print(f"Hybrid PTC credits ($):      {generation_credit.sum():,.0f}")
+print(f"Debt proceeds ($):           {debt_proceeds.sum():,.0f}")
 print(f"Debt service cash flow ($):  {debt_service.total.sum():,.0f}")
 print(f"  Interest-free years:       {INTEREST_FREE_YEARS}")
 print(f"  Rate after year {RATE_STEP_DOWN_YEAR}:        {REDUCED_DEBT_RATE:.4%}")
