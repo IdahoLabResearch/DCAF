@@ -67,8 +67,8 @@ Expected output:
 
 ```text
 Total generation: 67,499,520 MWh
-NPV:              $318,988,351
-LCOE:             $23.30/MWh
+NPV:              $387,452,247
+LCOE:             $18.64/MWh
 ```
 
 That's a complete discounted-cash-flow analysis. Each builder method
