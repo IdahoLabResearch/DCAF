@@ -668,6 +668,31 @@ def test_period_group_totals_match_settled_period_totals(entries, conventions):
         assert total == pytest.approx(settled[key], **_sum_tolerance(scale))
 
 
+def test_group_by_month_prorates_an_entry_spanning_seven_months():
+    """A Jan-Jul entry gives each month its share of days (issue #35): 424 MWh over the 212
+    days of [2027-01-01, 2027-08-01) is 2 MWh per day, and revenue at 1.0 per MWh agrees."""
+    stream = GenerationStream(
+        [Generation(424.0, period_start=date(2027, 1, 1), period_end=date(2027, 8, 1))]
+    )
+    expected = {  # 2 MWh/day times 31, 28, 31, 30, 31, 30, 31 days
+        date(2027, 1, 1): 62.0,
+        date(2027, 2, 1): 56.0,
+        date(2027, 3, 1): 62.0,
+        date(2027, 4, 1): 60.0,
+        date(2027, 5, 1): 62.0,
+        date(2027, 6, 1): 60.0,
+        date(2027, 7, 1): 62.0,
+    }
+
+    totals = stream.group_by(period="month").sum()
+    settled = stream.to_revenue(1.0, frequency="month")
+    revenue = {cf.date.replace(day=1): cf.amount for cf in settled}
+
+    assert totals == pytest.approx(expected)
+    assert sum(totals.values()) == pytest.approx(424.0)
+    assert revenue == pytest.approx(expected)
+
+
 @given(generation_lists, st.functions(like=lambda g: None, returns=st.integers(0, 2), pure=True))
 def test_group_by_key_keeps_entries_whole(entries, key):
     """Grouping by a key function never splits entries, unlike grouping by period."""
