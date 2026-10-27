@@ -2,6 +2,7 @@
 # ALL RIGHTS RESERVED
 from datetime import date
 import csv
+import warnings
 
 import pytest
 
@@ -1773,9 +1774,12 @@ def test_energy_project_vdb_best_of_convention_requires_valuation_inputs(
     valuation_rate,
     valuation_date,
 ):
-    with pytest.raises(
-        ValueError,
-        match="valuation_rate and valuation_date are required",
+    with (
+        pytest.warns(DeprecationWarning),
+        pytest.raises(
+            ValueError,
+            match="valuation_rate and valuation_date are required",
+        ),
     ):
         EnergyProject().depreciation_vdb(
             life=5,
@@ -1813,7 +1817,10 @@ def test_energy_project_vdb_none_convention_rejects_valuation_inputs(
 def test_energy_project_vdb_depreciation_rejects_non_finite_valuation_rate(
     valuation_rate,
 ):
-    with pytest.raises(ValueError, match="VDB valuation_rate must be finite"):
+    with (
+        pytest.warns(DeprecationWarning),
+        pytest.raises(ValueError, match="VDB valuation_rate must be finite"),
+    ):
         EnergyProject().depreciation_vdb(
             life=5,
             convention="best-of-half-year-mid-quarter",
@@ -1823,16 +1830,74 @@ def test_energy_project_vdb_depreciation_rejects_non_finite_valuation_rate(
 
 
 def test_energy_project_vdb_best_of_convention_allows_valuation_inputs():
-    project = EnergyProject().depreciation_vdb(
-        life=5,
-        convention="best-of-half-year-mid-quarter",
-        valuation_rate=0.10,
-        valuation_date=date(2026, 1, 1),
-    )
+    with pytest.warns(DeprecationWarning):
+        project = EnergyProject().depreciation_vdb(
+            life=5,
+            convention="best-of-half-year-mid-quarter",
+            valuation_rate=0.10,
+            valuation_date=date(2026, 1, 1),
+        )
 
     assert project._config.depreciation is not None
     assert project._config.depreciation.valuation_rate == pytest.approx(0.10)
     assert project._config.depreciation.valuation_date == date(2026, 1, 1)
+
+
+def _vdb_project(**vdb_kwargs):
+    return (
+        EnergyProject()
+        .generation(
+            capacity_mw=100.0,
+            capacity_factor=0.5,
+            operations_start=date(2026, 1, 1),
+            operations_end=date(2031, 1, 1),
+        )
+        .construction(
+            overnight_cost=1_000.0,
+            spend_profile="flat",
+            construction_start=date(2025, 1, 1),
+            period="year",
+        )
+        .generation_revenue(price_policy=GenerationPrice.fixed(50.0))
+        .depreciation_vdb(life=5, **vdb_kwargs)
+        .tax(rate=0.21)
+    )
+
+
+_BEST_OF = {
+    "convention": "best-of-half-year-mid-quarter",
+    "valuation_rate": 0.10,
+    "valuation_date": date(2026, 1, 1),
+}
+
+
+def test_energy_project_vdb_best_of_convention_warns_deprecation():
+    with pytest.warns(DeprecationWarning, match="best-of-half-year-mid-quarter") as record:
+        EnergyProject().depreciation_vdb(life=5, **_BEST_OF)
+
+    message = str(record[0].message)
+    assert "40% rule" in message
+    assert "half-year" in message
+    assert "mid-quarter" in message
+    assert "1.0" in message
+
+
+def test_energy_project_vdb_best_of_convention_warns_once_through_analysis():
+    """Building and compiling the project emits one warning, not one per layer."""
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        _vdb_project(**_BEST_OF).analyze()
+
+    deprecations = [w for w in record if issubclass(w.category, DeprecationWarning)]
+    assert len(deprecations) == 1
+    assert deprecations[0].filename == __file__
+
+
+@pytest.mark.parametrize("convention", ["none", "half-year", "mid-quarter"])
+def test_energy_project_vdb_supported_conventions_do_not_warn(convention):
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        _vdb_project(convention=convention).analyze()
 
 
 # --- operations_end exclusivity ---
