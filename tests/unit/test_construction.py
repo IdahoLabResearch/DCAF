@@ -1012,3 +1012,136 @@ def test_paid_interest_does_not_depend_on_servicing_grid(
     interest = sum(-flow.amount for flow in stream if flow.label == "Interest Payment")
 
     assert interest == pytest.approx(expected, rel=1e-9, abs=1e-6)
+
+
+# === Interest accrual after construction ends ===
+#
+# Each case is a $1,000 upfront spend on Jan 1, 2030, fully debt-funded at 10% with annual
+# servicing. 2030 and 2031 are non-leap years, so each servicing period is exactly one year.
+
+
+def test_capitalized_interest_accrues_until_accrue_until():
+    """The loan keeps accruing past construction end and compounds at each servicing end.
+
+    - Jan 1, 2031: 1,000 x 0.10 = 100
+    - Jan 1, 2032: (1,000 + 100) x 0.10 = 110
+    """
+    stream = construction_spend_schedule(
+        1_000.0,
+        date(2030, 1, 1),
+        date(2031, 1, 1),
+        profile="upfront",
+        financing=ConstructionFinancing.debt(
+            1.0,
+            interest_rate=0.10,
+            servicing_period="year",
+            accrue_until=date(2032, 1, 1),
+        ),
+    )
+
+    interest = [
+        (cf.date, -cf.amount) for cf in stream.entries if cf.label == "Capitalized Interest"
+    ]
+    assert [flow_date for flow_date, _ in interest] == [date(2031, 1, 1), date(2032, 1, 1)]
+    assert [amount for _, amount in interest] == pytest.approx([100.0, 110.0])
+
+
+def test_paid_interest_accrues_until_accrue_until():
+    """Paid interest doesn't compound, so each year after construction pays 1,000 x 0.10."""
+    stream = construction_spend_schedule(
+        1_000.0,
+        date(2030, 1, 1),
+        date(2031, 1, 1),
+        profile="upfront",
+        financing=ConstructionFinancing.debt(
+            1.0,
+            interest_rate=0.10,
+            treatment="pay",
+            servicing_period="year",
+            accrue_until=date(2032, 1, 1),
+        ),
+    )
+
+    interest = [(cf.date, -cf.amount) for cf in stream.entries if cf.label == "Interest Payment"]
+    assert [flow_date for flow_date, _ in interest] == [date(2031, 1, 1), date(2032, 1, 1)]
+    assert [amount for _, amount in interest] == pytest.approx([100.0, 100.0])
+
+
+def test_spend_stays_inside_construction_window_when_interest_accrues_longer():
+    """``accrue_until`` extends only interest; spend is still allocated over ``[start, end)``."""
+    stream = construction_spend_schedule(
+        1_200.0,
+        date(2030, 1, 1),
+        date(2031, 1, 1),
+        period="month",
+        financing=ConstructionFinancing.debt(
+            1.0,
+            interest_rate=0.10,
+            accrue_until=date(2032, 1, 1),
+        ),
+    )
+
+    spend = [cf for cf in stream.entries if cf.label == "Construction Spend"]
+    assert len(spend) == 12
+    assert max(cf.date for cf in spend) < date(2031, 1, 1)
+    assert sum(cf.amount for cf in spend) == pytest.approx(-1_200.0)
+
+
+def test_servicing_periods_after_construction_continue_the_anchored_grid():
+    """A Jan 31 start with monthly servicing keeps month-end boundaries after construction."""
+    stream = construction_spend_schedule(
+        1_000.0,
+        date(2030, 1, 31),
+        date(2030, 3, 31),
+        financing=ConstructionFinancing.debt(
+            1.0,
+            interest_rate=0.10,
+            accrue_until=date(2030, 6, 30),
+        ),
+    )
+
+    interest_dates = [cf.date for cf in stream.entries if cf.label == "Capitalized Interest"]
+    assert interest_dates == [
+        date(2030, 2, 28),
+        date(2030, 3, 31),
+        date(2030, 4, 30),
+        date(2030, 5, 31),
+        date(2030, 6, 30),
+    ]
+
+
+def test_accrue_until_equal_to_construction_end_changes_nothing():
+    """Setting ``accrue_until`` to the construction end matches leaving it unset."""
+    default = construction_spend_schedule(
+        1_000_000.0,
+        date(2030, 4, 30),
+        date(2032, 1, 1),
+        financing=ConstructionFinancing.debt(0.5, interest_rate=0.06, servicing_period="quarter"),
+    )
+    explicit = construction_spend_schedule(
+        1_000_000.0,
+        date(2030, 4, 30),
+        date(2032, 1, 1),
+        financing=ConstructionFinancing.debt(
+            0.5,
+            interest_rate=0.06,
+            servicing_period="quarter",
+            accrue_until=date(2032, 1, 1),
+        ),
+    )
+
+    assert explicit.entries == default.entries
+
+
+def test_accrue_until_before_construction_end_is_rejected():
+    with pytest.raises(ValueError, match="accrue_until"):
+        construction_spend_schedule(
+            1_000.0,
+            date(2030, 1, 1),
+            date(2031, 1, 1),
+            financing=ConstructionFinancing.debt(
+                1.0,
+                interest_rate=0.10,
+                accrue_until=date(2030, 12, 31),
+            ),
+        )

@@ -9,7 +9,7 @@ import pytest
 from dcaf import GenerationPrice, EnergyProject
 from dcaf.finance import ConstantRateEscalation
 from dcaf.finance.amortization import AmortizationSchedule
-from dcaf.finance.construction import ConstructionCashFlows
+from dcaf.finance.construction import ConstructionCashFlows, SpendProfile
 from dcaf.finance.opex import fixed_opex
 from dcaf.project._compiler import ProjectCompiler, debt
 from dcaf.project.timeline import ProjectTimeline
@@ -2239,3 +2239,246 @@ def test_energy_project_generation_stream_infers_operations_dates():
     assert analysis.timeline.operations_start == date(2026, 1, 1)
     # operations_end is exclusive; inferred boundary is one day past the latest entry.
     assert analysis.timeline.operations_end == date(2026, 7, 2)
+
+
+# === Construction loan accrual until amortization starts ===
+#
+# The hand-computed cases spend $1,000 upfront on Jan 1, 2030, fully debt-funded at 10% with
+# annual servicing, and end construction on Jan 1, 2031. 2030 and 2031 are non-leap years, so
+# each servicing period accrues exactly 10%.
+
+
+def test_loan_accrues_construction_interest_until_operations_start():
+    """A one-year gap before COD adds a year of capitalized interest to the principal.
+
+    - Jan 1, 2031 (construction end): 1,000 x 0.10 = 100
+    - Jan 1, 2032 (operations start): (1,000 + 100) x 0.10 = 110
+    - principal: 1,000 + 100 + 110 = 1,210
+    """
+    analysis = (
+        EnergyProject()
+        .generation(
+            capacity_mw=1.0,
+            capacity_factor=1.0,
+            operations_start=date(2032, 1, 1),
+            operations_end=date(2033, 1, 1),
+        )
+        .construction(
+            overnight_cost=1_000.0,
+            spend_profile="upfront",
+            construction_start=date(2030, 1, 1),
+            construction_end=date(2031, 1, 1),
+        )
+        .construction_financing(
+            debt_fraction=1.0,
+            construction_interest_rate=0.10,
+            servicing_period="year",
+            amortization_rate=0.0,
+            amortization_term=1,
+        )
+        .analyze()
+    )
+
+    interest = [
+        (cf.date, -cf.amount)
+        for cf in analysis.cashflow_components["construction"]
+        if cf.label == "Capitalized Interest"
+    ]
+    assert [flow_date for flow_date, _ in interest] == [date(2031, 1, 1), date(2032, 1, 1)]
+    assert [amount for _, amount in interest] == pytest.approx([100.0, 110.0])
+    assert analysis.cashflow_components["debt_proceeds"].sum() == pytest.approx(1_210.0)
+
+
+def test_loan_accrues_construction_interest_until_explicit_amortization_start():
+    """An explicit ``amortization_start`` after construction end sets the accrual end.
+
+    Operations start at construction end, but amortization starts a year later, so the
+    principal is again 1,000 + 100 + 110 = 1,210.
+    """
+    analysis = (
+        EnergyProject()
+        .generation(
+            capacity_mw=1.0,
+            capacity_factor=1.0,
+            operations_start=date(2031, 1, 1),
+            operations_end=date(2034, 1, 1),
+        )
+        .construction(
+            overnight_cost=1_000.0,
+            spend_profile="upfront",
+            construction_start=date(2030, 1, 1),
+            construction_end=date(2031, 1, 1),
+        )
+        .construction_financing(
+            debt_fraction=1.0,
+            construction_interest_rate=0.10,
+            servicing_period="year",
+            amortization_rate=0.0,
+            amortization_term=1,
+            amortization_start=date(2032, 1, 1),
+        )
+        .analyze()
+    )
+
+    assert analysis.cashflow_components["debt_proceeds"].sum() == pytest.approx(1_210.0)
+
+
+def test_paid_construction_interest_is_paid_in_cash_until_operations_start():
+    """With ``"pay"``, gap interest is a cash payment and the principal stays at the draws."""
+    analysis = (
+        EnergyProject()
+        .generation(
+            capacity_mw=1.0,
+            capacity_factor=1.0,
+            operations_start=date(2032, 1, 1),
+            operations_end=date(2033, 1, 1),
+        )
+        .construction(
+            overnight_cost=1_000.0,
+            spend_profile="upfront",
+            construction_start=date(2030, 1, 1),
+            construction_end=date(2031, 1, 1),
+        )
+        .construction_financing(
+            debt_fraction=1.0,
+            construction_interest_rate=0.10,
+            interest_treatment="pay",
+            servicing_period="year",
+            amortization_rate=0.0,
+            amortization_term=1,
+        )
+        .analyze()
+    )
+
+    payments = [
+        (cf.date, -cf.amount, cf.is_cash)
+        for cf in analysis.cashflow_components["construction"]
+        if cf.label == "Interest Payment"
+    ]
+    assert [(flow_date, is_cash) for flow_date, _, is_cash in payments] == [
+        (date(2031, 1, 1), True),
+        (date(2032, 1, 1), True),
+    ]
+    assert [amount for _, amount, _ in payments] == pytest.approx([100.0, 100.0])
+    assert analysis.cashflow_components["debt_proceeds"].sum() == pytest.approx(1_000.0)
+
+
+def test_amortization_start_before_construction_end_is_rejected():
+    project = (
+        EnergyProject()
+        .generation(
+            capacity_mw=1.0,
+            capacity_factor=1.0,
+            operations_start=date(2031, 1, 1),
+            operations_end=date(2032, 1, 1),
+        )
+        .construction(
+            overnight_cost=1_000.0,
+            spend_profile="flat",
+            construction_start=date(2030, 1, 1),
+            construction_end=date(2031, 1, 1),
+        )
+        .construction_financing(
+            debt_fraction=1.0,
+            construction_interest_rate=0.10,
+            amortization_rate=0.0,
+            amortization_term=1,
+            amortization_start=date(2030, 7, 1),
+        )
+    )
+
+    with pytest.raises(ValueError, match="amortization_start"):
+        project.analyze()
+
+
+def test_slipped_operations_start_matches_construction_extended_to_cod():
+    """A slipped COD gives the same loan as extending construction to COD with no extra spend.
+
+    Construction spends flat over [2027, 2032) and COD slips to 2033. The comparison project
+    ends construction at COD instead and allocates all spend to the first five of its six
+    years, so its cash draws are identical and its loan accrues to COD under the old rule too.
+    """
+    slipped = (
+        EnergyProject()
+        .default_escalation(rate=0.025, amount_reference_date=date(2025, 1, 1))
+        .generation(
+            capacity_mw=220.0,
+            capacity_factor=0.92,
+            operations_start=date(2033, 1, 1),
+            operations_end=date(2067, 1, 1),
+        )
+        .construction(
+            overnight_cost=600e6,
+            spend_profile="flat",
+            construction_start=date(2027, 1, 1),
+            construction_end=date(2032, 1, 1),
+            period="year",
+        )
+        .construction_financing(
+            debt_fraction=0.5,
+            construction_interest_rate=0.10,
+            amortization_rate=0.10,
+            amortization_term=20,
+        )
+        .analyze()
+    )
+    spend_fraction = (date(2032, 1, 1) - date(2027, 1, 1)).days / (
+        date(2033, 1, 1) - date(2027, 1, 1)
+    ).days
+    extended = (
+        EnergyProject()
+        .default_escalation(rate=0.025, amount_reference_date=date(2025, 1, 1))
+        .generation(
+            capacity_mw=220.0,
+            capacity_factor=0.92,
+            operations_start=date(2033, 1, 1),
+            operations_end=date(2067, 1, 1),
+        )
+        .construction(
+            overnight_cost=600e6,
+            spend_profile=SpendProfile.custom(((0.0, 1.0), (spend_fraction, 0.0), (1.0, 0.0))),
+            construction_start=date(2027, 1, 1),
+            construction_end=date(2033, 1, 1),
+            period="year",
+        )
+        .construction_financing(
+            debt_fraction=0.5,
+            construction_interest_rate=0.10,
+            amortization_rate=0.10,
+            amortization_term=20,
+        )
+        .analyze()
+    )
+    on_plan = (
+        EnergyProject()
+        .default_escalation(rate=0.025, amount_reference_date=date(2025, 1, 1))
+        .generation(
+            capacity_mw=220.0,
+            capacity_factor=0.92,
+            operations_start=date(2032, 1, 1),
+            operations_end=date(2067, 1, 1),
+        )
+        .construction(
+            overnight_cost=600e6,
+            spend_profile="flat",
+            construction_start=date(2027, 1, 1),
+            construction_end=date(2032, 1, 1),
+            period="year",
+        )
+        .construction_financing(
+            debt_fraction=0.5,
+            construction_interest_rate=0.10,
+            amortization_rate=0.10,
+            amortization_term=20,
+        )
+        .analyze()
+    )
+
+    slipped_principal = slipped.cashflow_components["debt_proceeds"].sum()
+    assert slipped_principal == pytest.approx(
+        extended.cashflow_components["debt_proceeds"].sum(), rel=1e-12
+    )
+    assert slipped.cashflow_components["debt_service"].sum() == pytest.approx(
+        extended.cashflow_components["debt_service"].sum(), rel=1e-12
+    )
+    assert slipped_principal > on_plan.cashflow_components["debt_proceeds"].sum()

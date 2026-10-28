@@ -98,11 +98,7 @@ def build_debt(context: AnalysisContext, debt_proceeds: CashFlowStream) -> CashF
         )
     principal = debt_proceeds.sum()
 
-    start = (
-        debt.amortization_start
-        if debt.amortization_start is not None
-        else context.require_timeline_date("operations_start")
-    )
+    start = context.amortization_start()
     schedule = _calendarize_amortization_schedule(
         AmortizationSchedule.build(
             principal=principal,

@@ -77,6 +77,13 @@ This adds `debt_proceeds` funding entries at the construction cost dates and
 are tax-neutral. Interest is tax deductible, so it automatically reduces taxable
 income (the interest tax shield).
 
+The construction loan accrues interest at `construction_interest_rate` from each
+draw date until amortization starts: on `amortization_start` when given, otherwise
+on `operations_start`. If operations start after construction ends, the loan keeps
+accruing through the gap. With `interest_treatment="capitalize"` the gap interest
+adds to the debt principal; with `"pay"` it is paid in cash as it falls due.
+`amortization_start` must not be before `construction_end`.
+
 ### Bring your own schedule
 
 For non-standard debt — interest-only periods, a refinancing rate change, or an
