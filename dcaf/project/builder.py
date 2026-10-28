@@ -883,6 +883,9 @@ class EnergyProject:
             Construction end date (exclusive). Defaults to ``cod_date`` (or
             ``operations_start``) when omitted. With end timing, the final
             spend is booked on the preceding, last included construction day.
+            Spend stops here, but a construction loan configured with
+            :meth:`construction_financing` keeps accruing interest until
+            amortization starts.
         period : Period, optional
             Calendar period used to aggregate construction spend. Default is
             ``"month"``.
@@ -975,8 +978,10 @@ class EnergyProject:
         amortization_term : int
             Loan term in periods for the permanent debt.
         construction_interest_rate : float, optional
-            Annual interest rate on construction-period debt draws. When
-            omitted, no interest accrues during construction.
+            Annual interest rate on construction-period debt draws. Each draw
+            accrues interest at this rate from its draw date until amortization
+            starts, including any gap between ``construction_end`` and the
+            amortization start. When omitted, no interest accrues.
         interest_treatment : InterestTreatment, optional
             Whether accrued construction interest is ``"capitalize"``d into the
             permanent-debt principal or ``"pay"``d in cash. Default is
@@ -993,7 +998,9 @@ class EnergyProject:
         amortization_start : date, optional
             Start of the first nominal amortization period. Defaults to
             ``operations_start``. The first cashflow date is determined by the
-            project timing convention.
+            project timing convention. Construction interest accrues until this
+            date, so a start later than ``construction_end`` adds interest for the
+            gap. Must not be before ``construction_end``.
 
         Returns
         -------
@@ -1003,7 +1010,9 @@ class EnergyProject:
         Raises
         ------
         ValueError
-            If a construction stream override is already configured.
+            If a construction stream override is already configured. At
+            ``analyze()``, if the amortization start is before
+            ``construction_end``.
         """
         if isinstance(self._config.construction, CashFlowStream):
             raise ValueError(

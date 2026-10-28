@@ -47,6 +47,18 @@ class AnalysisContext:
             raise ValueError(f"timeline.{field_name} is required for this project configuration")
         return value
 
+    def amortization_start(self) -> date:
+        """Return the date construction-debt amortization starts.
+
+        This is ``construction_debt.amortization_start`` when set, otherwise
+        ``operations_start``. Construction interest accrues until this date and debt
+        service begins on it, so both build steps resolve it here.
+        """
+        debt = self.config.construction_debt
+        if debt is not None and debt.amortization_start is not None:
+            return debt.amortization_start
+        return self.require_timeline_date("operations_start")
+
     def effective_escalation(self, local: EscalationSettings) -> EscalationSettings:
         """Return the local escalation settings or the project default."""
         return effective_escalation(local, self.config.default_escalation)

@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 from dcaf.finance.construction import (
     ConstructionCashFlows,
     ConstructionFinancing,
@@ -85,8 +87,17 @@ def build_construction(context: AnalysisContext) -> ConstructionCashFlows:
     end = construction.construction_end if construction.construction_end is not None else cod
 
     # Convert the project configuration to the construction builder's
-    # financing configuration.
-    financing = construction_financing(config.construction_debt)
+    # financing configuration. The loan accrues construction interest until
+    # amortization starts, which may be after construction ends.
+    accrue_until = None
+    if config.construction_debt is not None:
+        accrue_until = context.amortization_start()
+        if accrue_until < end:
+            raise ValueError(
+                f"construction_debt amortization_start ({accrue_until}) must not be before "
+                f"construction_end ({end})"
+            )
+    financing = construction_financing(config.construction_debt, accrue_until=accrue_until)
 
     escalation = context.effective_escalation(construction.escalation)
     builder = ConstructionSpendBuilder(
@@ -109,8 +120,14 @@ def build_construction(context: AnalysisContext) -> ConstructionCashFlows:
 
 def construction_financing(
     debt_config: ConstructionFinancingConfig | None,
+    *,
+    accrue_until: date | None = None,
 ) -> ConstructionFinancing:
-    """Convert a construction debt config to a ConstructionFinancing for the spend schedule."""
+    """Convert a construction debt config to a ConstructionFinancing for the spend schedule.
+
+    ``accrue_until`` is the resolved amortization start, which the project config does not
+    store directly.
+    """
     if debt_config is None:
         return ConstructionFinancing()
     return ConstructionFinancing(
@@ -118,6 +135,7 @@ def construction_financing(
         interest_rate=debt_config.construction_interest_rate,
         interest_treatment=debt_config.interest_treatment,
         servicing_period=debt_config.servicing_period,
+        accrue_until=accrue_until,
     )
 
 

@@ -212,6 +212,12 @@ class ConstructionFinancing:
         explicitly to model annual debt servicing against a finer construction
         timeline. The servicing period sets when interest is booked, not when it
         starts accruing.
+    accrue_until : date or None, optional
+        Exclusive end of construction-interest accrual. The loan keeps accruing at
+        ``interest_rate`` after construction spend ends, until this date; use it
+        when amortization starts later than construction ends. Must not be
+        before the construction end date. When ``None``, accrual ends with
+        construction. Default is ``None``.
 
     Notes
     -----
@@ -234,7 +240,8 @@ class ConstructionFinancing:
     ConstructionFinancing(debt_fraction=0.0,
                           interest_rate=None,
                           interest_treatment=<_InterestTreatmentEnum.CAPITALIZE: 'capitalize'>,
-                          servicing_period=None)
+                          servicing_period=None,
+                          accrue_until=None)
 
     Debt-funded construction with paid interest:
 
@@ -247,6 +254,7 @@ class ConstructionFinancing:
     interest_rate: float | None = None
     interest_treatment: InterestTreatment | _InterestTreatmentEnum = "capitalize"
     servicing_period: Period | _PeriodEnum | None = None
+    accrue_until: date | None = None
 
     def __post_init__(self) -> None:
         if not (0.0 <= self.debt_fraction <= 1.0):
@@ -273,6 +281,7 @@ class ConstructionFinancing:
         interest_rate: float | None = None,
         treatment: InterestTreatment = "capitalize",
         servicing_period: Period | None = None,
+        accrue_until: date | None = None,
     ) -> Self:
         """Return debt financing settings for construction.
 
@@ -289,6 +298,9 @@ class ConstructionFinancing:
             when capitalized, added to the debt balance. Each draw accrues from
             its draw date regardless of this interval. When omitted, debt
             servicing follows the construction spend period.
+        accrue_until : date or None, optional
+            Exclusive end of construction-interest accrual, on or after the
+            construction end date. When omitted, accrual ends with construction.
 
         Returns
         -------
@@ -307,6 +319,7 @@ class ConstructionFinancing:
             interest_rate=interest_rate,
             interest_treatment=treatment,
             servicing_period=servicing_period,
+            accrue_until=accrue_until,
         )
 
 
@@ -409,6 +422,9 @@ class ConstructionSpendConfig:
         object.__setattr__(self, "period", parse_period(str(self.period)))
         object.__setattr__(self, "profile", _normalize_profile(self.profile))
         object.__setattr__(self, "financing", _normalize_financing(self.financing))
+        accrue_until = self.financing.accrue_until
+        if accrue_until is not None and accrue_until < self.end_date:
+            raise ValueError("financing.accrue_until must not be before end_date")
         object.__setattr__(self, "escalation_period", parse_period(str(self.escalation_period)))
         object.__setattr__(
             self,
@@ -591,6 +607,16 @@ def _debt_servicing_period(config: ConstructionSpendConfig) -> _PeriodEnum:
     return parse_period(str(servicing_period))
 
 
+def _interest_accrual_end(config: ConstructionSpendConfig) -> date:
+    """Return the exclusive end of construction-interest accrual.
+
+    Accrual runs past the spend window when ``financing.accrue_until`` is set, so a loan
+    keeps accruing between construction end and the start of amortization.
+    """
+    accrue_until = config.financing.accrue_until
+    return config.end_date if accrue_until is None else accrue_until
+
+
 def _accrued_interest(
     balance: float,
     start: date,
@@ -628,7 +654,7 @@ def _build_cashflows(
 
     for service_start, service_end in _iter_period_boundaries(
         config.start_date,
-        config.end_date,
+        _interest_accrual_end(config),
         _debt_servicing_period(config),
         config.end_of_month,
     ):
@@ -875,6 +901,7 @@ class ConstructionSpendBuilder:
         interest_rate: float | None = None,
         treatment: InterestTreatment = "capitalize",
         servicing_period: Period | None = None,
+        accrue_until: date | None = None,
     ) -> Self:
         """Set debt funding and construction-period interest behavior.
 
@@ -891,6 +918,9 @@ class ConstructionSpendBuilder:
             when capitalized, added to the debt balance. Each draw accrues from
             its draw date regardless of this interval. When omitted, debt
             servicing follows the construction spend period.
+        accrue_until : date or None, optional
+            Exclusive end of construction-interest accrual, on or after the
+            construction end date. When omitted, accrual ends with construction.
 
         Returns
         -------
@@ -914,6 +944,7 @@ class ConstructionSpendBuilder:
                     interest_rate=interest_rate,
                     treatment=treatment,
                     servicing_period=servicing_period,
+                    accrue_until=accrue_until,
                 ),
             )
         )
