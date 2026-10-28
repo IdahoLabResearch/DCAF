@@ -11,7 +11,7 @@ fixed-price remainder policy.
 settlement it prices. Schedule entries are not carried forward.
 """
 
-from datetime import date
+from datetime import date, timedelta
 from math import isclose
 
 from dcaf import EnergyContract, EnergyProject, GenerationPrice, GenerationSettlementEvent
@@ -102,6 +102,8 @@ def main() -> None:
 
         fraction_event = GenerationSettlementEvent(
             date=event_date,
+            period_start=event_date,
+            period_end=event_date + timedelta(days=1),
             available_mwh=gross_mwh,
             requested_mwh=fraction_mwh,
             delivered_mwh=fraction_mwh,
