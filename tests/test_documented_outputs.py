@@ -2,10 +2,10 @@
 # ALL RIGHTS RESERVED
 """Documented example outputs must match what the examples print.
 
-Each example listed in ``examples/README.md`` and the code block in
-``docs/getting_started.md`` is run as a subprocess. Its printed output is compared with the
-values documented next to it. The documented values are parsed from the docs themselves, so
-updating a doc and the code that produces it is a single change.
+Each example listed in ``examples/README.md``, the code block in ``docs/getting_started.md``,
+and the Getting Started example in the root ``README.md`` is run as a subprocess. Its printed
+output is compared with the values documented next to it. The documented values are parsed
+from the docs themselves, so updating a doc and the code that produces it is a single change.
 
 A script that exits nonzero, prints no value, or has no documented row fails its test.
 """
@@ -23,6 +23,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 README = ROOT / "examples" / "README.md"
 GETTING_STARTED = ROOT / "docs" / "getting_started.md"
+ROOT_README = ROOT / "README.md"
 
 # README table key -> example script. The key is the backticked name in the table's first column.
 README_EXAMPLES = {
@@ -44,6 +45,8 @@ _PRINTED_NPV = re.compile(r"^NPV[^:]*:\s*\$?\s*(-?[\d,]+(?:\.\d+)?)", re.MULTILI
 # "NPV:   $318,988,351" and "LCOE:  $23.30/MWh" in both the documented and printed output
 _NPV = re.compile(r"^NPV:\s*\$\s*(-?[\d,]+(?:\.\d+)?)", re.MULTILINE)
 _LCOE = re.compile(r"^LCOE:\s*\$\s*(-?[\d,]+(?:\.\d+)?)", re.MULTILINE)
+# A python code block followed directly by its expected-output text block
+_CODE_AND_OUTPUT = re.compile(r"```python\n((?:(?!```).)*)```\s*```text\n(.*?)```", re.DOTALL)
 
 
 def _run(script: Path, cwd: Path) -> str:
@@ -126,4 +129,19 @@ def test_getting_started_matches_code_block(tmp_path: Path) -> None:
         mismatches.append(f"LCOE documented ${doc_lcoe:,.2f}/MWh, printed ${lcoe:,.2f}/MWh")
     assert not mismatches, "docs/getting_started.md differs from its code block: " + "; ".join(
         mismatches
+    )
+
+
+def test_root_readme_example_matches_output(tmp_path: Path) -> None:
+    blocks = _CODE_AND_OUTPUT.findall(ROOT_README.read_text())
+    assert len(blocks) == 1, f"expected one example with output in README.md, found {len(blocks)}"
+    code, expected = blocks[0]
+
+    script = tmp_path / "readme_example.py"
+    script.write_text(code)
+    printed = _run(script, cwd=tmp_path)
+
+    # The README rounds every value, so its output block is compared verbatim.
+    assert printed.strip() == expected.strip(), (
+        f"README.md documents:\n{expected.strip()}\nthe example prints:\n{printed.strip()}"
     )
