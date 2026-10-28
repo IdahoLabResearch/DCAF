@@ -36,6 +36,7 @@ def fixed_opex(
     amount_reference_date: date | None = None,
     day_count_convention: DayCountConvention = "actual/actual",
     escalation_policy: EscalationPolicy | None = None,
+    end_of_month: bool = True,
 ) -> CashFlowStream:
     """
     Create a stream of recurring fixed operating expense cashflows.
@@ -76,6 +77,12 @@ def fixed_opex(
         Advanced override for custom escalation behavior. When provided, it
         must not be combined with ``escalation``, ``escalation_period``, or
         ``amount_reference_date``.
+    end_of_month : bool, optional
+        Whether a schedule starting on the last day of a month keeps every
+        monthly, quarterly, or yearly payment on the last day of its month. The
+        same flag applies to the implicit escalation built from ``escalation``;
+        a supplied ``escalation_policy`` keeps its own setting. Default is
+        ``True``.
     label : str
         Label applied to every generated cashflow. Default is ``"Fixed OPEX"``.
     pro_forma_category : ProFormaCategory or str or None
@@ -97,6 +104,15 @@ def fixed_opex(
     ['2025-12-31', '2026-12-31', '2027-12-31']
     >>> [round(f.amount, 2) for f in stream.entries]
     [-512465.33, -525276.96, -538408.89]
+
+    A month-end start stays on month-ends unless ``end_of_month`` is disabled:
+
+    >>> stream = fixed_opex(1_000, date(2030, 4, 30), 2, "month", timing="begin")
+    >>> [f.date.isoformat() for f in stream.entries]
+    ['2030-04-30', '2030-05-31']
+    >>> stream = fixed_opex(1_000, date(2030, 4, 30), 2, "month", timing="begin", end_of_month=False)
+    >>> [f.date.isoformat() for f in stream.entries]
+    ['2030-04-30', '2030-05-30']
     """
     validate_finite(amount, "fixed_opex amount")
 
@@ -111,6 +127,7 @@ def fixed_opex(
         amount_reference_date=amount_reference_date,
         day_count_convention=day_count_convention,
         escalation_policy=escalation_policy,
+        end_of_month=end_of_month,
         label=label,
         pro_forma_category=pro_forma_category,
         tax_treatment=tax_treatment,

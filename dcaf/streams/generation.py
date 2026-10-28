@@ -355,8 +355,13 @@ def _generation_escalation(
     amount_reference_date: date | None,
     day_count_convention: DayCountConvention,
     escalation_policy: EscalationPolicy | None,
+    end_of_month: bool,
 ) -> EscalationPolicy:
-    """Normalize generation escalation kwargs into a date-based policy."""
+    """Normalize generation escalation kwargs into a date-based policy.
+
+    ``end_of_month`` applies only to the implicit constant-rate policy; a supplied
+    ``escalation_policy`` keeps its own setting.
+    """
     policy_override = _resolve_escalation_policy_override(
         escalation=escalation,
         escalation_period=escalation_period,
@@ -372,6 +377,7 @@ def _generation_escalation(
         rate=escalation,
         period=escalation_period,
         day_count_convention=day_count_convention,
+        end_of_month=end_of_month,
     )
 
 
@@ -496,6 +502,8 @@ class GenerationStream(BaseStream[Generation]):
         frequency: Period = "year",
         label: str = "Generation",
         day_count_convention: DayCountConvention = "actual/actual",
+        *,
+        end_of_month: bool = True,
     ) -> "GenerationStream":
         """
         Generate a stream of periodic generation from capacity parameters.
@@ -515,11 +523,19 @@ class GenerationStream(BaseStream[Generation]):
             raised.
         frequency : Period, optional
             Size of the physical source periods created by this factory. This
-            does not assign financial booking dates. Default is ``"year"``.
+            does not assign financial booking dates. Period boundary ``k`` is
+            ``start + k * frequency``, computed from ``start`` and keeping the
+            start's day of the month clamped to shorter months. Default is
+            ``"year"``.
         label : str, optional
             Label applied to every generated entry. Default is ``"Generation"``.
         day_count_convention : DayCountConvention, optional
             Day-count convention used to compute elapsed capacity hours.
+        end_of_month : bool, optional
+            Whether a schedule starting on the last day of a month keeps every
+            monthly, quarterly, or yearly boundary on the last day of its month.
+            Daily schedules ignore it. Default is ``True``.
+
         Returns
         -------
         GenerationStream
@@ -535,6 +551,17 @@ class GenerationStream(BaseStream[Generation]):
         ... )
         >>> stream.count()
         2
+
+        A month-end start stays on month-ends unless ``end_of_month`` is disabled:
+
+        >>> stream = GenerationStream.from_capacity(100.0, 0.9, date(2030, 4, 30), 2, "month")
+        >>> [g.period_end.isoformat() for g in stream]
+        ['2030-05-31', '2030-06-30']
+        >>> stream = GenerationStream.from_capacity(
+        ...     100.0, 0.9, date(2030, 4, 30), 2, "month", end_of_month=False
+        ... )
+        >>> [g.period_end.isoformat() for g in stream]
+        ['2030-05-30', '2030-06-30']
         """
         validate_non_negative(capacity_mw, "capacity_mw")
         validate_capacity_factor(capacity_factor, "capacity_factor")
@@ -545,6 +572,7 @@ class GenerationStream(BaseStream[Generation]):
             periods,
             frequency,
             day_count_convention,
+            end_of_month=end_of_month,
             context="GenerationStream.from_capacity periods",
         )
         for window in windows:
@@ -701,6 +729,8 @@ class GenerationStream(BaseStream[Generation]):
         frequency: Period = "year",
         label: str = "Generation",
         day_count_convention: DayCountConvention = "actual/actual",
+        *,
+        end_of_month: bool = True,
     ) -> "GenerationStream":
         """
         Generate additional capacity-based entries and append them to this stream.
@@ -722,6 +752,11 @@ class GenerationStream(BaseStream[Generation]):
             Label applied to every appended entry. Default is ``"Generation"``.
         day_count_convention : DayCountConvention, optional
             Day-count convention used to compute elapsed capacity hours.
+        end_of_month : bool, optional
+            Whether appended periods starting on the last day of a month keep
+            every monthly, quarterly, or yearly boundary on the last day of its
+            month. See :meth:`from_capacity`. Default is ``True``.
+
         Returns
         -------
         GenerationStream
@@ -733,6 +768,16 @@ class GenerationStream(BaseStream[Generation]):
         >>> expanded = base.with_capacity(50, 0.8, date(2032, 1, 1), 1)
         >>> expanded.count()
         3
+
+        Appended month-end periods stay on month-ends unless ``end_of_month`` is
+        disabled:
+
+        >>> base.with_capacity(50, 0.8, date(2032, 4, 30), 1, "month")[-1].period_end
+        datetime.date(2032, 5, 31)
+        >>> base.with_capacity(
+        ...     50, 0.8, date(2032, 4, 30), 1, "month", end_of_month=False
+        ... )[-1].period_end
+        datetime.date(2032, 5, 30)
         """
         new = GenerationStream.from_capacity(
             capacity_mw=capacity_mw,
@@ -742,6 +787,7 @@ class GenerationStream(BaseStream[Generation]):
             frequency=frequency,
             label=label,
             day_count_convention=day_count_convention,
+            end_of_month=end_of_month,
         )
         return self.extend(new)
 
@@ -1138,6 +1184,7 @@ class GenerationStream(BaseStream[Generation]):
             amount_reference_date=amount_reference_date,
             day_count_convention=day_count_convention,
             escalation_policy=escalation_policy,
+            end_of_month=True,
         )
         resolved_category, resolved_tax_treatment = normalize_cashflow_classification(
             pro_forma_category, tax_treatment
@@ -1238,6 +1285,7 @@ class GenerationStream(BaseStream[Generation]):
             amount_reference_date=amount_reference_date,
             day_count_convention=day_count_convention,
             escalation_policy=escalation_policy,
+            end_of_month=True,
         )
         resolved_category, resolved_tax_treatment = normalize_cashflow_classification(
             pro_forma_category, tax_treatment

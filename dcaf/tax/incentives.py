@@ -112,8 +112,9 @@ def ptc(
     end_of_month : bool, optional
         Whether eligibility starting on the last day of a month ends on the last
         day of its month, so a start on Feb. 28 reaches Feb. 29 in a leap year.
-        It does not yet apply to the implicit PTC rate escalation. Default is
-        ``True``.
+        The same flag applies to the implicit PTC rate escalation built from
+        ``escalation``; a supplied ``escalation_policy`` keeps its own setting.
+        Default is ``True``.
 
     Returns
     -------
@@ -162,6 +163,32 @@ def ptc(
     2
     >>> credits.sum()
     20000.0
+
+    A monthly rate quoted on Apr. 30 escalates a full month by May 31 unless
+    ``end_of_month`` is disabled, which ends that month on May 30:
+
+    >>> generation = GenerationStream([Generation(1.0, date(2030, 5, 31))])
+    >>> credits = ptc(
+    ...     generation,
+    ...     rate_per_mwh=1.0,
+    ...     years=1,
+    ...     escalation=0.01,
+    ...     escalation_period="month",
+    ...     amount_reference_date=date(2030, 4, 30),
+    ... )
+    >>> round(credits.sum(), 6)
+    1.01
+    >>> credits = ptc(
+    ...     generation,
+    ...     rate_per_mwh=1.0,
+    ...     years=1,
+    ...     escalation=0.01,
+    ...     escalation_period="month",
+    ...     amount_reference_date=date(2030, 4, 30),
+    ...     end_of_month=False,
+    ... )
+    >>> round(credits.sum(), 6)
+    1.010324
     """
     if years <= 0:
         raise ValueError("PTC years must be positive")
@@ -187,6 +214,7 @@ def ptc(
         amount_reference_date=amount_reference_date,
         day_count_convention=day_count_convention,
         escalation_policy=escalation_policy,
+        end_of_month=end_of_month,
     )
     resolved_category, resolved_tax_treatment = normalize_cashflow_classification(
         pro_forma_category, tax_treatment

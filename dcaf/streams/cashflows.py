@@ -61,8 +61,13 @@ def _recurring_escalation(
     amount_reference_date: date | None,
     day_count_convention: DayCountConvention,
     escalation_policy: EscalationPolicy | None,
+    end_of_month: bool,
 ) -> EscalationPolicy:
-    """Normalize recurring cashflow escalation kwargs into a date-based policy."""
+    """Normalize recurring cashflow escalation kwargs into a date-based policy.
+
+    ``end_of_month`` applies only to the implicit constant-rate policy; a supplied
+    ``escalation_policy`` keeps its own setting.
+    """
     policy_override = _resolve_escalation_policy_override(
         escalation=escalation,
         escalation_period=escalation_period,
@@ -77,6 +82,7 @@ def _recurring_escalation(
         rate=escalation,
         period=escalation_period,
         day_count_convention=day_count_convention,
+        end_of_month=end_of_month,
     )
 
 
@@ -402,6 +408,7 @@ class CashFlowStream(BaseStream[CashFlow]):
         amount_reference_date: date | None = None,
         day_count_convention: DayCountConvention = "actual/actual",
         escalation_policy: EscalationPolicy | None = None,
+        end_of_month: bool = True,
     ) -> "CashFlowStream":
         """
         Generate recurring cashflows with optional escalation.
@@ -452,6 +459,12 @@ class CashFlowStream(BaseStream[CashFlow]):
             Advanced override for custom escalation behavior. When provided, it
             must not be combined with ``escalation``, ``escalation_period``, or
             ``amount_reference_date``.
+        end_of_month : bool, optional
+            Whether a schedule starting on the last day of a month keeps every
+            monthly, quarterly, or yearly boundary on the last day of its month.
+            The same flag applies to the implicit escalation built from
+            ``escalation``; a supplied ``escalation_policy`` keeps its own
+            setting. Daily schedules ignore it. Default is ``True``.
         label : str, optional
             Label applied to every generated cashflow. Default is
             ``"Recurring Payment"``.
@@ -472,7 +485,26 @@ class CashFlowStream(BaseStream[CashFlow]):
         - Escalation is compounded, not simple interest.
         - Payment dates are generated from ``start`` and ``frequency``; escalation
           is then evaluated at each payment date using the configured reference date.
-        - Date arithmetic handles month-end edge cases (e.g., Jan 31 + 1 month = Feb 28/29).
+        - Period boundary ``k`` is ``start + k * frequency``, computed from ``start``
+          rather than from the previous boundary, and keeps the start's day of the
+          month clamped to shorter months: a Jan. 31 monthly schedule books on
+          Feb. 28, then Mar. 31.
+
+        Examples
+        --------
+        A month-end start stays on month-ends unless ``end_of_month`` is disabled:
+
+        >>> from datetime import date
+        >>> stream = CashFlowStream.from_recurring(
+        ...     date(2030, 4, 30), 3, 100.0, "month", timing="begin"
+        ... )
+        >>> [flow.date.isoformat() for flow in stream]
+        ['2030-04-30', '2030-05-31', '2030-06-30']
+        >>> stream = CashFlowStream.from_recurring(
+        ...     date(2030, 4, 30), 3, 100.0, "month", timing="begin", end_of_month=False
+        ... )
+        >>> [flow.date.isoformat() for flow in stream]
+        ['2030-04-30', '2030-05-30', '2030-06-30']
         """
         escalation_policy = _recurring_escalation(
             start=start,
@@ -481,6 +513,7 @@ class CashFlowStream(BaseStream[CashFlow]):
             amount_reference_date=amount_reference_date,
             day_count_convention=day_count_convention,
             escalation_policy=escalation_policy,
+            end_of_month=end_of_month,
         )
         resolved_category, resolved_tax_treatment = normalize_cashflow_classification(
             pro_forma_category,
@@ -492,6 +525,7 @@ class CashFlowStream(BaseStream[CashFlow]):
             periods,
             frequency,
             day_count_convention,
+            end_of_month=end_of_month,
             context="CashFlowStream.from_recurring periods",
         )
         for window in windows:
