@@ -701,7 +701,7 @@ def test_project_day_count_convention_affects_annual_schedule_proration():
 
 
 def test_project_day_count_convention_affects_construction_interest():
-    def first_interest(convention: DayCountConvention) -> tuple[float, float]:
+    def march_interest(convention: DayCountConvention) -> tuple[float, float, float]:
         analysis = (
             EnergyProject(day_count_convention=convention)
             .generation(
@@ -727,16 +727,27 @@ def test_project_day_count_convention_affects_construction_interest():
             .analyze()
         )
         construction = analysis.cashflow_components["construction"]
-        first_draw = abs(next(cf.amount for cf in construction if cf.label == "Construction Spend"))
-        first_interest_payment = next(
-            cf.amount for cf in construction if cf.label == "Interest Payment"
+        jan_draw, feb_draw = [
+            abs(cf.amount) for cf in construction if cf.label == "Construction Spend"
+        ][:2]
+        march_interest_payment = next(
+            cf.amount
+            for cf in construction
+            if cf.label == "Interest Payment" and cf.date == date(2024, 3, 1)
         )
-        return first_draw, first_interest_payment
+        return jan_draw, feb_draw, march_interest_payment
 
-    draw, no_leap_interest = first_interest("actual/365-no-leap")
-    assert no_leap_interest == pytest.approx(-(draw * 0.12 * 28.0 / 365.0))
-    assert first_interest("actual/365-fixed")[1] == pytest.approx(-(draw * 0.12 * 29.0 / 365.0))
-    assert first_interest("actual/actual")[1] == pytest.approx(-(draw * 0.12 * 29.0 / 366.0))
+    # The Mar 1 payment covers [Feb 1, Mar 1): the Jan 31 draw accrues all 29 calendar days and
+    # the Feb 29 draw accrues 1. The no-leap convention skips Feb 29, so the Jan 31 draw accrues
+    # 28 days and the Feb 29 draw accrues none.
+    jan_draw, feb_draw, no_leap_interest = march_interest("actual/365-no-leap")
+    assert no_leap_interest == pytest.approx(-(jan_draw * 0.12 * 28.0 / 365.0))
+    assert march_interest("actual/365-fixed")[2] == pytest.approx(
+        -((jan_draw * 29.0 + feb_draw) * 0.12 / 365.0)
+    )
+    assert march_interest("actual/actual")[2] == pytest.approx(
+        -((jan_draw * 29.0 + feb_draw) * 0.12 / 366.0)
+    )
 
 
 def test_energy_project_generation_outage_reduces_modeled_generation_economics():

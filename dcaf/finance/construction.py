@@ -207,15 +207,22 @@ class ConstructionFinancing:
         Whether accrued interest is capitalized into project cost or paid in cash
         during construction. Default is ``"capitalize"``.
     servicing_period : Period or None, optional
-        Interval at which construction-period debt interest is accrued and booked.
-        When ``None``, interest follows the construction spend ``period``. Set
-        this explicitly to model annual debt servicing against a finer
-        construction timeline.
+        Interval at which construction-period debt interest is booked. When
+        ``None``, interest follows the construction spend ``period``. Set this
+        explicitly to model annual debt servicing against a finer construction
+        timeline. The servicing period sets when interest is booked, not when it
+        starts accruing.
 
     Notes
     -----
     Financing is separated from spend timing so callers can reuse the same spend
     profile with multiple funding assumptions.
+
+    Each debt draw accrues simple interest from its draw date, under the
+    configured day-count convention. Interest accrued over a servicing period
+    ``[s, e)`` is booked on ``e``, the date it falls due. With
+    ``interest_treatment="capitalize"`` it joins the debt balance on ``e``, so
+    later servicing periods accrue interest on it.
 
     Examples
     --------
@@ -278,8 +285,10 @@ class ConstructionFinancing:
         treatment : {"capitalize", "pay"}, optional
             Interest treatment to apply when ``interest_rate`` is provided.
         servicing_period : Period or None, optional
-            Interval at which construction-period debt interest is serviced.
-            When omitted, debt servicing follows the construction spend period.
+            Interval at which construction-period debt interest is booked and,
+            when capitalized, added to the debt balance. Each draw accrues from
+            its draw date regardless of this interval. When omitted, debt
+            servicing follows the construction spend period.
 
         Returns
         -------
@@ -582,6 +591,17 @@ def _debt_servicing_period(config: ConstructionSpendConfig) -> _PeriodEnum:
     return parse_period(str(servicing_period))
 
 
+def _accrued_interest(
+    balance: float,
+    start: date,
+    end: date,
+    config: ConstructionSpendConfig,
+) -> float:
+    """Return simple interest on a constant debt balance over ``[start, end)``."""
+    rate = cast(float, config.financing.interest_rate)
+    return balance * rate * timedelta_fractional_years(start, end, config.day_count_convention)
+
+
 def _build_cashflows(
     config: ConstructionSpendConfig,
     escalation_policy: EscalationPolicy | None = None,
@@ -616,12 +636,21 @@ def _build_cashflows(
             debt_balance += scheduled_draws[draw_index][1]
             draw_index += 1
 
-        period_years = timedelta_fractional_years(
-            service_start,
-            service_end,
-            config.day_count_convention,
-        )
-        interest = debt_balance * config.financing.interest_rate * period_years
+        # Split the servicing period at each draw inside it, so every draw accrues from its
+        # own date. Draws dated service_end belong to the next period.
+        interest = 0.0
+        accrual_start = service_start
+        while draw_index < len(scheduled_draws) and scheduled_draws[draw_index][0] < service_end:
+            draw_date, draw_amount = scheduled_draws[draw_index]
+            interest += _accrued_interest(debt_balance, accrual_start, draw_date, config)
+            debt_balance += draw_amount
+            accrual_start = draw_date
+            draw_index += 1
+        interest += _accrued_interest(debt_balance, accrual_start, service_end, config)
+
+        # Interest is booked, and capitalized, on the exclusive servicing-period end: the
+        # date it falls due, matching Excel's coupon-date convention for interest accrued
+        # over [service_start, service_end).
         interest_flow = _construction_interest_cashflow(
             interest,
             service_end,
@@ -631,10 +660,6 @@ def _build_cashflows(
             entries.append(interest_flow)
             if config.financing.interest_treatment is _InterestTreatmentEnum.CAPITALIZE:
                 capitalized_interest_entries.append(interest_flow)
-
-        while draw_index < len(scheduled_draws) and scheduled_draws[draw_index][0] <= service_end:
-            debt_balance += scheduled_draws[draw_index][1]
-            draw_index += 1
 
         if config.financing.interest_treatment is _InterestTreatmentEnum.CAPITALIZE:
             debt_balance += interest
@@ -862,8 +887,10 @@ class ConstructionSpendBuilder:
         treatment : {"capitalize", "pay"}, optional
             Interest treatment to apply when ``interest_rate`` is supplied.
         servicing_period : Period or None, optional
-            Interval at which construction-period debt interest is serviced.
-            When omitted, debt servicing follows the construction spend period.
+            Interval at which construction-period debt interest is booked and,
+            when capitalized, added to the debt balance. Each draw accrues from
+            its draw date regardless of this interval. When omitted, debt
+            servicing follows the construction spend period.
 
         Returns
         -------
@@ -1101,6 +1128,10 @@ def construction_spend_schedule(
     This is the simplest public entry point. Use it when one call fully describes
     the scenario. For scenario templates or incremental configuration, use
     ``ConstructionSpendBuilder``.
+
+    With financing, each debt draw accrues interest from its spend booking date.
+    Interest is booked once per servicing period, on its exclusive end, and is
+    added to the debt balance there when capitalized.
 
     Examples
     --------
