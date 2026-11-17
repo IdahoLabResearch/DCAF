@@ -16,6 +16,7 @@ extensions = [
     "sphinx.ext.napoleon",
     "sphinx.ext.viewcode",
     "sphinx_autodoc_typehints",
+    "sphinxcontrib.mermaid",
 ]
 
 source_suffix = [".md"]
@@ -23,6 +24,9 @@ exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 
 # Enable `$...$` and `$$...$$` math parsing in MyST so MathJax can render it.
 myst_enable_extensions = ["dollarmath"]
+
+# Render ```mermaid fenced code blocks as diagrams instead of highlighted code.
+myst_fence_as_directive = ["mermaid"]
 
 # Generate linkable anchors for headings (h1-h3) so in-page deep links resolve.
 myst_heading_anchors = 3
@@ -43,7 +47,6 @@ autodoc_default_options = {
 }
 
 html_theme = "sphinx_book_theme"
-html_static_path = ["_static"]
 
 html_theme_options = {
     "show_navbar_depth": 1,

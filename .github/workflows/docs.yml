@@ -1,0 +1,97 @@
+name: Docs
+
+# Pull requests to main only build the docs, so a broken build is caught before a release.
+#
+# Deployments must run on main: the github-pages environment only allows deployments from main,
+# and a release-triggered run executes on the release tag. So publishing a release does not
+# deploy directly. Instead it dispatches this workflow on main with the release tag as input,
+# and that run builds the docs from the tag and deploys them. A manual run deploys the same way.
+on:
+  pull_request:
+    branches:
+      - main
+  release:
+    types:
+      - published
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Tag, branch, or commit to build (defaults to the branch the workflow runs on)
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch:
+    name: Dispatch deployment on main
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+
+    permissions:
+      actions: write
+
+    steps:
+      - name: Run docs workflow on main for the release tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: >-
+          gh workflow run docs.yml
+          --repo "$GITHUB_REPOSITORY"
+          --ref main
+          -f ref="$RELEASE_TAG"
+
+  build:
+    name: Build documentation
+    if: github.event_name != 'release'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          # Empty for pull requests and manual runs without input, which keeps the default ref.
+          ref: ${{ inputs.ref }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Build HTML with Sphinx
+        run: uv run sphinx-build -b html docs docs/_build/html
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: docs/_build/html
+
+  deploy:
+    name: Deploy to GitHub Pages
+    if: github.event_name == 'workflow_dispatch'
+    needs: build
+    runs-on: ubuntu-latest
+
+    # Allow one deployment at a time, without cancelling a deployment already in progress.
+    # Scoped to this job so pull request builds never queue behind (or cancel) a deployment.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+
+    permissions:
+      pages: write
+      id-token: write
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v5
